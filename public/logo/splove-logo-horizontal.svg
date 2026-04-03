@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 140" fill="none" aria-hidden="true">
+  <title>SPLove</title>
+  <rect width="560" height="140" fill="#0B0B0F"/>
+  <text
+    x="36"
+    y="72"
+    fill="#FFFFFF"
+    font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+    font-size="52"
+    font-weight="600"
+    letter-spacing="0.04em"
+  >SPL</text>
+  <!-- Mark replaces O; scaled to cap height -->
+  <g transform="translate(144 35.5) scale(1.4)">
+    <ellipse
+      cx="16"
+      cy="10.2"
+      rx="12.25"
+      ry="6.85"
+      transform="rotate(-13 16 10.2)"
+      stroke="#FF3B3B"
+      stroke-width="2"
+      stroke-linecap="round"
+    />
+    <path
+      fill="#E11D2E"
+      d="M16 6.1 C13.5 6.1 11.2 8 11.2 10.8 C11.2 14.2 16 18.4 16 22.1 C16 18.4 20.8 14.2 20.8 10.8 C20.8 8 18.5 6.1 16 6.1 Z"
+    />
+  </g>
+  <text
+    x="198"
+    y="72"
+    fill="#FFFFFF"
+    font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+    font-size="52"
+    font-weight="600"
+    letter-spacing="0.04em"
+  >VE</text>
+  <text
+    x="36"
+    y="112"
+    fill="#FFFFFF"
+    opacity="0.55"
+    font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+    font-size="13"
+    font-weight="500"
+    letter-spacing="0.28em"
+  >TROUVER L'AMOUR PAR LE SPORT</text>
+</svg>

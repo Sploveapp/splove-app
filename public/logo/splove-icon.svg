@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+  <title>SPLove</title>
+  <!-- Orbit behind heart: elongated ellipse, no cut through silhouette -->
+  <ellipse
+    cx="16"
+    cy="10.2"
+    rx="12.25"
+    ry="6.85"
+    transform="rotate(-13 16 10.2)"
+    stroke="#FF3B3B"
+    stroke-width="2"
+    stroke-linecap="round"
+  />
+  <!-- Flat geometric heart, two symmetric lobes -->
+  <path
+    fill="#E11D2E"
+    d="M16 6.1 C13.5 6.1 11.2 8 11.2 10.8 C11.2 14.2 16 18.4 16 22.1 C16 18.4 20.8 14.2 20.8 10.8 C20.8 8 18.5 6.1 16 6.1 Z"
+  />
+</svg>

@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply antialiased;
+  }
+  body {
+    @apply bg-app-bg text-app-text antialiased;
+  }
+  /* Le body applique une couleur de texte : les boutons sans `color` inline héritent
+     et peuvent rester foncés sur fond marque. Tous les CTA marque définissent TEXT_ON_BRAND. */
+  button {
+    font-family: inherit;
+  }
+}
+
+/* Barre de navigation bas */
+.app-bottom-nav {
+  background: #0f0f14;
+  border-top: 1px solid #2a2a2e;
+}
+
+.app-bottom-nav__tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 52px;
+  padding: 0 4px;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s ease;
+}
+
+.app-bottom-nav__tab:hover {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.app-bottom-nav__tab--active,
+.app-bottom-nav__tab--active:hover {
+  color: #ff1e2d;
+}
+
+.app-bottom-nav__tab:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.35);
+  outline-offset: 2px;
+}
+
+.app-bottom-nav__tab-inner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding-bottom: 6px;
+}
+
+.app-bottom-nav__active-dot {
+  position: absolute;
+  left: 50%;
+  bottom: -1px;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translateX(-50%);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.app-bottom-nav__active-dot--on {
+  opacity: 1;
+}
+
+.app-bottom-nav__badge {
+  position: absolute;
+  top: -4px;
+  right: -10px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #ff1e2d;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  box-sizing: border-box;
+}
