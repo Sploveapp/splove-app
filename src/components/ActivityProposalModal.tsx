@@ -155,19 +155,21 @@ export function ActivityProposalModal({ open, sharedSports, onClose, onSubmit }:
               </select>
             ) : (
               <input
-                value={sportOther}
-                onChange={(e) => setSportOther(e.target.value)}
-                placeholder="Ex. running, tennis, piscine…"
-                className="w-full rounded-xl border border-app-border px-3 py-3 text-[15px] outline-none focus:ring-2 focus:ring-[#FF1E2D]/25"
-              />
+  value={sportOther}
+  onChange={(e) => setSportOther(e.target.value)}
+  placeholder="Ex. running, tennis, piscine…"
+  className="w-full rounded-xl border border-app-border bg-white px-3 py-3 text-[15px] text-black outline-none placeholder:text-gray-400 caret-black"
+  style={{ color: "#000000", WebkitTextFillColor: "#000000" }}
+/>
             )}
             {sport === "__other__" && sharedSports.length > 0 && (
               <input
-                value={sportOther}
-                onChange={(e) => setSportOther(e.target.value)}
-                placeholder="Précisez l’activité"
-                className="mt-2 w-full rounded-xl border border-app-border px-3 py-3 text-[15px] outline-none focus:ring-2 focus:ring-[#FF1E2D]/25"
-              />
+              value={sportOther}
+              onChange={(e) => setSportOther(e.target.value)}
+              placeholder="Précisez l’activité"
+              className="mt-2 w-full rounded-xl border border-app-border bg-white px-3 py-3 text-[15px] text-black outline-none placeholder:text-gray-400 caret-black"
+              style={{ color: "#000000", WebkitTextFillColor: "#000000" }}
+            />
             )}
           </div>
 
