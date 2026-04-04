@@ -30,7 +30,7 @@ export type Profile = {
   /** Validation produit des photos (voir migration `043_profile_photo_validation_statuses`). */
   portrait_photo_status?: string | null;
   body_photo_status?: string | null;
-  photo_verification_status?: string | null;
+  photo_status?: string | null;
   portrait_rejection_code?: string | null;
   body_rejection_code?: string | null;
   /** Activités adaptées — optionnel, voir migration 005 / 041. */

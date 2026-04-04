@@ -53,7 +53,7 @@ type Profile = {
   intent?: string | null;
   /** Voir `profiles.is_photo_verified` (Veriff). */
   is_photo_verified?: boolean | null;
-  photo_verification_status?: string | null;
+  photo_status?: string | null;
   needs_adapted_activities?: boolean | null;
   pref_open_to_standard_activity?: boolean | null;
   pref_open_to_adapted_activity?: boolean | null;
@@ -206,7 +206,7 @@ const FEED_PROFILE_IDS_SELECT = "id";
 
 /** Columns for Discover cards — queried on `profiles`, not on the narrowed `feed_profiles` view. */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, gender, looking_for, intent, sport_feeling, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_verification_status, needs_adapted_activities, profile_sports!inner(sports(label, slug))";
+  "id, first_name, birth_date, created_at, gender, looking_for, intent, sport_feeling, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, profile_sports!inner(sports(label, slug))";
 
 /** IDs déjà likés — union liker_id/liked_id et from_user/to_user (schémas réels mixtes). */
 async function fetchOutgoingLikedUserIds(userId: string): Promise<Set<string>> {
@@ -586,21 +586,21 @@ export default function Discover() {
     console.debug("[Discover debug] lancement loadProfiles", {
       currentUserId: user.id,
       profile_completed: profile?.profile_completed,
-      photo_verification_status: profile?.photo_verification_status,
+      photo_status: profile?.photo_status,
     });
     if (!profile?.id) {
       return;
     }
-    if (!isPhotoVerificationApproved(profile.photo_verification_status)) {
+    if (!isPhotoVerificationApproved(profile.photo_status)) {
       setLoading(false);
       setProfiles([]);
-      console.error("[Discover] loadProfiles skipped: photo_verification_status is not approved", {
-        photo_verification_status: profile.photo_verification_status,
+      console.error("[Discover] loadProfiles skipped: photo_status is not approved", {
+        photo_status: profile.photo_status,
       });
       return;
     }
     void loadProfiles();
-  }, [authLoading, user?.id, profile?.id, profile?.photo_verification_status]);
+  }, [authLoading, user?.id, profile?.id, profile?.photo_status]);
 
   const weeklySuggestions = useMemo(
     () =>
@@ -716,7 +716,7 @@ export default function Discover() {
         .in("id", feedIds)
         .eq("intent", myIntent)
         .eq("profile_completed", true)
-        .eq("photo_verification_status", "approved")
+        .eq("photo_status", "approved")
         .not("first_name", "is", null)
         .neq("first_name", "")
         .not("birth_date", "is", null)
@@ -729,7 +729,7 @@ export default function Discover() {
       }
 
       let raw = (othersRes.data as unknown as Profile[] | null) ?? [];
-      raw = raw.filter((p) => isPhotoVerificationApproved(p.photo_verification_status));
+      raw = raw.filter((p) => isPhotoVerificationApproved(p.photo_status));
       console.log("[Discover feed] profiles after completeness/photo filter:", raw.length);
 
       const meForCompat = {
@@ -981,7 +981,7 @@ export default function Discover() {
         </div>
       );
     }
-    if (!isPhotoVerificationApproved(profile.photo_verification_status)) {
+    if (!isPhotoVerificationApproved(profile.photo_status)) {
       return (
         <PhotoVerificationDiscoverGate
           profile={profile}

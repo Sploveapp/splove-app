@@ -20,14 +20,14 @@ type Props = {
 };
 
 /**
- * Écran interstitiel Discover tant que `photo_verification_status` ≠ approved.
+ * Écran interstitiel Discover tant que `photo_status` ≠ approved.
  */
 export function PhotoVerificationDiscoverGate({ profile, onRefresh }: Props) {
-  if (isPhotoVerificationApproved(profile.photo_verification_status)) {
+  if (isPhotoVerificationApproved(profile.photo_status)) {
     return null;
   }
 
-  const status = (profile.photo_verification_status ?? "pending").toLowerCase();
+  const status = (profile.photo_status ?? "pending").toLowerCase();
   const isRejected = status === "rejected";
   const detailLines = collectPhotoRejectionUserMessages(profile);
 

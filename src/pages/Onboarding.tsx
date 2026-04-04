@@ -467,6 +467,19 @@ export default function Onboarding() {
     };
   }, [portraitPreviewUrl, bodyPreviewUrl]);
 
+  /** Après un submit refusé, `handleSubmit` remplit `stepHint` ; il faut le purger quand l’utilisateur corrige l’étape 7 (sinon message obsolète alors que `finalStepBlockReason` est déjà à jour). */
+  useEffect(() => {
+    if (step !== TOTAL_STEPS) return;
+    setStepHint(null);
+  }, [
+    step,
+    confirm18,
+    acceptTerms,
+    photoComplianceConfirmed,
+    prefOpenToStandardActivity,
+    prefOpenToAdaptedActivity,
+  ]);
+
   if (isLoading) {
     return (
       <div className="flex min-h-screen flex-col bg-app-bg font-sans">
@@ -751,7 +764,6 @@ export default function Onboarding() {
         return;
       }
 
-      /** Validation photos : pending jusqu’à modération ; `photo_verification_status` dérivé côté BDD (trigger). */
       const profilePayload = {
         id: authUserId,
         first_name: firstName.trim(),
@@ -767,11 +779,6 @@ export default function Onboarding() {
         fullbody_url: fullbodyUrl,
         main_photo_url: portraitUrl || fullbodyUrl,
         profile_completed: true,
-        portrait_photo_status: "pending",
-        body_photo_status: "pending",
-        photo_verification_status: "pending",
-        portrait_rejection_code: null,
-        body_rejection_code: null,
       };
 
       console.log("[Onboarding submit] sending data:", {

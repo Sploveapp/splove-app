@@ -260,7 +260,7 @@ export default function Profile() {
               ) : (
                 <div>
                   {(() => {
-                    const s = (profile?.photo_verification_status ?? "").toLowerCase();
+                    const s = (profile?.photo_status ?? "").toLowerCase();
                     if (s === "rejected") {
                       const lines = profile ? collectPhotoRejectionUserMessages(profile) : [];
                       return (

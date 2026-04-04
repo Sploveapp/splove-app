@@ -1,7 +1,7 @@
 /**
  * Vérification d’identité / photos — aligné sur `profiles` :
  * - `is_photo_verified` : badge « Profil vérifié » (ex. Veriff).
- * - `photo_verification_status` : validation produit des deux photos (pending | approved | rejected).
+ * - `photo_status` : validation produit des deux photos (pending | approved | rejected).
  * - `portrait_photo_status` / `body_photo_status` : détail par photo.
  */
 
