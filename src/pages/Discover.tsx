@@ -26,8 +26,7 @@ import { mutualAccessibilityCompatible } from "../lib/accessibilityMatching";
 import { parseProfileIntent, PROFILE_INTENT_AMICAL, PROFILE_INTENT_AMOUR } from "../lib/profileIntent";
 import { fetchBlockExclusionDetail, isBlockedWith } from "../services/blocks.service";
 import { VerifiedBadge } from "../components/VerifiedBadge";
-import { isPhotoVerificationApproved, isPhotoVerified } from "../lib/profileVerification";
-import { PhotoVerificationDiscoverGate } from "../components/PhotoVerificationDiscoverGate";
+import { isPhotoVerified } from "../lib/profileVerification";
 import {
   collectSportMatchKeysFromProfile,
   getSharedSportLabelsForMatch,
@@ -523,7 +522,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
 
 export default function Discover() {
   const navigate = useNavigate();
-  const { user, isLoading: authLoading, profile, refetchProfile } = useAuth();
+  const { user, isLoading: authLoading, profile } = useAuth();
   const currentUserId = user?.id ?? "";
   const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
   const [mySportMatchKeys, setMySportMatchKeys] = useState<Set<string>>(new Set());
@@ -591,16 +590,8 @@ export default function Discover() {
     if (!profile?.id) {
       return;
     }
-    if (!isPhotoVerificationApproved(profile.photo_status)) {
-      setLoading(false);
-      setProfiles([]);
-      console.error("[Discover] loadProfiles skipped: photo_status is not approved", {
-        photo_status: profile.photo_status,
-      });
-      return;
-    }
     void loadProfiles();
-  }, [authLoading, user?.id, profile?.id, profile?.photo_status]);
+  }, [authLoading, user?.id, profile?.id]);
 
   const weeklySuggestions = useMemo(
     () =>
@@ -716,7 +707,6 @@ export default function Discover() {
         .in("id", feedIds)
         .eq("intent", myIntent)
         .eq("profile_completed", true)
-        .eq("photo_status", "approved")
         .not("first_name", "is", null)
         .neq("first_name", "")
         .not("birth_date", "is", null)
@@ -729,8 +719,7 @@ export default function Discover() {
       }
 
       let raw = (othersRes.data as unknown as Profile[] | null) ?? [];
-      raw = raw.filter((p) => isPhotoVerificationApproved(p.photo_status));
-      console.log("[Discover feed] profiles after completeness/photo filter:", raw.length);
+      console.log("[Discover feed] profiles after completeness filter:", raw.length);
 
       const meForCompat = {
         gender: meProfile.gender ?? null,
@@ -979,14 +968,6 @@ export default function Discover() {
             <p className="text-center text-sm text-app-muted">Chargement du profil…</p>
           </main>
         </div>
-      );
-    }
-    if (!isPhotoVerificationApproved(profile.photo_status)) {
-      return (
-        <PhotoVerificationDiscoverGate
-          profile={profile}
-          onRefresh={() => void refetchProfile()}
-        />
       );
     }
   }
