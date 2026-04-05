@@ -12,6 +12,7 @@ import { ChatPostMatchPanel } from "../components/ChatPostMatchPanel";
 import type { ActivityPayload } from "../lib/chatActivity";
 import {
   computeProposalSchedule,
+  formatActivityProposalNote,
   getMatchOpenedAt,
   getProductState,
   touchMatchOpenedAt,
@@ -34,6 +35,21 @@ import {
   type MessageBubbleTheme,
 } from "../lib/messageBubbleTheme";
 import { messageContainsDisallowedContent } from "../lib/chatMessagePolicy";
+
+const CHAT_WINDOW_HOURS_MS = 48 * 60 * 60 * 1000;
+/** 1 h après le créneau pour proposer un retour discret (anti-prompt agressif). */
+const ACTIVITY_FEEDBACK_DELAY_MS = 60 * 60 * 1000;
+
+export type ActivityFeedbackSentiment = "positive" | "neutral" | "negative";
+
+const CHAT_QUICK_SUGGESTIONS = [
+  "Salut ! Tu es dispo bientôt ?",
+  "On se fixe un lieu ensemble ?",
+  "Partant(e) pour un créneau ?",
+] as const;
+
+type ChatSessionPhase = "new_match" | "active_chat" | "inactive";
+
 type ChatLocationState = {
   partnerFirstName?: string | null;
   partnerMainPhotoUrl?: string | null;
@@ -50,6 +66,10 @@ type ProposalRow = {
   location: string | null;
   note: string | null;
   created_at: string | null;
+  status?: string | null;
+  scheduled_at?: string | null;
+  match_id?: string | null;
+  boost_awarded?: boolean | null;
 };
 
 type TextMessageRow = {
@@ -93,6 +113,9 @@ export default function Chat() {
   const authWatchdogRef = useRef<number | null>(null);
   const [authGateError, setAuthGateError] = useState<string | null>(null);
   const [relanceBusy, setRelanceBusy] = useState(false);
+  /** Retours utilisateur sur une proposition (clé = proposal id). */
+  const [myActivityOutcomes, setMyActivityOutcomes] = useState<Record<string, ActivityFeedbackSentiment>>({});
+  const [outcomeSubmitting, setOutcomeSubmitting] = useState(false);
   /** Genres + intentions des deux profils — règle du premier message texte. */
   const [pairChatMeta, setPairChatMeta] = useState<{
     myGender: string | null;
@@ -168,16 +191,39 @@ export default function Chat() {
 
   const reloadProposals = useCallback(async (cid: string) => {
     const { data, error } = await supabase
-    .from("activity_proposals")
-    .select("id, conversation_id, proposer_id, sport, time_slot, location, note, created_at")
-    .eq("conversation_id", cid)
-    .order("created_at", { ascending: false });
+      .from("activity_proposals")
+      .select(
+        "id, conversation_id, proposer_id, sport, time_slot, location, note, created_at, status, scheduled_at, match_id, boost_awarded"
+      )
+      .eq("conversation_id", cid)
+      .order("created_at", { ascending: false });
     if (error) {
       console.warn("[Chat] proposals", error);
       return;
     }
-    setProposals((data as ProposalRow[]) ?? []);
-  }, []);
+    const rows = (data as ProposalRow[]) ?? [];
+    setProposals(rows);
+    if (user?.id && rows.length > 0) {
+      const ids = rows.map((r) => r.id);
+      const { data: od, error: oe } = await supabase
+        .from("activity_participant_outcomes")
+        .select("activity_proposal_id, sentiment")
+        .eq("participant_id", user.id)
+        .in("activity_proposal_id", ids);
+      if (oe) {
+        console.warn("[Chat] activity outcomes", oe);
+        return;
+      }
+      const next: Record<string, ActivityFeedbackSentiment> = {};
+      for (const row of od ?? []) {
+        const r = row as { activity_proposal_id: string; sentiment: ActivityFeedbackSentiment };
+        next[r.activity_proposal_id] = r.sentiment;
+      }
+      setMyActivityOutcomes(next);
+    } else {
+      setMyActivityOutcomes({});
+    }
+  }, [user?.id]);
 
   const reloadChatMessages = useCallback(async (cid: string): Promise<string | null> => {
     const { data, error } = await supabase
@@ -419,6 +465,23 @@ export default function Chat() {
   const productState = getProductState({ hasProposal: proposals.length > 0 });
   const matchOpenedAt = conversationId ? getMatchOpenedAt(conversationId) : null;
 
+  const chatSessionPhase = useMemo((): ChatSessionPhase => {
+    if (pairBlocked) return "inactive";
+    const baseExpiresAt =
+      windowExpiresAt ?? (matchOpenedAt != null ? matchOpenedAt + CHAT_WINDOW_HOURS_MS : null);
+    const windowExpired = baseExpiresAt != null && nowTick >= baseExpiresAt;
+    if (windowExpired) return "inactive";
+    if (chatMessages.length === 0 && proposals.length === 0) return "new_match";
+    return "active_chat";
+  }, [
+    pairBlocked,
+    windowExpiresAt,
+    matchOpenedAt,
+    nowTick,
+    chatMessages.length,
+    proposals.length,
+  ]);
+
   const canSendChatText = useMemo(() => {
     if (!user?.id || !partnerUserId || !pairChatMeta) return true;
     return canUserSendChatTextMessage({
@@ -435,6 +498,29 @@ export default function Chat() {
     if (!latest) return null;
     return "Créneau proposé";
   }, [proposals]);
+
+  /** Proposition la plus récente éligible au retour (créneau passé + délai), sans re-demander si déjà répondu. */
+  const feedbackEligibleProposal = useMemo(() => {
+    if (pairBlocked || proposals.length === 0) return null;
+    const now = nowTick;
+    const sorted = [...proposals].sort(
+      (a, b) =>
+        new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()
+    );
+    for (const p of sorted) {
+      if (myActivityOutcomes[p.id]) continue;
+      const st = (p.status ?? "proposed").toLowerCase();
+      if (st === "declined" || st === "expired") continue;
+      const sched = p.scheduled_at
+        ? new Date(p.scheduled_at).getTime()
+        : p.created_at
+          ? new Date(p.created_at).getTime() + CHAT_WINDOW_HOURS_MS
+          : 0;
+      if (sched <= 0 || now < sched + ACTIVITY_FEEDBACK_DELAY_MS) continue;
+      return p;
+    }
+    return null;
+  }, [proposals, myActivityOutcomes, nowTick, pairBlocked]);
 
   async function sendActivity(payload: ActivityPayload) {
     if (!user?.id || !conversationId || !matchId) throw new Error("Non connecté");
@@ -455,7 +541,7 @@ export default function Chat() {
     if (activeErr) throw new Error(activeErr.message);
     if (activeProposal?.id) return;
 
-    const { timeLabel } = computeProposalSchedule(payload.when);
+    const { timeLabel, scheduledAt } = computeProposalSchedule(payload.when);
 
     const { error: proposalErr } = await supabase.from("activity_proposals").insert({
       conversation_id: conversationId,
@@ -464,9 +550,46 @@ export default function Chat() {
       time_slot: timeLabel,
       location: payload.place.trim() || "À définir",
       note: payload.message.trim() || null,
+      scheduled_at: scheduledAt,
+      ...(matchId ? { match_id: matchId } : {}),
     });
     if (proposalErr) throw new Error(proposalErr.message);
+
+    const chatBody = formatActivityProposalNote({
+      sport: payload.sport,
+      when: payload.when,
+      place: payload.place,
+      userLine: payload.message,
+    });
+    const { error: chatLineErr } = await supabase.from(CHAT_MESSAGES_TABLE).insert({
+      conversation_id: conversationId,
+      sender_id: user.id,
+      body: chatBody,
+    });
+    if (chatLineErr) throw new Error(chatLineErr.message);
+
     await reloadProposals(conversationId);
+    await reloadChatMessages(conversationId);
+  }
+
+  async function submitActivityOutcome(proposalId: string, sentiment: ActivityFeedbackSentiment) {
+    if (!user?.id || outcomeSubmitting) return;
+    setOutcomeSubmitting(true);
+    try {
+      const { error } = await supabase.from("activity_participant_outcomes").insert({
+        activity_proposal_id: proposalId,
+        participant_id: user.id,
+        activity_done: true,
+        sentiment,
+      });
+      if (error) {
+        console.warn("[Chat] activity_participant_outcomes", error);
+        return;
+      }
+      setMyActivityOutcomes((prev) => ({ ...prev, [proposalId]: sentiment }));
+    } finally {
+      setOutcomeSubmitting(false);
+    }
   }
 
   async function sendChatMessage() {
@@ -656,6 +779,37 @@ export default function Chat() {
             Vous ne pouvez plus organiser de sortie avec cette personne.
           </p>
         ) : null}
+        {!pairBlocked ? (
+          <div className="mb-3 rounded-2xl border border-app-border/90 bg-app-bg/90 px-4 py-3 shadow-sm ring-1 ring-white/[0.05]">
+            {chatSessionPhase === "new_match" ? (
+              <>
+                <p className="text-[13px] font-semibold leading-snug text-app-text">Nouveau match</p>
+                <p className="mt-1 text-[12px] leading-relaxed text-app-muted">
+                  Envoyez un message ou proposez une activité pour lancer la sortie.
+                </p>
+                <button
+                  type="button"
+                  disabled={hasOpenProposal}
+                  onClick={() => setModalOpen(true)}
+                  className="mt-3 w-full rounded-xl py-2.5 text-[13px] font-bold shadow-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
+                >
+                  {hasOpenProposal ? "Créneau en cours" : "Proposer une activité"}
+                </button>
+              </>
+            ) : chatSessionPhase === "active_chat" ? (
+              <p className="text-[13px] leading-snug">
+                <span className="font-semibold text-app-text">Échange en cours.</span>{" "}
+                <span className="text-app-muted">Proposez un créneau quand vous êtes prêts.</span>
+              </p>
+            ) : (
+              <p className="text-[13px] leading-relaxed text-app-muted">
+                Fenêtre privilégiée passée — vous pouvez encore écrire ou relancer la rencontre depuis le bloc
+                ci-dessous.
+              </p>
+            )}
+          </div>
+        ) : null}
         <ChatPostMatchPanel
           productState={productState}
           matchOpenedAt={matchOpenedAt}
@@ -669,6 +823,33 @@ export default function Chat() {
           relanceBusy={relanceBusy}
         />
 
+        {feedbackEligibleProposal && !pairBlocked ? (
+          <div className="mb-3 rounded-2xl border border-app-border/70 bg-app-card/90 px-3 py-2.5 shadow-sm ring-1 ring-white/[0.04]">
+            <p className="text-[11px] font-medium leading-snug text-app-muted">
+              Un mot sur votre sortie ? Optionnel — ça aide à faire remonter les profils impliqués.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {(
+                [
+                  { s: "positive" as const, label: "👍 Bien passé" },
+                  { s: "neutral" as const, label: "😐 Mitigé" },
+                  { s: "negative" as const, label: "👎 Pas ouf" },
+                ] as const
+              ).map(({ s, label }) => (
+                <button
+                  key={s}
+                  type="button"
+                  disabled={outcomeSubmitting}
+                  onClick={() => void submitActivityOutcome(feedbackEligibleProposal.id, s)}
+                  className="rounded-full border border-app-border/90 bg-app-bg px-3 py-1.5 text-[11px] font-semibold text-app-text transition hover:bg-app-border disabled:opacity-50"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4">
           {chatMessages.length > 0 ? (
             <div className="space-y-2">
@@ -679,8 +860,8 @@ export default function Chat() {
                     key={m.id}
                     className={
                       mine
-                        ? `ml-auto ${getOwnMessageBubbleClassName(messageBubbleTheme)}`
-                        : "mr-auto max-w-[85%] rounded-2xl border border-app-border bg-app-card px-3.5 py-2.5 text-sm leading-snug text-app-text shadow-sm"
+                        ? `chat-message-bubble ml-auto ${getOwnMessageBubbleClassName(messageBubbleTheme)}`
+                        : "chat-message-bubble mr-auto max-w-[85%] rounded-2xl border border-app-border bg-app-card px-3.5 py-2.5 text-sm leading-snug text-app-text shadow-sm"
                     }
                   >
                     {m.body}
@@ -730,6 +911,24 @@ export default function Chat() {
               {CHAT_FIRST_MESSAGE_HINT_HOMME}
             </p>
           ) : null}
+          {!pairBlocked && canSendChatText ? (
+            <div className="flex flex-wrap gap-2" aria-label="Suggestions de messages">
+              {CHAT_QUICK_SUGGESTIONS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => {
+                    setDraftMessage(s);
+                    setMessagePolicyError(null);
+                    requestAnimationFrame(() => chatMessageInputRef.current?.focus());
+                  }}
+                  className="rounded-full border border-app-border/90 bg-app-card px-3 py-1.5 text-left text-[12px] font-medium leading-snug text-app-muted transition hover:border-app-accent/35 hover:text-app-text"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div className="flex gap-2">
             <div className="flex min-w-0 flex-1 items-end gap-2">
               <ChatEmojiPicker
@@ -754,7 +953,7 @@ export default function Chat() {
                 disabled={sendingMessage || pairBlocked || !canSendChatText}
                 enterKeyHint="send"
                 autoComplete="off"
-                className="min-h-[44px] min-w-0 flex-1 resize-none rounded-xl border border-app-border bg-app-card px-3 py-2 text-sm text-app-text placeholder:text-app-muted focus:border-app-accent/40 focus:outline-none focus:ring-1 focus:ring-app-accent/20 disabled:opacity-60"
+                className="min-h-[44px] min-w-0 flex-1 resize-none rounded-xl border border-app-border bg-app-card px-3 py-2 text-sm text-app-text placeholder:text-app-muted transition-opacity duration-200 focus:border-app-accent/40 focus:outline-none focus:ring-1 focus:ring-app-accent/20 disabled:opacity-60"
               />
             </div>
             <button

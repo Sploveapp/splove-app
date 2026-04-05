@@ -23,7 +23,7 @@ import {
 } from "../components/ui/Icon";
 import { isPreferenceCompatible } from "../lib/matchingPreferences";
 import { mutualAccessibilityCompatible } from "../lib/accessibilityMatching";
-import { parseProfileIntent, PROFILE_INTENT_AMICAL, PROFILE_INTENT_AMOUR } from "../lib/profileIntent";
+import { parseProfileIntent } from "../lib/profileIntent";
 import { fetchBlockExclusionDetail, isBlockedWith } from "../services/blocks.service";
 import { VerifiedBadge } from "../components/VerifiedBadge";
 import { isPhotoVerified } from "../lib/profileVerification";
@@ -31,6 +31,17 @@ import {
   collectSportMatchKeysFromProfile,
   getSharedSportLabelsForMatch,
 } from "../lib/sportMatchGroups";
+import {
+  guidedProfileSentence,
+  premierMomentLine,
+  softAreaHint,
+} from "../lib/discoverCardCopy";
+import {
+  computeDiscoverMatchScore,
+  computeDiscoverMatchScoreBreakdown,
+  computeReliabilityScore,
+  getReliabilityUiHints,
+} from "../lib/discoverScore";
 
 type Profile = {
   id: string;
@@ -50,6 +61,10 @@ type Profile = {
   looking_for?: string | null;
   /** Type de rencontre (BDD : Amical | Amoureux). */
   intent?: string | null;
+  sport_phrase?: string | null;
+  /** Idée de premier moment IRL (courte phrase). */
+  premier_moment?: string | null;
+  sport_time?: string | null;
   /** Voir `profiles.is_photo_verified` (Veriff). */
   is_photo_verified?: boolean | null;
   photo_status?: string | null;
@@ -57,6 +72,16 @@ type Profile = {
   pref_open_to_standard_activity?: boolean | null;
   pref_open_to_adapted_activity?: boolean | null;
   profile_sports?: { sports: { label: string | null; slug?: string | null } | null }[];
+  profile_completed?: boolean | null;
+  /** Rafraîchi via RPC `touch_profile_last_active` (migration 045). */
+  last_active_at?: string | null;
+  /** Dénormalisé côté SQL (trigger sur activity_proposals). */
+  activity_proposals_count?: number | null;
+  /** Boost après double retour positif (047) — tri uniquement. */
+  boost_score?: number | null;
+  /** Dernier message envoyé (migration 046). */
+  last_reply_at?: string | null;
+  messages_count?: number | null;
 };
 
 /** Resolve photo URL from whatever columns the feed_profiles row actually includes. */
@@ -78,16 +103,11 @@ function getSecondaryPhotoUrl(p: Profile): string | null {
   return null;
 }
 
-function intentShortLabel(intent: string | null | undefined): string | null {
-  const parsed = parseProfileIntent(intent);
-  if (parsed === PROFILE_INTENT_AMICAL) return "Rencontre en mouvement";
-  if (parsed === PROFILE_INTENT_AMOUR) return "Rencontre amoureuse";
-  return null;
-}
-
 type ProfileWithAffinity = Profile & {
   commonSportsCount: number;
   discoverScore: number;
+  /** Tri principal Discover — ne pas afficher. */
+  reliabilityScore: number;
 };
 
 type LikeRpcParsed = { is_match: boolean; conversation_id: string | null };
@@ -154,40 +174,15 @@ function firstCommonSportName(profile: Profile, myMatchKeys: Set<string>): strin
   return shared[0] ?? null;
 }
 
-/** Une ligne sous le prénom — phrase profil ou accroche courte. */
-function profileOneLineTagline(profile: Profile, firstCommon: string | null): string {
-  const f = profile.sport_feeling?.trim();
-  if (f) return `Se sent ${f} en bougeant.`;
-  if (firstCommon) return `${firstCommon} — envie de bouger ensemble ?`;
-  return "Rencontre par le sport, pour de vrai.";
+/** Tri Discover : évite NaN sur dates ISO imparfaites. */
+function safeTimeMs(iso: string | null | undefined): number {
+  if (typeof iso !== "string" || !iso.trim()) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
 }
 
-function recencyScore(createdAt: string | null | undefined): number {
-  if (!createdAt) return 0;
-  const ts = new Date(createdAt).getTime();
-  if (Number.isNaN(ts)) return 0;
-  const ageMs = Date.now() - ts;
-  const day = 24 * 60 * 60 * 1000;
-  if (ageMs <= day) return 30;
-  if (ageMs <= 3 * day) return 20;
-  if (ageMs <= 7 * day) return 10;
-  return 0;
-}
-
-function computeDiscoverScore(profile: Profile, commonCount: number): number {
-  const hasMeetingSignals = Boolean(
-    getProfileDisplayPhotoUrl(profile) && profile.first_name?.trim() && profile.birth_date
-  );
-  const readinessBonus = hasMeetingSignals ? 15 : 0;
-  const sportFeelingBonus = profile.sport_feeling?.trim() ? 5 : 0;
-  const strongSharedSportBonus = commonCount >= 2 ? 25 : 0;
-  return (
-    commonCount * 100 +
-    recencyScore(profile.created_at) +
-    readinessBonus +
-    sportFeelingBonus +
-    strongSharedSportBonus
-  );
+function finiteScore(n: number | undefined): number {
+  return typeof n === "number" && Number.isFinite(n) ? n : 0;
 }
 
 const DISCOVER_FETCH_LIMIT = 80;
@@ -205,7 +200,7 @@ const FEED_PROFILE_IDS_SELECT = "id";
 
 /** Columns for Discover cards — queried on `profiles`, not on the narrowed `feed_profiles` view. */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, gender, looking_for, intent, sport_feeling, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, profile_sports!inner(sports(label, slug))";
+  "id, first_name, birth_date, created_at, last_active_at, last_reply_at, messages_count, activity_proposals_count, boost_score, gender, looking_for, intent, sport_feeling, sport_phrase, premier_moment, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, pref_open_to_standard_activity, pref_open_to_adapted_activity, profile_sports!inner(sports(label, slug))";
 
 /** IDs déjà likés — union liker_id/liked_id et from_user/to_user (schémas réels mixtes). */
 async function fetchOutgoingLikedUserIds(userId: string): Promise<Set<string>> {
@@ -245,6 +240,8 @@ function isValidProfileId(id: string | null | undefined): id is string {
 
 type DiscoverSwipeCardProps = {
   profile: ProfileWithAffinity;
+  /** Ville du viewer (indication floue uniquement). */
+  viewerCity: string | null;
   /** Clés de matching (groupes + sports uniques), pas les libellés bruts. */
   mySportMatchKeys: Set<string>;
   discoverMenuProfileId: string | null;
@@ -258,6 +255,7 @@ type DiscoverSwipeCardProps = {
 
 const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   profile,
+  viewerCity,
   mySportMatchKeys,
   discoverMenuProfileId,
   setDiscoverMenuProfileId,
@@ -270,7 +268,14 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   const age = getAgeFromBirthDate(profile.birth_date ?? null);
   const firstCommon = firstCommonSportName(profile, mySportMatchKeys);
   const sharedSports = getSharedSportsFromProfile(mySportMatchKeys, profile);
-  const tagline = profileOneLineTagline(profile, firstCommon);
+  const sportsShown = sharedSports.slice(0, 3);
+  const guided = guidedProfileSentence({
+    sport_phrase: profile.sport_phrase,
+    firstCommonSport: firstCommon,
+  });
+  const premier = premierMomentLine(profile.premier_moment);
+  const areaHint = softAreaHint(viewerCity, profile.city);
+  const reliabilityHints = getReliabilityUiHints(profile);
   const strongAffinity = profile.commonSportsCount >= 2;
   const photo = getProfileDisplayPhotoUrl(profile) ?? "";
 
@@ -385,7 +390,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
         />
         {strongAffinity ? (
           <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-full bg-app-card/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-800 shadow-sm backdrop-blur-sm">
-            Top match
+            Plusieurs sports
           </div>
         ) : null}
         <div className="absolute right-2 top-2 z-20" data-discover-menu-root>
@@ -447,9 +452,9 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
               </span>
             ) : null}
           </div>
-          {sharedSports.length > 0 ? (
+          {sportsShown.length > 0 ? (
             <div className="mt-2.5 flex flex-wrap gap-1.5">
-              {sharedSports.map((name) => (
+              {sportsShown.map((name) => (
                 <span
                   key={name}
                   className="rounded-full bg-app-card/22 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-white shadow-sm ring-1 ring-white/35 backdrop-blur-[2px]"
@@ -459,16 +464,40 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
               ))}
             </div>
           ) : null}
-          <p className="mt-2.5 line-clamp-1 text-[15px] font-medium leading-snug text-white/95 drop-shadow-sm">
-            {tagline}
+          <p className="mt-2.5 line-clamp-2 text-[15px] font-medium leading-snug text-white/95 drop-shadow-sm">
+            {guided}
           </p>
-          {profile.city ? (
-            <p className="mt-1 text-[11px] font-medium tracking-wide text-white/55">{profile.city}</p>
+          {areaHint ? (
+            <p className="mt-1 text-[11px] font-medium tracking-wide text-white/65">{areaHint}</p>
+          ) : profile.city?.trim() ? (
+            <p className="mt-1 text-[11px] font-medium tracking-wide text-white/55">
+              Indication zone · {profile.city.trim()}
+            </p>
+          ) : null}
+          {reliabilityHints.length > 0 ? (
+            <div className="mt-2 space-y-0.5">
+              {reliabilityHints.map((line) => (
+                <p
+                  key={line}
+                  className="text-[10px] font-medium leading-snug text-emerald-100/85 drop-shadow-sm"
+                >
+                  {line}
+                </p>
+              ))}
+            </div>
           ) : null}
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col justify-center gap-3 border-t border-app-border/90 bg-app-card px-3 py-4 sm:px-4">
+      <div className="flex min-h-[96px] flex-1 flex-col justify-end gap-3 border-t border-app-border/90 bg-app-card px-3 py-3 sm:px-4">
+        {premier ? (
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-app-muted">
+              Premier moment
+            </p>
+            <p className="mt-1 text-[13px] leading-snug text-app-text">{premier}</p>
+          </div>
+        ) : null}
         <div className="flex items-stretch gap-2 sm:gap-2.5">
           <button
             type="button"
@@ -485,7 +514,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
             className="min-h-[52px] min-w-0 flex-1 rounded-2xl px-2 py-3 text-[15px] font-bold leading-tight shadow-md transition hover:opacity-95 active:scale-[0.99] sm:text-base"
             style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
           >
-            Proposer un moment
+            Proposer une sortie
           </button>
           <button
             type="button"
@@ -604,7 +633,10 @@ export default function Discover() {
           const bLocal =
             !!myCity && !!b.city && b.city.toLowerCase().trim() === myCity.toLowerCase().trim();
           if (aLocal !== bLocal) return bLocal ? 1 : -1;
-          return b.discoverScore - a.discoverScore;
+          if (finiteScore(b.reliabilityScore) !== finiteScore(a.reliabilityScore)) {
+            return finiteScore(b.reliabilityScore) - finiteScore(a.reliabilityScore);
+          }
+          return finiteScore(b.discoverScore) - finiteScore(a.discoverScore);
         })
         .slice(0, 3),
     [profiles, myCity]
@@ -620,13 +652,16 @@ export default function Discover() {
     let resultCount = 0;
     try {
       console.log("[Discover feed] currentUserId:", currentUserId);
+      void supabase.rpc("touch_profile_last_active").then(({ error }) => {
+        if (error) console.warn("[Discover] touch_profile_last_active:", error.message);
+      });
 
       const [likedIds, meRes, blockDetail] = await Promise.all([
         fetchOutgoingLikedUserIds(currentUserId),
         supabase
           .from("profiles")
           .select(
-            "city, gender, looking_for, intent, needs_adapted_activities, profile_sports(sports(label, slug))",
+            "city, gender, looking_for, intent, needs_adapted_activities, pref_open_to_standard_activity, pref_open_to_adapted_activity, profile_sports(sports(label, slug))",
           )
           .eq("id", currentUserId)
           .maybeSingle(),
@@ -650,8 +685,11 @@ export default function Discover() {
 
       const myIntent = parseProfileIntent(meProfile.intent);
       if (!myIntent) {
-        console.warn(
-          `[Discover feed] STOP intent invalide: "${String(meProfile.intent)}" (attendu Amical|Amoureux)`,
+        console.error("[Discover feed] invalid intent — cannot load feed", {
+          intent: meProfile.intent,
+        });
+        setErrorMessage(
+          "Ton intention de rencontre n’est pas reconnue. Mets à jour ton profil puis réessaie.",
         );
         setProfiles([]);
         return;
@@ -666,7 +704,7 @@ export default function Discover() {
         .select(FEED_PROFILE_IDS_SELECT)
         .neq("id", currentUserId)
         .eq("intent", myIntent)
-        .order("id", { ascending: false })
+        .order("last_active_at", { ascending: false })
         .limit(DISCOVER_FETCH_LIMIT);
 
       if (notInClause) {
@@ -676,8 +714,11 @@ export default function Discover() {
       const feedRes = await feedIdsQ;
 
       if (feedRes.error) {
-        console.error(feedRes.error);
-        setErrorMessage(feedRes.error.message);
+        console.error("[Discover feed] feed_profiles query failed", {
+          code: feedRes.error.code,
+          message: feedRes.error.message,
+        });
+        setErrorMessage(feedRes.error.message || "Impossible de charger les profils.");
         return;
       }
 
@@ -710,15 +751,28 @@ export default function Discover() {
         .not("first_name", "is", null)
         .neq("first_name", "")
         .not("birth_date", "is", null)
-        .order("created_at", { ascending: false, nullsFirst: false });
+        .order("last_active_at", { ascending: false, nullsFirst: false });
 
       if (othersRes.error) {
-        console.error(othersRes.error);
-        setErrorMessage(othersRes.error.message);
+        console.error("[Discover feed] profiles detail query failed", {
+          code: othersRes.error.code,
+          message: othersRes.error.message,
+        });
+        setErrorMessage(othersRes.error.message || "Impossible de charger les profils.");
         return;
       }
 
-      let raw = (othersRes.data as unknown as Profile[] | null) ?? [];
+      const rawData = othersRes.data;
+      let raw: Profile[] = Array.isArray(rawData)
+        ? (rawData as unknown as Profile[])
+        : rawData && typeof rawData === "object"
+          ? [rawData as unknown as Profile]
+          : [];
+      if (!Array.isArray(rawData)) {
+        console.error("[Discover feed] unexpected profiles payload (expected array)", {
+          type: typeof rawData,
+        });
+      }
       console.log("[Discover feed] profiles after completeness filter:", raw.length);
 
       const meForCompat = {
@@ -767,23 +821,52 @@ export default function Discover() {
       console.log("[Discover feed] profiles after shared sports filter:", raw.length);
 
       const enriched: ProfileWithAffinity[] = raw.map((p) => {
-        const common = commonSportsCount(sportsSet, p);
+        let common = 0;
+        try {
+          common = commonSportsCount(sportsSet, p);
+        } catch (e) {
+          console.error("[Discover feed] commonSportsCount failed", { id: p?.id, err: e });
+        }
         return {
           ...p,
-          commonSportsCount: common,
-          discoverScore: computeDiscoverScore(p, common),
+          commonSportsCount: Number.isFinite(common) ? common : 0,
+          discoverScore: computeDiscoverMatchScore(p, common),
+          reliabilityScore: computeReliabilityScore(p),
         };
       });
 
-      enriched.sort((a, b) => {
-        if (b.discoverScore !== a.discoverScore) {
-          return b.discoverScore - a.discoverScore;
+      if (import.meta.env.DEV && enriched.length > 0) {
+        for (const p of enriched.slice(0, 8)) {
+          try {
+            const b = computeDiscoverMatchScoreBreakdown(p, p.commonSportsCount);
+            console.debug("[Discover score]", p.first_name ?? p.id, {
+              reliability: p.reliabilityScore,
+              match: b,
+            });
+          } catch (e) {
+            console.error("[Discover score] breakdown debug failed", { id: p.id, err: e });
+          }
         }
+      }
+
+      enriched.sort((a, b) => {
+        const br = finiteScore(b.reliabilityScore);
+        const ar = finiteScore(a.reliabilityScore);
+        if (br !== ar) return br - ar;
+        const bd = finiteScore(b.discoverScore);
+        const ad = finiteScore(a.discoverScore);
+        if (bd !== ad) return bd - ad;
         if (b.commonSportsCount !== a.commonSportsCount) {
           return b.commonSportsCount - a.commonSportsCount;
         }
-        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        const lr = safeTimeMs(a.last_reply_at);
+        const lrb = safeTimeMs(b.last_reply_at);
+        if (lrb !== lr) return lrb - lr;
+        const la = safeTimeMs(a.last_active_at);
+        const lb = safeTimeMs(b.last_active_at);
+        if (lb !== la) return lb - la;
+        const ta = safeTimeMs(a.created_at);
+        const tb = safeTimeMs(b.created_at);
         if (tb !== ta) return tb - ta;
         return (a.first_name ?? "").localeCompare(b.first_name ?? "", "fr");
       });
@@ -977,13 +1060,13 @@ export default function Discover() {
       <main className="mx-auto max-w-md px-4 pb-8 pt-1">
         <section className="mb-5 px-0.5 text-center">
           <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-app-muted">
-            Rencontres par le sport
+            Rencontres réelles
           </p>
           <p className="mt-2.5 text-xl font-bold leading-snug tracking-tight text-app-text">
-            Trouver l’amour par le sport
+            Du terrain à la rencontre
           </p>
           <p className="mx-auto mt-2 max-w-[21rem] text-[13px] leading-relaxed text-app-muted">
-            Likez pour commencer. Proposez un moment pour vraiment se rencontrer.
+            Un like ouvre la porte — une sortie concrète fait le reste. Pas d’endless chat.
           </p>
         </section>
 
@@ -1005,7 +1088,7 @@ export default function Discover() {
           >
             <p className="text-[15px] font-bold leading-snug">Intérêt envoyé</p>
             <p className="mt-1 text-[13px] leading-snug text-emerald-100/90">
-              Match réciproque ? Proposez vite un moment pour bouger ensemble.
+              S’ils répondent, passez vite à un créneau — le mouvement, c’est le bon fil.
             </p>
           </div>
         )}
@@ -1017,10 +1100,10 @@ export default function Discover() {
             className="mb-4 rounded-2xl border border-app-border bg-app-card px-4 py-3 text-sm text-app-text shadow-sm ring-1 ring-white/[0.04]"
           >
             <p className="border-l-2 border-app-accent pl-3 text-[15px] font-bold leading-snug text-app-text">
-              C’est un match
+              Match
             </p>
             <p className="mt-1 text-[13px] font-medium leading-snug text-app-text">
-              Ouvrez la messagerie et proposez un moment concret.
+              Proposez une sortie ou un message court — l’essentiel est de passer au réel.
             </p>
           </div>
         )}
@@ -1056,8 +1139,8 @@ export default function Discover() {
         {!loading && !errorMessage && weeklySuggestions.length > 0 && (
           <div className="mb-5">
             <PremiumSuggestionsSection
-              title="Le match parfait ?"
-              subtitle="Trois profils très alignés avec vous."
+              title="Très alignés avec vous"
+              subtitle="Trois profils pour passer vite au terrain."
               items={weeklySuggestions.map((p) => {
                 const cs = firstCommonSportName(p, mySportMatchKeys);
                 return {
@@ -1066,7 +1149,9 @@ export default function Discover() {
                   firstName: p.first_name?.trim() || "Profil",
                   age: getAgeFromBirthDate(p.birth_date ?? null),
                   commonSport: cs ?? "",
-                  projectionCopy: cs ? `Envie de bouger sur ${cs} ?` : "Ouvrez pour proposer un moment.",
+                  projectionCopy: cs
+                    ? `Terrain commun : ${cs} — prêt·e à lancer une sortie ?`
+                    : "Ouvrez pour proposer une sortie concrète.",
                   verified: isPhotoVerified(p),
                 };
               })}
@@ -1088,6 +1173,7 @@ export default function Discover() {
             <DiscoverSwipeCard
               key={profile.id}
               profile={profile}
+              viewerCity={myCity}
               mySportMatchKeys={mySportMatchKeys}
               discoverMenuProfileId={discoverMenuProfileId}
               setDiscoverMenuProfileId={setDiscoverMenuProfileId}
@@ -1131,9 +1217,7 @@ export default function Discover() {
             const photoMain = getProfileDisplayPhotoUrl(profile) ?? "";
             const photoSecond = getSecondaryPhotoUrl(profile);
             const age = getAgeFromBirthDate(profile.birth_date ?? null);
-            const sharedSports = getSharedSportsFromProfile(mySportMatchKeys, profile);
-            const intentLine = intentShortLabel(profile.intent);
-            const lf = profile.looking_for?.trim();
+            const sharedSports = getSharedSportsFromProfile(mySportMatchKeys, profile).slice(0, 3);
             return (
               <div
                 className="fixed inset-0 z-[60] flex items-end justify-center bg-black/45 p-4 sm:items-center"
@@ -1225,25 +1309,44 @@ export default function Discover() {
                         ))}
                       </div>
                     ) : null}
-                    <div className="space-y-1 text-[13px] leading-snug text-app-muted">
-                      {intentLine ? <p className="line-clamp-1">{intentLine}</p> : null}
-                      {lf ? (
-                        <p className="line-clamp-1">
-                          <span className="font-medium text-app-muted">Cherche </span>
-                          {lf}
-                        </p>
-                      ) : null}
-                      {profile.city ? (
-                        <p className="line-clamp-1 text-[12px] text-app-muted">{profile.city}</p>
-                      ) : null}
-                    </div>
+                    {(() => {
+                      const fc = firstCommonSportName(profile, mySportMatchKeys);
+                      const guidedPv = guidedProfileSentence({
+                        sport_phrase: profile.sport_phrase,
+                        firstCommonSport: fc,
+                      });
+                      const ahPv = softAreaHint(myCity, profile.city);
+                      const premierPv = premierMomentLine(profile.premier_moment);
+                      const hintPv = getReliabilityUiHints(profile);
+                      return (
+                        <div className="space-y-2 border-t border-app-border/80 pt-2.5">
+                          <p className="text-[13px] font-medium leading-snug text-app-text">{guidedPv}</p>
+                          {ahPv ? <p className="text-[12px] leading-snug text-app-muted">{ahPv}</p> : null}
+                          {premierPv ? (
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-app-muted">
+                                Premier moment
+                              </p>
+                              <p className="mt-0.5 text-[12px] leading-snug text-app-text">{premierPv}</p>
+                            </div>
+                          ) : null}
+                          {hintPv.length > 0 ? (
+                            <ul className="space-y-0.5 text-[11px] font-medium leading-snug text-emerald-800/90">
+                              {hintPv.map((h) => (
+                                <li key={h}>{h}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
                     <button
                       type="button"
                       className="mt-1 w-full rounded-2xl py-4 text-base font-bold shadow-lg transition hover:opacity-95 sm:py-4 sm:text-[17px]"
                       style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
                       onClick={() => void handlePreviewLike()}
                     >
-                      Proposer un moment
+                      Proposer une sortie
                     </button>
                     <div className="flex flex-wrap items-center justify-center gap-2 pt-0.5">
                       <button

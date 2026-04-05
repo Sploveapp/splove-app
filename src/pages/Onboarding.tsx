@@ -56,6 +56,7 @@ const SPORT_MOTIVATION_OPTIONS = [
 ] as const;
 
 const SPORT_PHRASE_MAX_LENGTH = 120;
+const PREMIER_MOMENT_MAX_LENGTH = 120;
 
 /** Valeurs BDD : UI « Amour » → Amoureux */
 const INTENT_DB_AMOUR = "Amoureux";
@@ -284,6 +285,8 @@ export default function Onboarding() {
   const [sportTime, setSportTime] = useState("");
   const [sportMotivations, setSportMotivations] = useState<string[]>([]);
   const [sportPhrase, setSportPhrase] = useState("");
+  const [premierMoment, setPremierMoment] = useState("");
+  const [premierMomentContactError, setPremierMomentContactError] = useState<string | null>(null);
   const [portraitFile, setPortraitFile] = useState<File | null>(null);
   const [bodyFile, setBodyFile] = useState<File | null>(null);
   const [photoComplianceConfirmed, setPhotoComplianceConfirmed] = useState(false);
@@ -628,6 +631,12 @@ export default function Onboarding() {
         return false;
       }
       setSportPhraseContactError(null);
+      const pm = premierMoment.trim();
+      if (pm.length > 0 && bioPublicTextViolatesPolicy(premierMoment)) {
+        setPremierMomentContactError(SAFETY_CONTENT_REFUSAL);
+        return false;
+      }
+      setPremierMomentContactError(null);
       return true;
     }
     if (current === 5) {
@@ -670,6 +679,7 @@ export default function Onboarding() {
   function goBack() {
     setStepHint(null);
     setSportPhraseContactError(null);
+    setPremierMomentContactError(null);
     setPhotoStepError(null);
     setStep((s) => Math.max(1, s - 1));
   }
@@ -701,6 +711,15 @@ export default function Onboarding() {
       setStep(4);
       return;
     }
+    const trimmedPremier = premierMoment.trim();
+    if (
+      trimmedPremier.length > 0 &&
+      bioPublicTextViolatesPolicy(premierMoment)
+    ) {
+      setPremierMomentContactError(SAFETY_CONTENT_REFUSAL);
+      setStep(4);
+      return;
+    }
     if (!validateStep(4)) {
       setStep(4);
       return;
@@ -728,6 +747,7 @@ export default function Onboarding() {
     setError(null);
     setStepHint(null);
     setSportPhraseContactError(null);
+    setPremierMomentContactError(null);
     setPhotoStepError(null);
     setLoading(true);
 
@@ -741,6 +761,10 @@ export default function Onboarding() {
     const phraseFinal =
       trimmedPhrase.length > 0
         ? trimmedPhrase.slice(0, SPORT_PHRASE_MAX_LENGTH)
+        : null;
+    const premierFinal =
+      trimmedPremier.length > 0
+        ? trimmedPremier.slice(0, PREMIER_MOMENT_MAX_LENGTH)
         : null;
 
     const authUserId = user.id;
@@ -774,6 +798,7 @@ export default function Onboarding() {
         sport_time: sportTime || null,
         sport_motivation: sportMotivations.length > 0 ? sportMotivations : null,
         sport_phrase: phraseFinal,
+        premier_moment: premierFinal,
         needs_adapted_activities: needsAdaptedActivities,
         portrait_url: portraitUrl,
         fullbody_url: fullbodyUrl,
@@ -1250,38 +1275,79 @@ export default function Onboarding() {
               )}
 
               {step === 4 && (
-                <div>
-                  <label className={labelClassName} htmlFor="ob-phrase">
-                    Votre phrase sport (optionnel)
-                  </label>
-                  <input
-                    id="ob-phrase"
-                    type="text"
-                    placeholder="Le weekend sur les sentiers ou une salle au lever du jour…"
-                    value={sportPhrase}
-                    maxLength={SPORT_PHRASE_MAX_LENGTH}
-                    onChange={(e) => {
-                      setSportPhrase(e.target.value.slice(0, SPORT_PHRASE_MAX_LENGTH));
-                      setSportPhraseContactError(null);
-                    }}
-                    onBlur={(e) => {
-                      const v = e.target.value;
-                      if (v.trim().length > 0 && bioPublicTextViolatesPolicy(v)) {
-                        setSportPhraseContactError(SAFETY_CONTENT_REFUSAL);
-                      } else {
-                        setSportPhraseContactError(null);
-                      }
-                    }}
-                    className={inputClassName}
-                  />
-                  <p className="mt-1 text-xs text-app-muted">
-                    {sportPhrase.length}/{SPORT_PHRASE_MAX_LENGTH}
-                  </p>
-                  {sportPhraseContactError && (
-                    <p className="mt-1.5 text-sm leading-snug text-red-600" role="alert">
-                      {sportPhraseContactError}
+                <div className="space-y-5">
+                  <div>
+                    <label className={labelClassName} htmlFor="ob-phrase">
+                      Ta phrase en une ligne
+                    </label>
+                    <p className="mb-2 text-xs leading-snug text-app-muted">
+                      Une phrase nette sur ton énergie ou ton style — pas une bio longue.
                     </p>
-                  )}
+                    <input
+                      id="ob-phrase"
+                      type="text"
+                      placeholder="Ex. Trail le dimanche matin, j’aime le rythme et l’air large."
+                      value={sportPhrase}
+                      maxLength={SPORT_PHRASE_MAX_LENGTH}
+                      onChange={(e) => {
+                        setSportPhrase(e.target.value.slice(0, SPORT_PHRASE_MAX_LENGTH));
+                        setSportPhraseContactError(null);
+                      }}
+                      onBlur={(e) => {
+                        const v = e.target.value;
+                        if (v.trim().length > 0 && bioPublicTextViolatesPolicy(v)) {
+                          setSportPhraseContactError(SAFETY_CONTENT_REFUSAL);
+                        } else {
+                          setSportPhraseContactError(null);
+                        }
+                      }}
+                      className={inputClassName}
+                    />
+                    <p className="mt-1 text-xs text-app-muted">
+                      {sportPhrase.length}/{SPORT_PHRASE_MAX_LENGTH}
+                    </p>
+                    {sportPhraseContactError && (
+                      <p className="mt-1.5 text-sm leading-snug text-red-600" role="alert">
+                        {sportPhraseContactError}
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className={labelClassName} htmlFor="ob-premier">
+                      Premier moment
+                    </label>
+                    <p className="mb-2 text-xs leading-snug text-app-muted">
+                      Une idée courte de première sortie réelle (optionnel).
+                    </p>
+                    <input
+                      id="ob-premier"
+                      type="text"
+                      placeholder="Ex. Un café puis une séance courte en salle."
+                      value={premierMoment}
+                      maxLength={PREMIER_MOMENT_MAX_LENGTH}
+                      onChange={(e) => {
+                        setPremierMoment(e.target.value.slice(0, PREMIER_MOMENT_MAX_LENGTH));
+                        setPremierMomentContactError(null);
+                      }}
+                      onBlur={(e) => {
+                        const v = e.target.value;
+                        if (v.trim().length > 0 && bioPublicTextViolatesPolicy(v)) {
+                          setPremierMomentContactError(SAFETY_CONTENT_REFUSAL);
+                        } else {
+                          setPremierMomentContactError(null);
+                        }
+                      }}
+                      className={inputClassName}
+                    />
+                    <p className="mt-1 text-xs text-app-muted">
+                      {premierMoment.length}/{PREMIER_MOMENT_MAX_LENGTH}
+                    </p>
+                    {premierMomentContactError && (
+                      <p className="mt-1.5 text-sm leading-snug text-red-600" role="alert">
+                        {premierMomentContactError}
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1450,7 +1516,7 @@ export default function Onboarding() {
                   </label>
                   <div className="space-y-2 rounded-xl border border-app-border bg-app-bg/80 px-3 py-3">
                     <p className="text-xs font-semibold uppercase tracking-wide text-app-muted">
-                      Qui souhaitez-vous rencontrer ?
+                      Qui t’intéresse ?
                     </p>
                     <label className="flex cursor-pointer items-start gap-2 text-sm text-app-text">
                       <input

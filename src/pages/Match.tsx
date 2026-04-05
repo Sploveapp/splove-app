@@ -7,6 +7,7 @@ import { ActivityProposalModal } from "../components/ActivityProposalModal";
 import { PriorityProposalUpsell } from "../components/PriorityProposalUpsell";
 import type { ActivityPayload } from "../lib/chatActivity";
 import { COPY_BANNER_48H, computeProposalSchedule, touchMatchOpenedAt } from "../lib/chatActivity";
+import { matchMomentumLine } from "../lib/discoverCardCopy";
 import { ensureConversationWindow } from "../lib/ensureConversationWindow";
 
 export type MatchLocationState = {
@@ -28,6 +29,7 @@ export default function Match() {
   const partnerPhoto = state?.partnerMainPhotoUrl?.trim() || null;
   const matchedByUserId = state?.matchedByUserId ?? null;
   const sharedSports = state?.sharedSports ?? [];
+  const momentum = matchMomentumLine(sharedSports);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [activeProposalStatus, setActiveProposalStatus] = useState<string | null>(null);
@@ -82,7 +84,7 @@ export default function Match() {
       return;
     }
 
-    const { timeLabel } = computeProposalSchedule(payload.when);
+    const { timeLabel, scheduledAt } = computeProposalSchedule(payload.when);
 
     const { error: proposalErr } = await supabase.from("activity_proposals").insert({
       conversation_id: conversationId,
@@ -91,6 +93,7 @@ export default function Match() {
       time_slot: timeLabel,
       location: payload.place.trim() || "À définir",
       note: payload.message.trim() || null,
+      scheduled_at: scheduledAt,
     });
     if (proposalErr) throw new Error(proposalErr.message);
   }
@@ -128,18 +131,26 @@ export default function Match() {
               />
             </div>
           )}
-          <h1 className="mt-5 text-[1.35rem] font-bold leading-snug tracking-tight text-app-text sm:text-2xl">
-            Ça match. Maintenant, faites que ça existe.
+          <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.2em] text-app-muted">Match</p>
+          <h1 className="mt-2 text-[1.35rem] font-bold leading-snug tracking-tight text-app-text sm:text-2xl">
+            Passez au réel
           </h1>
           {partnerName && (
-            <p className="mt-2 text-[15px] text-app-muted">
+            <p className="mt-2 text-[15px] font-medium text-app-text">
               Avec {partnerName}
-              {sharedSports.length > 0 ? ` · ${sharedSports.slice(0, 2).join(", ")}` : ""}
+              {sharedSports.length > 0 ? (
+                <span className="block pt-1 text-[13px] font-semibold text-[#FF1E2D]">
+                  {sharedSports.slice(0, 3).join(" · ")}
+                </span>
+              ) : null}
             </p>
           )}
-          <p className="mt-5 text-[15px] font-medium leading-relaxed text-app-text">{COPY_BANNER_48H}</p>
+          <p className="mt-5 rounded-xl border border-app-accent/25 bg-app-bg/80 px-3 py-3 text-[14px] font-medium leading-relaxed text-app-text">
+            Point d’élan — {momentum}
+          </p>
+          <p className="mt-4 text-[13px] leading-relaxed text-app-muted">{COPY_BANNER_48H}</p>
           <p className="mt-1.5 text-sm leading-relaxed text-app-muted">
-            Un créneau concret, puis le reste suit — le chat reste ouvert quand vous voulez.
+            Pas besoin d’écrire un roman — un créneau suffit pour lancer le mouvement.
           </p>
           {activeProposalStatus && (
             <p className="mt-3 inline-flex rounded-full bg-[#FF1E2D]/10 px-3 py-1 text-[12px] font-semibold text-[#FF1E2D]">
@@ -154,14 +165,14 @@ export default function Match() {
               className="w-full rounded-2xl py-3.5 text-[15px] font-bold shadow-md transition hover:opacity-95"
               style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              Proposer un moment
+              Proposer une activité
             </button>
             <button
               type="button"
               onClick={goChat}
               className="w-full rounded-2xl border border-app-border bg-app-card py-3.5 text-[15px] font-semibold text-app-text hover:bg-app-border"
             >
-              Discuter avant
+              Envoyer un message
             </button>
           </div>
           <div className="mt-4 text-left">

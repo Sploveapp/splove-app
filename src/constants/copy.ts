@@ -147,17 +147,16 @@ export const EMPTY_NO_FILTERS = "Aucun filtre. Tous les profils compatibles s'af
 export const EMPTY_NO_PROFILES = "Aucun nouveau profil pour le moment. Revenez dans quelques heures.";
 
 // ——— Accessibilité / activités adaptées (ton sobre, non médical) ———
-/** Texte d’introduction court — onboarding & profil. */
+/** Texte d’introduction — onboarding & profil. */
 export const ACCESSIBILITY_SECTION_INTRO =
-  "Facultatif : ces choix aident à vous proposer des rencontres respectueuses de chacun. Vous pouvez les modifier plus tard.";
+  "Pour te proposer des profils alignés avec toi — tu peux changer ça quand tu veux.";
 export const ACCESSIBILITY_SELF_LABEL =
-  "Je pratique plutôt des activités adaptées à ma mobilité ou ma situation (facultatif)";
-export const ACCESSIBILITY_PREF_STANDARD_LABEL =
-  "Rencontrer des personnes sans besoin particulier d’activités adaptées";
+  "Je bouge plutôt avec des activités adaptées à ma mobilité";
+export const ACCESSIBILITY_PREF_STANDARD_LABEL = "Rencontrer des profils « classiques »";
 export const ACCESSIBILITY_PREF_ADAPTED_LABEL =
-  "Rencontrer des personnes qui indiquent aussi des activités adaptées";
+  "Rencontrer des profils ouverts aux activités adaptées";
 export const ACCESSIBILITY_PREF_BOTH_REQUIRED =
-  "Indiquez au moins un type de rencontre (les deux cases peuvent rester cochées).";
+  "Choisis au moins une des deux options ci-dessous.";
 
 // ——— Safety (message filter + reports) ———
 /** Message unique pour refus modération (chat, bio, propositions). */
@@ -175,19 +174,19 @@ export const REPORT_CONFIRM = "Merci. Votre signalement a bien été enregistré
 export const REPORT_CANCEL = "Annuler";
 export const REPORT_LINK_LABEL = "Signaler ce profil";
 
-/** Mon profil — rappel (pas de CTA vers autrui depuis cette page). */
+/** @deprecated Préférer les listes actionnables sur Mon profil */
 export const PROFILE_SAFETY_HINT =
-  "Pour signaler un membre ou arrêter les échanges, utilisez « Signaler » ou « Ne plus voir ce profil » depuis Découvrir ou une conversation.";
+  "Depuis un profil ou un chat : menu ⋯ pour signaler ou ne plus voir quelqu’un.";
 
 // ——— Vérification identité / photos (Veriff) ———
 export const VERIFY_BADGE_LABEL = "Profil vérifié";
 /** Texte sous le badge sur la fiche « Mon profil » */
 export const VERIFY_OWN_VERIFIED =
-  "Votre identité a été vérifiée. Ce badge rassure les autres membres : profil authentique, photos réelles.";
+  "Ton profil est vérifié — les autres voient que c’est bien toi.";
 export const VERIFY_OWN_PENDING =
-  "Vérification d’identité en cours ou à finaliser. Une fois validée, le badge « Profil vérifié » s’affichera.";
+  "Vérification en cours — le badge s’affiche dès que c’est bon.";
 export const VERIFY_OWN_NOT_VERIFIED =
-  "Pour une communauté de confiance, nous vérifions l’identité avec Veriff et attendons des photos nettes, sans filtre, visage visible et silhouette en pied.";
+  "Photos nettes, visage visible, silhouette en pied — on valide et tu es prêt·e.";
 /** @deprecated Ancien libellé — préférer VERIFY_OWN_NOT_VERIFIED */
 export const VERIFY_COMING_SOON = VERIFY_OWN_NOT_VERIFIED;
 

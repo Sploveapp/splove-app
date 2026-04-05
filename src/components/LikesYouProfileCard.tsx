@@ -21,6 +21,7 @@ import {
   IconPass,
   IconProfileAvatarPlaceholder,
 } from "./ui/Icon";
+import { guidedProfileSentence, premierMomentLine } from "../lib/discoverCardCopy";
 
 function getSports(like: LikeReceived): string[] {
   const list = like.profile?.profile_sports ?? [];
@@ -41,7 +42,12 @@ type Props = {
 export function LikesYouProfileCard({ like, onLikeBack, onPass, onReport, onBlock }: Props) {
   const profile = like.profile;
   if (!profile) return null;
-  const sports = getSports(like);
+  const sports = getSports(like).slice(0, 3);
+  const guided = guidedProfileSentence({
+    sport_phrase: profile.sport_phrase,
+    firstCommonSport: sports[0] ?? null,
+  });
+  const premier = premierMomentLine(profile.premier_moment);
   const photo = profile.main_photo_url?.trim() ?? "";
 
   return (
@@ -107,7 +113,7 @@ export function LikesYouProfileCard({ like, onLikeBack, onPass, onReport, onBloc
         {sports.length > 0 && (
           <p
             style={{
-              margin: "0 0 10px 0",
+              margin: "0 0 8px 0",
               fontSize: "13px",
               color: BRAND_BG,
               fontWeight: 600,
@@ -116,17 +122,36 @@ export function LikesYouProfileCard({ like, onLikeBack, onPass, onReport, onBloc
             {sports.join(" · ")}
           </p>
         )}
-        {profile.sport_feeling && (
-          <p
-            style={{
-              margin: "0 0 16px 0",
-              fontSize: "13px",
-              color: APP_TEXT_MUTED,
-            }}
-          >
-            « Le sport me fait me sentir <strong>{profile.sport_feeling}</strong> »
-          </p>
-        )}
+        <p
+          style={{
+            margin: premier ? "0 0 8px 0" : "0 0 12px 0",
+            fontSize: "14px",
+            lineHeight: 1.45,
+            color: APP_TEXT,
+            fontWeight: 500,
+          }}
+        >
+          {guided}
+        </p>
+        {premier ? (
+          <div style={{ margin: "0 0 16px 0" }}>
+            <p
+              style={{
+                margin: "0 0 4px 0",
+                fontSize: "10px",
+                fontWeight: 700,
+                letterSpacing: "0.12em",
+                textTransform: "uppercase",
+                color: APP_TEXT_MUTED,
+              }}
+            >
+              Premier moment
+            </p>
+            <p style={{ margin: 0, fontSize: "13px", lineHeight: 1.45, color: APP_TEXT_MUTED }}>
+              {premier}
+            </p>
+          </div>
+        ) : null}
         <div style={{ display: "flex", gap: "12px" }}>
           {onPass && (
             <button

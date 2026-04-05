@@ -1,11 +1,5 @@
 import { useNavigate, useLocation } from "react-router-dom";
-import {
-  IconActivity,
-  IconChatBubble,
-  IconDiscover,
-  IconMeet,
-  IconUser,
-} from "./ui/Icon";
+import { IconChatBubble, IconDiscover, IconMeet, IconUser } from "./ui/Icon";
 
 type Props = {
   inboxCount: number;
@@ -17,7 +11,6 @@ export function BottomNav({ inboxCount }: Props) {
   const path = location.pathname;
 
   const isDiscover = path === "/" || path === "/discover";
-  const isActivity = path === "/activity";
   const isMessages = path === "/messages" || path.startsWith("/chat/");
   const isLikesYou = path === "/likes-you";
   const isProfile = path === "/profile";
@@ -48,18 +41,6 @@ export function BottomNav({ inboxCount }: Props) {
         <span className="app-bottom-nav__tab-inner">
           <IconDiscover size={19} active={isDiscover} />
           <span className={`app-bottom-nav__active-dot${isDiscover ? " app-bottom-nav__active-dot--on" : ""}`} />
-        </span>
-      </button>
-      <button
-        type="button"
-        className={`app-bottom-nav__tab${isActivity ? " app-bottom-nav__tab--active" : ""}`}
-        aria-current={isActivity ? "page" : undefined}
-        aria-label="Activité et sport"
-        onClick={() => navigate("/activity")}
-      >
-        <span className="app-bottom-nav__tab-inner">
-          <IconActivity size={19} active={isActivity} />
-          <span className={`app-bottom-nav__active-dot${isActivity ? " app-bottom-nav__active-dot--on" : ""}`} />
         </span>
       </button>
       <button

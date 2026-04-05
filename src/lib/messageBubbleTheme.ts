@@ -2,28 +2,37 @@
  * Thème d’affichage des bulles **envoyées par l’utilisateur courant** dans le chat.
  * Les bulles reçues restent neutres (décidé dans le composant).
  *
- * Évolutions prévues (non implémentées) :
- * - Persistance serveur : `profiles.message_bubble_theme` (TEXT + CHECK)
- * - Thèmes contextuels (ex. lié au sport) : étendre l’union + `MESSAGE_BUBBLE_THEME_LABELS`
+ * Couleurs : voir `chatColors.ts`.
  */
 
-/** Identifiants stables — à réutiliser pour le stockage distant. */
-export type MessageBubbleTheme = "violet" | "blue" | "pink" | "graphite";
+import {
+  CHAT_BUBBLE_PALETTE_IDS,
+  CHAT_OUTGOING_BUBBLE_SURFACE,
+  DEFAULT_CHAT_BUBBLE_PALETTE_ID,
+  type ChatBubblePaletteId,
+} from "./chatColors";
 
-export const DEFAULT_MESSAGE_BUBBLE_THEME: MessageBubbleTheme = "violet";
+/** Alias applicatif — identique à `ChatBubblePaletteId`. */
+export type MessageBubbleTheme = ChatBubblePaletteId;
 
-export const MESSAGE_BUBBLE_THEME_IDS: readonly MessageBubbleTheme[] = [
-  "violet",
-  "blue",
-  "pink",
-  "graphite",
-] as const;
+export const DEFAULT_MESSAGE_BUBBLE_THEME: MessageBubbleTheme = DEFAULT_CHAT_BUBBLE_PALETTE_ID;
+
+export const MESSAGE_BUBBLE_THEME_IDS: readonly MessageBubbleTheme[] = CHAT_BUBBLE_PALETTE_IDS;
 
 export const MESSAGE_BUBBLE_THEME_LABELS: Record<MessageBubbleTheme, string> = {
-  violet: "Rouge SPLove",
-  blue: "Ardoise",
-  pink: "Rose",
-  graphite: "Graphite",
+  red: "Rouge",
+  violet: "Violet",
+  green: "Vert",
+  yellow: "Jaune",
+  white: "Blanc",
+};
+
+/** Anciens identifiants stockés (localStorage) → nouvelle palette. */
+const LEGACY_MESSAGE_BUBBLE_THEME_MAP: Partial<Record<string, MessageBubbleTheme>> = {
+  violet: "red",
+  blue: "violet",
+  pink: "green",
+  graphite: "white",
 };
 
 /** Snapshot JSON localStorage — migration future : même forme côté API. */
@@ -37,34 +46,23 @@ export const MESSAGE_BUBBLE_THEME_STORAGE_KEY = "splove.messageBubbleTheme.v1";
 /** Émis sur `document` après sauvegarde (même onglet) pour mettre à jour le Chat sans recharger. */
 export const MESSAGE_BUBBLE_THEME_CHANGED_EVENT = "splove:messageBubbleThemeChanged";
 
-function isMessageBubbleTheme(value: unknown): value is MessageBubbleTheme {
-  return typeof value === "string" && (MESSAGE_BUBBLE_THEME_IDS as readonly string[]).includes(value);
+function isCurrentMessageBubbleTheme(value: string): value is MessageBubbleTheme {
+  return (MESSAGE_BUBBLE_THEME_IDS as readonly string[]).includes(value);
 }
 
 /** Parse une valeur issue du stockage ou d’une API ; tolérant, toujours un thème valide. */
 export function coerceMessageBubbleTheme(value: unknown): MessageBubbleTheme {
-  if (isMessageBubbleTheme(value)) return value;
+  if (typeof value !== "string") return DEFAULT_MESSAGE_BUBBLE_THEME;
+  if (isCurrentMessageBubbleTheme(value)) return value;
+  const mapped = LEGACY_MESSAGE_BUBBLE_THEME_MAP[value];
+  if (mapped) return mapped;
   return DEFAULT_MESSAGE_BUBBLE_THEME;
 }
 
-/**
- * Classes Tailwind pour la bulle « moi » uniquement.
- * Couleurs douces, lisibles, alignées SPLove (pas de saturation agressive).
- */
-export const OWN_MESSAGE_BUBBLE_CLASSES: Record<MessageBubbleTheme, string> = {
-  violet:
-    "border-[#FF1E2D]/22 bg-[#FF1E2D]/10 text-app-text shadow-sm",
-  blue:
-    "border-zinc-500/35 bg-zinc-800/60 text-app-text shadow-sm",
-  pink:
-    "border-rose-400/35 bg-rose-500/12 text-app-text shadow-sm",
-  graphite:
-    "border-app-border/85 bg-app-border/70 text-app-text shadow-sm",
-};
-
 export function getOwnMessageBubbleClassName(theme: MessageBubbleTheme | undefined | null): string {
   const t = coerceMessageBubbleTheme(theme);
-  return `max-w-[85%] rounded-2xl border px-3.5 py-2.5 text-sm leading-snug ${OWN_MESSAGE_BUBBLE_CLASSES[t]}`;
+  const surface = CHAT_OUTGOING_BUBBLE_SURFACE[t];
+  return `max-w-[85%] rounded-2xl border px-3.5 py-2.5 text-sm leading-snug shadow-sm ${surface}`;
 }
 
 export function loadMessageBubbleThemeFromStorage(): MessageBubbleTheme {

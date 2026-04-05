@@ -7,7 +7,6 @@ import {
   ACCESSIBILITY_PREF_STANDARD_LABEL,
   ACCESSIBILITY_SECTION_INTRO,
   ACCESSIBILITY_SELF_LABEL,
-  PROFILE_SAFETY_HINT,
   VERIFY_OWN_NOT_VERIFIED,
   VERIFY_OWN_PENDING,
   VERIFY_OWN_VERIFIED,
@@ -28,6 +27,8 @@ import { IconSignOut } from "../components/ui/Icon";
 
 const FEATURE_COMING_SOON_MESSAGE = "Fonction bientôt disponible";
 
+const ACCESSIBILITY_SAVE_SUCCESS = "Préférences enregistrées.";
+
 const sectionHeadingButtonStyle: CSSProperties = {
   margin: "0 0 12px 0",
   padding: 0,
@@ -44,7 +45,7 @@ const sectionHeadingButtonStyle: CSSProperties = {
 import {
   MESSAGE_BUBBLE_THEME_IDS,
   MESSAGE_BUBBLE_THEME_LABELS,
-  OWN_MESSAGE_BUBBLE_CLASSES,
+  getOwnMessageBubbleClassName,
   loadMessageBubbleThemeFromStorage,
   saveMessageBubbleThemeToStorage,
   type MessageBubbleTheme,
@@ -91,6 +92,12 @@ export default function Profile() {
     return () => window.removeEventListener("keydown", onKey);
   }, [comingSoonOpen]);
 
+  useEffect(() => {
+    if (accessibilityMessage !== ACCESSIBILITY_SAVE_SUCCESS) return;
+    const t = window.setTimeout(() => setAccessibilityMessage(null), 1500);
+    return () => window.clearTimeout(t);
+  }, [accessibilityMessage]);
+
   async function handleLogout() {
     await supabase.auth.signOut();
     navigate("/auth", { replace: true });
@@ -116,7 +123,7 @@ export default function Profile() {
         return;
       }
       await refetchProfile();
-      setAccessibilityMessage("Préférences enregistrées.");
+      setAccessibilityMessage(ACCESSIBILITY_SAVE_SUCCESS);
     } finally {
       setAccessibilitySaving(false);
     }
@@ -274,8 +281,7 @@ export default function Profile() {
                               lineHeight: 1.5,
                             }}
                           >
-                            Tes photos n’ont pas été validées. Tu peux en envoyer de nouvelles conformes aux
-                            consignes (visage + silhouette, images personnelles).
+                            Photos refusées — renvoie des images perso, visage + silhouette visibles.
                           </p>
                           {lines.length > 0 ? (
                             <ul
@@ -348,23 +354,23 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Apparence du chat
+              Ton style de discussion
             </h2>
             <p
               style={{
-                margin: "0 0 18px 0",
-                fontSize: "14px",
+                margin: "0 0 16px 0",
+                fontSize: "13px",
                 fontWeight: 500,
                 color: APP_TEXT_MUTED,
-                lineHeight: 1.5,
+                lineHeight: 1.45,
               }}
             >
-              Couleur de mes bulles — appliquée à tous vos messages envoyés. Les messages reçus restent neutres.
+              Tes messages à toi ; le reste reste sobre.
             </p>
             <div
-              className="grid grid-cols-2 gap-3 sm:grid-cols-4"
+              className="grid grid-cols-2 gap-3 sm:grid-cols-3"
               role="radiogroup"
-              aria-label="Couleur de mes bulles de message"
+              aria-label="Style des bulles envoyées"
             >
               {MESSAGE_BUBBLE_THEME_IDS.map((id) => {
                 const selected = bubbleTheme === id;
@@ -384,10 +390,8 @@ export default function Profile() {
                         : "border-app-border/95 bg-app-card hover:bg-app-border/90"
                     }`}
                   >
-                    <div
-                      className={`rounded-2xl border px-3 py-2 text-left text-[13px] leading-snug shadow-sm ${OWN_MESSAGE_BUBBLE_CLASSES[id]}`}
-                    >
-                      Bonjour !
+                    <div className="flex w-full min-w-0 justify-end">
+                      <div className={getOwnMessageBubbleClassName(id)}>Bonjour !</div>
                     </div>
                     <span className="text-center text-[12px] font-semibold text-app-text">
                       {MESSAGE_BUBBLE_THEME_LABELS[id]}
@@ -415,15 +419,15 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Rencontres & activités
+              Tes rencontres
             </h2>
             <p
               style={{
                 margin: "0 0 14px 0",
-                fontSize: "14px",
+                fontSize: "13px",
                 fontWeight: 500,
                 color: APP_TEXT_MUTED,
-                lineHeight: 1.5,
+                lineHeight: 1.45,
               }}
             >
               {ACCESSIBILITY_SECTION_INTRO}
@@ -461,7 +465,7 @@ export default function Profile() {
                 color: APP_TEXT_MUTED,
               }}
             >
-              Qui souhaitez-vous rencontrer ?
+              Qui t’intéresse ?
             </p>
             <label
               style={{
@@ -509,15 +513,14 @@ export default function Profile() {
               />
               <span>{ACCESSIBILITY_PREF_ADAPTED_LABEL}</span>
             </label>
-            {accessibilityMessage ? (
+            {accessibilityMessage && accessibilityMessage !== ACCESSIBILITY_SAVE_SUCCESS ? (
               <p
                 style={{
                   margin: "0 0 12px 0",
                   fontSize: "13px",
                   fontWeight: 500,
-                  color: accessibilityMessage.includes("Enregistré")
-                    ? "rgb(52 211 153)"
-                    : "rgb(251 191 36)",
+                  lineHeight: 1.45,
+                  color: "rgb(251 191 36)",
                 }}
               >
                 {accessibilityMessage}
@@ -537,9 +540,14 @@ export default function Profile() {
                 fontSize: "14px",
                 fontWeight: 600,
                 cursor: accessibilitySaving ? "wait" : "pointer",
+                transition: "transform 0.15s ease, opacity 0.15s ease",
               }}
             >
-              {accessibilitySaving ? "Enregistrement…" : "Enregistrer ces préférences"}
+              {accessibilitySaving
+                ? "Enregistrement…"
+                : accessibilityMessage === ACCESSIBILITY_SAVE_SUCCESS
+                  ? "✓ Enregistré"
+                  : "Enregistrer ces préférences"}
             </button>
           </div>
 
@@ -564,15 +572,28 @@ export default function Profile() {
             </h2>
             <p
               style={{
-                margin: 0,
-                fontSize: "14px",
+                margin: "0 0 10px 0",
+                fontSize: "13px",
                 fontWeight: 500,
                 color: APP_TEXT_MUTED,
-                lineHeight: 1.5,
+                lineHeight: 1.45,
               }}
             >
-              {PROFILE_SAFETY_HINT}
+              Sur un profil ou dans un chat, le menu ⋯ te permet d’agir.
             </p>
+            <ul
+              style={{
+                margin: 0,
+                paddingLeft: "1.1rem",
+                fontSize: "13px",
+                fontWeight: 500,
+                color: APP_TEXT_MUTED,
+                lineHeight: 1.55,
+              }}
+            >
+              <li style={{ marginBottom: "6px" }}>Signaler un comportement</li>
+              <li>Ne plus voir quelqu’un</li>
+            </ul>
           </div>
 
           <button
@@ -584,13 +605,13 @@ export default function Profile() {
               alignItems: "center",
               justifyContent: "center",
               gap: "8px",
-              padding: "12px 14px",
+              padding: "11px 14px",
               borderRadius: "12px",
-              border: "none",
-              background: BRAND_BG,
-              color: TEXT_ON_BRAND,
+              border: "1px solid #2A2A2E",
+              background: "transparent",
+              color: APP_TEXT_MUTED,
               fontSize: "14px",
-              fontWeight: 600,
+              fontWeight: 500,
               cursor: "pointer",
             }}
           >
