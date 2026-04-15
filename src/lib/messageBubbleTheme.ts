@@ -42,6 +42,7 @@ export type MessageBubbleThemeStorageV1 = {
 };
 
 export const MESSAGE_BUBBLE_THEME_STORAGE_KEY = "splove.messageBubbleTheme.v1";
+export const MESSAGE_BUBBLE_THEME_CONVERSATION_STORAGE_PREFIX = "chat-accent:";
 
 /** Émis sur `document` après sauvegarde (même onglet) pour mettre à jour le Chat sans recharger. */
 export const MESSAGE_BUBBLE_THEME_CHANGED_EVENT = "splove:messageBubbleThemeChanged";
@@ -85,6 +86,46 @@ export function saveMessageBubbleThemeToStorage(theme: MessageBubbleTheme): void
     localStorage.setItem(MESSAGE_BUBBLE_THEME_STORAGE_KEY, JSON.stringify(payload));
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent(MESSAGE_BUBBLE_THEME_CHANGED_EVENT, { detail: { theme } }));
+    }
+  } catch {
+    /* quota / mode privé : l’UI reste cohérente pour la session */
+  }
+}
+
+export function getConversationMessageBubbleThemeStorageKey(conversationId: string): string {
+  return `${MESSAGE_BUBBLE_THEME_CONVERSATION_STORAGE_PREFIX}${conversationId}`;
+}
+
+export function loadConversationMessageBubbleThemeFromStorage(
+  conversationId: string,
+): MessageBubbleTheme {
+  try {
+    const raw = localStorage.getItem(getConversationMessageBubbleThemeStorageKey(conversationId));
+    if (!raw) return DEFAULT_MESSAGE_BUBBLE_THEME;
+    if (raw.startsWith("{")) {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === "object" && "theme" in parsed) {
+        return coerceMessageBubbleTheme((parsed as MessageBubbleThemeStorageV1).theme);
+      }
+    }
+    return coerceMessageBubbleTheme(raw);
+  } catch {
+    return DEFAULT_MESSAGE_BUBBLE_THEME;
+  }
+}
+
+export function saveConversationMessageBubbleThemeToStorage(
+  conversationId: string,
+  theme: MessageBubbleTheme,
+): void {
+  try {
+    localStorage.setItem(getConversationMessageBubbleThemeStorageKey(conversationId), theme);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(MESSAGE_BUBBLE_THEME_CHANGED_EVENT, {
+          detail: { theme, conversationId },
+        }),
+      );
     }
   } catch {
     /* quota / mode privé : l’UI reste cohérente pour la session */

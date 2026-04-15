@@ -12,6 +12,7 @@ import {
   type PremiumSuggestion,
 } from "../components/PremiumSuggestionsSection";
 import { isPreferenceCompatible } from "../lib/matchingPreferences";
+import { BETA_MODE } from "../constants/beta";
 
 type ProfileRow = {
   id: string;
@@ -129,6 +130,10 @@ export default function SplovePlus() {
   }
 
   const handleUpgrade = () => {
+    if (BETA_MODE) {
+      navigate("/discover", { replace: true });
+      return;
+    }
     navigate("/checkout");
   };
 

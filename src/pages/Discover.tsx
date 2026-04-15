@@ -11,8 +11,15 @@ import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { ReportModal } from "../components/ReportModal";
+import { ReportPhotoModal } from "../components/ReportPhotoModal";
 import { PremiumSuggestionsSection } from "../components/PremiumSuggestionsSection";
-import { BLOCK_PROFILE_CONFIRM, BLOCK_PROFILE_LINK_LABEL, REPORT_LINK_LABEL } from "../constants/copy";
+import {
+  BLOCK_PROFILE_CONFIRM,
+  BLOCK_PROFILE_LINK_LABEL,
+  REPORT_LINK_LABEL,
+} from "../constants/copy";
+
+const REPORT_PHOTO_LINK_LABEL = "Signaler cette photo";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import {
   IconBanSoft,
@@ -21,6 +28,7 @@ import {
   IconPass,
   IconProfileAvatarPlaceholder,
 } from "../components/ui/Icon";
+import { BETA_MODE } from "../constants/beta";
 import { isPreferenceCompatible } from "../lib/matchingPreferences";
 import { mutualAccessibilityCompatible } from "../lib/accessibilityMatching";
 import { parseProfileIntent } from "../lib/profileIntent";
@@ -32,16 +40,18 @@ import {
   getSharedSportLabelsForMatch,
 } from "../lib/sportMatchGroups";
 import {
+  filterDiscoverReasonsForDisplay,
   guidedProfileSentence,
-  premierMomentLine,
+  intentLabelShort,
   softAreaHint,
 } from "../lib/discoverCardCopy";
 import {
-  computeDiscoverMatchScore,
+  buildDiscoverScore,
   computeDiscoverMatchScoreBreakdown,
   computeReliabilityScore,
   getReliabilityUiHints,
 } from "../lib/discoverScore";
+import { buildDiscoverLocationLines, formatViewerRadiusLabel } from "../utils/geolocation";
 
 type Profile = {
   id: string;
@@ -62,15 +72,11 @@ type Profile = {
   /** Type de rencontre (BDD : Amical | Amoureux). */
   intent?: string | null;
   sport_phrase?: string | null;
-  /** Idée de premier moment IRL (courte phrase). */
-  premier_moment?: string | null;
   sport_time?: string | null;
   /** Voir `profiles.is_photo_verified` (Veriff). */
   is_photo_verified?: boolean | null;
   photo_status?: string | null;
   needs_adapted_activities?: boolean | null;
-  pref_open_to_standard_activity?: boolean | null;
-  pref_open_to_adapted_activity?: boolean | null;
   profile_sports?: { sports: { label: string | null; slug?: string | null } | null }[];
   profile_completed?: boolean | null;
   /** Rafraîchi via RPC `touch_profile_last_active` (migration 045). */
@@ -82,6 +88,14 @@ type Profile = {
   /** Dernier message envoyé (migration 046). */
   last_reply_at?: string | null;
   messages_count?: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  lat?: number | null;
+  lng?: number | null;
+  search_radius_km?: number | null;
+  max_distance_km?: number | null;
+  discovery_radius_km?: number | null;
+  location_updated_at?: string | null;
 };
 
 /** Resolve photo URL from whatever columns the feed_profiles row actually includes. */
@@ -106,6 +120,9 @@ function getSecondaryPhotoUrl(p: Profile): string | null {
 type ProfileWithAffinity = Profile & {
   commonSportsCount: number;
   discoverScore: number;
+  distanceKm: number | null;
+  discover_reasons: string[];
+  discover_excluded: boolean;
   /** Tri principal Discover — ne pas afficher. */
   reliabilityScore: number;
 };
@@ -185,6 +202,14 @@ function finiteScore(n: number | undefined): number {
   return typeof n === "number" && Number.isFinite(n) ? n : 0;
 }
 
+function stableIdTieBreak(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i += 1) {
+    h = (h * 31 + id.charCodeAt(i)) % 1000;
+  }
+  return h;
+}
+
 const DISCOVER_FETCH_LIMIT = 80;
 const DISCOVER_DISPLAY_LIMIT = 10;
 
@@ -198,9 +223,9 @@ const SWIPE_DAMP = 0.55;
  */
 const FEED_PROFILE_IDS_SELECT = "id";
 
-/** Columns for Discover cards — queried on `profiles`, not on the narrowed `feed_profiles` view. */
+/** Columns for Discover cards — pas de lat/lng des autres profils (distance via RPC SQL). */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, last_active_at, last_reply_at, messages_count, activity_proposals_count, boost_score, gender, looking_for, intent, sport_feeling, sport_phrase, premier_moment, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, pref_open_to_standard_activity, pref_open_to_adapted_activity, profile_sports!inner(sports(label, slug))";
+  "id, first_name, birth_date, created_at, last_active_at, last_reply_at, messages_count, activity_proposals_count, boost_score, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, pref_open_to_standard_activity, pref_open_to_adapted_activity, profile_sports!inner(sports(label, slug))";
 
 /** IDs déjà likés — union liker_id/liked_id et from_user/to_user (schémas réels mixtes). */
 async function fetchOutgoingLikedUserIds(userId: string): Promise<Set<string>> {
@@ -250,6 +275,7 @@ type DiscoverSwipeCardProps = {
   onLike: (p: ProfileWithAffinity) => void;
   onOpenDetail: (p: ProfileWithAffinity) => void;
   onReport: (id: string) => void;
+  onReportPhoto: (p: ProfileWithAffinity) => void;
   onBlock: (id: string) => void | Promise<void>;
 };
 
@@ -263,6 +289,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   onLike,
   onOpenDetail,
   onReport,
+  onReportPhoto,
   onBlock,
 }: DiscoverSwipeCardProps) {
   const age = getAgeFromBirthDate(profile.birth_date ?? null);
@@ -271,10 +298,20 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   const sportsShown = sharedSports.slice(0, 3);
   const guided = guidedProfileSentence({
     sport_phrase: profile.sport_phrase,
+    sport_feeling: profile.sport_feeling,
     firstCommonSport: firstCommon,
   });
-  const premier = premierMomentLine(profile.premier_moment);
   const areaHint = softAreaHint(viewerCity, profile.city);
+  const locLines = buildDiscoverLocationLines({
+    distanceKm: profile.distanceKm,
+    viewerCity,
+    profileCity: profile.city ?? null,
+  });
+  const intentShort = intentLabelShort(profile.intent);
+  const discoverReasonsDisplay = filterDiscoverReasonsForDisplay(
+    profile.discover_reasons ?? [],
+    locLines.line1,
+  );
   const reliabilityHints = getReliabilityUiHints(profile);
   const strongAffinity = profile.commonSportsCount >= 2;
   const photo = getProfileDisplayPhotoUrl(profile) ?? "";
@@ -421,6 +458,17 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
                 <IconBanSoft size={18} className="shrink-0 text-app-muted" />
                 {BLOCK_PROFILE_LINK_LABEL}
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium text-app-text hover:bg-app-border"
+                onClick={() => {
+                  setDiscoverMenuProfileId(null);
+                  onReportPhoto(profile);
+                }}
+              >
+                {REPORT_PHOTO_LINK_LABEL}
+              </button>
             </div>
           ) : null}
         </div>
@@ -451,6 +499,11 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
                 <VerifiedBadge className="!bg-app-card/95 !text-emerald-900 !ring-emerald-600/25" />
               </span>
             ) : null}
+            {intentShort ? (
+              <span className="pointer-events-none rounded-full bg-white/18 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/95 ring-1 ring-white/25">
+                {intentShort}
+              </span>
+            ) : null}
           </div>
           {sportsShown.length > 0 ? (
             <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -464,10 +517,24 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
               ))}
             </div>
           ) : null}
-          <p className="mt-2.5 line-clamp-2 text-[15px] font-medium leading-snug text-white/95 drop-shadow-sm">
+          {discoverReasonsDisplay.length > 0 ? (
+            <p className="mt-1.5 line-clamp-2 text-[10px] font-semibold leading-snug tracking-wide text-white/85 drop-shadow-sm">
+              {discoverReasonsDisplay.join(" · ")}
+            </p>
+          ) : null}
+          <p className="mt-2 line-clamp-3 text-[15px] font-medium leading-snug text-white/95 drop-shadow-sm">
             {guided}
           </p>
-          {areaHint ? (
+          {locLines.line1 || locLines.line2 ? (
+            <>
+              {locLines.line1 ? (
+                <p className="mt-1 text-[11px] font-medium tracking-wide text-white/75">{locLines.line1}</p>
+              ) : null}
+              {locLines.line2 ? (
+                <p className="mt-0.5 text-[11px] font-medium tracking-wide text-white/60">{locLines.line2}</p>
+              ) : null}
+            </>
+          ) : areaHint ? (
             <p className="mt-1 text-[11px] font-medium tracking-wide text-white/65">{areaHint}</p>
           ) : profile.city?.trim() ? (
             <p className="mt-1 text-[11px] font-medium tracking-wide text-white/55">
@@ -490,14 +557,6 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
       </div>
 
       <div className="flex min-h-[96px] flex-1 flex-col justify-end gap-3 border-t border-app-border/90 bg-app-card px-3 py-3 sm:px-4">
-        {premier ? (
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-app-muted">
-              Premier moment
-            </p>
-            <p className="mt-1 text-[13px] leading-snug text-app-text">{premier}</p>
-          </div>
-        ) : null}
         <div className="flex items-stretch gap-2 sm:gap-2.5">
           <button
             type="button"
@@ -555,10 +614,16 @@ export default function Discover() {
   const currentUserId = user?.id ?? "";
   const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
   const [mySportMatchKeys, setMySportMatchKeys] = useState<Set<string>>(new Set());
-  const [myCity, setMyCity] = useState<string | null>(null);
+  const [myCity] = useState<string | null>(null);
+  const [myDiscoveryRadiusKm] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
   const [reportProfileId, setReportProfileId] = useState<string | null>(null);
+  const [reportPhotoTarget, setReportPhotoTarget] = useState<{
+    profileId: string;
+    portraitUrl: string | null;
+    fullbodyUrl: string | null;
+  } | null>(null);
   const [likeFeedbackMode, setLikeFeedbackMode] = useState<null | "like" | "match">(null);
   const [likeActionError, setLikeActionError] = useState<string | null>(null);
   const [discoverMenuProfileId, setDiscoverMenuProfileId] = useState<string | null>(null);
@@ -567,6 +632,16 @@ export default function Discover() {
   const [previewProfile, setPreviewProfile] = useState<ProfileWithAffinity | null>(null);
   const likeInFlightRef = useRef<Set<string>>(new Set());
   const blockInFlightRef = useRef<Set<string>>(new Set());
+
+  function openReportPhotoFromDiscover(p: ProfileWithAffinity) {
+    setDiscoverMenuProfileId(null);
+    setPreviewProfile(null);
+    setReportPhotoTarget({
+      profileId: p.id,
+      portraitUrl: String(p.portrait_url ?? p.main_photo_url ?? "").trim() || null,
+      fullbodyUrl: String(p.fullbody_url ?? "").trim() || null,
+    });
+  }
 
   useEffect(() => {
     if (!likeFeedbackMode) return;
@@ -659,12 +734,12 @@ export default function Discover() {
       const [likedIds, meRes, blockDetail] = await Promise.all([
         fetchOutgoingLikedUserIds(currentUserId),
         supabase
-          .from("profiles")
-          .select(
-            "city, gender, looking_for, intent, needs_adapted_activities, pref_open_to_standard_activity, pref_open_to_adapted_activity, profile_sports(sports(label, slug))",
-          )
-          .eq("id", currentUserId)
-          .maybeSingle(),
+        .from("profiles")
+        .select(
+          "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, profile_sports(sports(label, slug))"
+        )
+        .eq("id", currentUserId)
+        .maybeSingle(),
         fetchBlockExclusionDetail(currentUserId),
       ]);
 
@@ -672,21 +747,46 @@ export default function Discover() {
       const blockExclude = blockDetail.excluded;
       const sportsSet = collectSportMatchKeysFromProfile(meProfile);
       setMySportMatchKeys(sportsSet);
-      const meCity =
-        ((meRes.data as { city?: string | null } | null)?.city ?? null)?.trim() || null;
-      setMyCity(meCity);
       if (meRes.error) {
-        console.warn("Discover: profil courant", meRes.error);
+        console.error("[Discover] profil courant query failed", {
+          code: meRes.error.code,
+          message: meRes.error.message,
+          details: meRes.error.details,
+          hint: meRes.error.hint,
+          error: meRes.error,
+        });
+      }
+      if (!meRes.data) {
+        setErrorMessage("Impossible de charger ton profil courant.");
+        setProfiles([]);
+        return;
       }
 
       if (blockDetail.errors.length > 0) {
         console.warn("[Discover feed] blocks exclusion RPC errors:", blockDetail.errors);
       }
 
-      const myIntent = parseProfileIntent(meProfile.intent);
+      console.log("[Discover] meProfile raw =", meProfile);
+      console.log("[Discover] meProfile.intent raw =", meProfile?.intent);
+      console.log("[Discover] parseProfileIntent result =", parseProfileIntent(meProfile?.intent));
+      
+      const safeMeProfile = {
+        ...meProfile,
+        intent: meProfile?.intent ?? (meRes.data as { intent?: string | null })?.intent ?? null,
+      };
+      
+      console.log("[Discover] safeMeProfile raw =", safeMeProfile);
+      console.log("[Discover] safeMeProfile.intent raw =", safeMeProfile?.intent);
+      console.log(
+        "[Discover] parseProfileIntent result =",
+        parseProfileIntent(safeMeProfile?.intent)
+      );
+      
+      const myIntent = parseProfileIntent(safeMeProfile.intent);
       if (!myIntent) {
         console.error("[Discover feed] invalid intent — cannot load feed", {
-          intent: meProfile.intent,
+          intent: safeMeProfile?.intent,
+          meProfile: safeMeProfile,
         });
         setErrorMessage(
           "Ton intention de rencontre n’est pas reconnue. Mets à jour ton profil puis réessaie.",
@@ -694,7 +794,6 @@ export default function Discover() {
         setProfiles([]);
         return;
       }
-
       const likedList = [...likedIds];
       const useNotIn = likedList.length > 0 && likedList.length < 200;
       const notInClause = useNotIn ? `(${likedList.join(",")})` : null;
@@ -706,6 +805,10 @@ export default function Discover() {
         .eq("intent", myIntent)
         .order("last_active_at", { ascending: false })
         .limit(DISCOVER_FETCH_LIMIT);
+
+      if (BETA_MODE) {
+        feedIdsQ = feedIdsQ.eq("photo2_status", "approved");
+      }
 
       if (notInClause) {
         feedIdsQ = feedIdsQ.not("id", "in", notInClause);
@@ -775,6 +878,24 @@ export default function Discover() {
       }
       console.log("[Discover feed] profiles after completeness filter:", raw.length);
 
+      const distById = new Map<string, number | null>();
+      if (raw.length > 0) {
+        const { data: distData, error: distErr } = await supabase.rpc("profile_distances_from_viewer", {
+          p_candidate_ids: raw.map((p) => p.id),
+        });
+        if (distErr) {
+          console.warn("[Discover feed] profile_distances_from_viewer:", distErr.message);
+        } else {
+          for (const row of (distData ?? []) as {
+            profile_id?: string;
+            distance_km?: number | null;
+          }[]) {
+            const pid = typeof row?.profile_id === "string" ? row.profile_id : "";
+            if (pid) distById.set(pid, row.distance_km ?? null);
+          }
+        }
+      }
+
       const meForCompat = {
         gender: meProfile.gender ?? null,
         looking_for: meProfile.looking_for ?? null,
@@ -782,8 +903,6 @@ export default function Discover() {
 
       const meForAccessibility = {
         needs_adapted_activities: meProfile.needs_adapted_activities,
-        pref_open_to_standard_activity: meProfile.pref_open_to_standard_activity,
-        pref_open_to_adapted_activity: meProfile.pref_open_to_adapted_activity,
       };
 
       const feedIdSet = new Set(feedIds);
@@ -810,8 +929,6 @@ export default function Discover() {
         if (
           !mutualAccessibilityCompatible(meForAccessibility, {
             needs_adapted_activities: p.needs_adapted_activities,
-            pref_open_to_standard_activity: p.pref_open_to_standard_activity,
-            pref_open_to_adapted_activity: p.pref_open_to_adapted_activity,
           })
         ) {
           return false;
@@ -827,21 +944,34 @@ export default function Discover() {
         } catch (e) {
           console.error("[Discover feed] commonSportsCount failed", { id: p?.id, err: e });
         }
+        const discover = buildDiscoverScore(p, {
+          mySportMatchKeys: sportsSet,
+          myProfile: meProfile,
+          distanceKmOverride: distById.has(p.id) ? distById.get(p.id) ?? null : undefined,
+        });
         return {
           ...p,
-          commonSportsCount: Number.isFinite(common) ? common : 0,
-          discoverScore: computeDiscoverMatchScore(p, common),
+          commonSportsCount: discover.sharedSportsCount || (Number.isFinite(common) ? common : 0),
+          discoverScore: discover.score,
+          distanceKm: discover.distanceKm,
+          discover_reasons: discover.reasons,
+          discover_excluded: discover.excluded,
           reliabilityScore: computeReliabilityScore(p),
         };
       });
+      const discoverFiltered = enriched.filter((p) => !p.discover_excluded && p.commonSportsCount > 0);
 
-      if (import.meta.env.DEV && enriched.length > 0) {
-        for (const p of enriched.slice(0, 8)) {
+      if (import.meta.env.DEV && discoverFiltered.length > 0) {
+        for (const p of discoverFiltered.slice(0, 12)) {
           try {
             const b = computeDiscoverMatchScoreBreakdown(p, p.commonSportsCount);
             console.debug("[Discover score]", p.first_name ?? p.id, {
               reliability: p.reliabilityScore,
               match: b,
+              score: p.discoverScore,
+              sharedSportsCount: p.commonSportsCount,
+              distanceKm: p.distanceKm,
+              reasons: p.discover_reasons,
             });
           } catch (e) {
             console.error("[Discover score] breakdown debug failed", { id: p.id, err: e });
@@ -849,29 +979,29 @@ export default function Discover() {
         }
       }
 
-      enriched.sort((a, b) => {
-        const br = finiteScore(b.reliabilityScore);
-        const ar = finiteScore(a.reliabilityScore);
-        if (br !== ar) return br - ar;
+      discoverFiltered.sort((a, b) => {
         const bd = finiteScore(b.discoverScore);
         const ad = finiteScore(a.discoverScore);
         if (bd !== ad) return bd - ad;
-        if (b.commonSportsCount !== a.commonSportsCount) {
-          return b.commonSportsCount - a.commonSportsCount;
+        const aDist = typeof a.distanceKm === "number" && Number.isFinite(a.distanceKm) ? a.distanceKm : null;
+        const bDist = typeof b.distanceKm === "number" && Number.isFinite(b.distanceKm) ? b.distanceKm : null;
+        if (aDist != null && bDist != null && aDist !== bDist) {
+          return aDist - bDist;
         }
-        const lr = safeTimeMs(a.last_reply_at);
-        const lrb = safeTimeMs(b.last_reply_at);
-        if (lrb !== lr) return lrb - lr;
-        const la = safeTimeMs(a.last_active_at);
-        const lb = safeTimeMs(b.last_active_at);
+        if (aDist == null && bDist != null) return 1;
+        if (aDist != null && bDist == null) return -1;
+        const la = safeTimeMs(a.last_active_at ?? a.last_reply_at ?? a.created_at);
+        const lb = safeTimeMs(b.last_active_at ?? b.last_reply_at ?? b.created_at);
         if (lb !== la) return lb - la;
-        const ta = safeTimeMs(a.created_at);
-        const tb = safeTimeMs(b.created_at);
-        if (tb !== ta) return tb - ta;
-        return (a.first_name ?? "").localeCompare(b.first_name ?? "", "fr");
+        const stableA = stableIdTieBreak(a.id);
+        const stableB = stableIdTieBreak(b.id);
+        if (stableA !== stableB) {
+          return stableB - stableA;
+        }
+        return a.id.localeCompare(b.id, "fr");
       });
 
-      const safe = enriched.filter((p) => p?.id && isValidProfileId(p.id));
+      const safe = discoverFiltered.filter((p) => p?.id && isValidProfileId(p.id));
       const slice = safe.slice(0, DISCOVER_DISPLAY_LIMIT);
       resultCount = slice.length;
       console.log("[Discover feed] final profiles count:", resultCount);
@@ -1068,6 +1198,14 @@ export default function Discover() {
           <p className="mx-auto mt-2 max-w-[21rem] text-[13px] leading-relaxed text-app-muted">
             Un like ouvre la porte — une sortie concrète fait le reste. Pas d’endless chat.
           </p>
+          {formatViewerRadiusLabel(myDiscoveryRadiusKm) ? (
+            <p className="mx-auto mt-1.5 max-w-[21rem] text-[11px] font-medium text-app-muted">
+              {formatViewerRadiusLabel(myDiscoveryRadiusKm)}
+            </p>
+          ) : null}
+          {myCity ? (
+            <p className="mx-auto mt-0.5 max-w-[21rem] text-[11px] text-app-muted">Ta ville · {myCity}</p>
+          ) : null}
         </section>
 
         {loading && (
@@ -1181,6 +1319,7 @@ export default function Discover() {
               onLike={handleLike}
               onOpenDetail={handleViewProfileFromSuggestion}
               onReport={setReportProfileId}
+              onReportPhoto={openReportPhotoFromDiscover}
               onBlock={handleBlock}
             />
           ))}
@@ -1218,6 +1357,7 @@ export default function Discover() {
             const photoSecond = getSecondaryPhotoUrl(profile);
             const age = getAgeFromBirthDate(profile.birth_date ?? null);
             const sharedSports = getSharedSportsFromProfile(mySportMatchKeys, profile).slice(0, 3);
+            const intentPreview = intentLabelShort(profile.intent);
             return (
               <div
                 className="fixed inset-0 z-[60] flex items-end justify-center bg-black/45 p-4 sm:items-center"
@@ -1271,6 +1411,17 @@ export default function Discover() {
                               <IconBanSoft size={18} className="shrink-0 text-app-muted" />
                               {BLOCK_PROFILE_LINK_LABEL}
                             </button>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium text-app-text hover:bg-app-border"
+                              onClick={() => {
+                                setDiscoverMenuProfileId(null);
+                                openReportPhotoFromDiscover(profile);
+                              }}
+                            >
+                              {REPORT_PHOTO_LINK_LABEL}
+                            </button>
                           </div>
                         ) : null}
                       </div>
@@ -1296,6 +1447,11 @@ export default function Discover() {
                         {age != null ? <span className="font-semibold text-app-muted">, {age}</span> : null}
                       </h2>
                       {isPhotoVerified(profile) ? <VerifiedBadge /> : null}
+                      {intentPreview ? (
+                        <span className="rounded-full bg-app-border/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-app-text ring-1 ring-app-border">
+                          {intentPreview}
+                        </span>
+                      ) : null}
                     </div>
                     {sharedSports.length > 0 ? (
                       <div className="flex max-h-[4.5rem] flex-wrap gap-1.5 overflow-hidden">
@@ -1313,22 +1469,36 @@ export default function Discover() {
                       const fc = firstCommonSportName(profile, mySportMatchKeys);
                       const guidedPv = guidedProfileSentence({
                         sport_phrase: profile.sport_phrase,
+                        sport_feeling: profile.sport_feeling,
                         firstCommonSport: fc,
                       });
+                      const locPv = buildDiscoverLocationLines({
+                        distanceKm: profile.distanceKm,
+                        viewerCity: myCity,
+                        profileCity: profile.city ?? null,
+                      });
+                      const reasonsPv = filterDiscoverReasonsForDisplay(
+                        profile.discover_reasons ?? [],
+                        locPv.line1,
+                      );
                       const ahPv = softAreaHint(myCity, profile.city);
-                      const premierPv = premierMomentLine(profile.premier_moment);
                       const hintPv = getReliabilityUiHints(profile);
                       return (
                         <div className="space-y-2 border-t border-app-border/80 pt-2.5">
-                          <p className="text-[13px] font-medium leading-snug text-app-text">{guidedPv}</p>
-                          {ahPv ? <p className="text-[12px] leading-snug text-app-muted">{ahPv}</p> : null}
-                          {premierPv ? (
-                            <div>
-                              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-app-muted">
-                                Premier moment
-                              </p>
-                              <p className="mt-0.5 text-[12px] leading-snug text-app-text">{premierPv}</p>
-                            </div>
+                          {reasonsPv.length > 0 ? (
+                            <p className="text-[11px] font-semibold leading-snug text-app-muted">
+                              {reasonsPv.join(" · ")}
+                            </p>
+                          ) : null}
+                          <p className="line-clamp-3 text-[13px] font-medium leading-snug text-app-text">{guidedPv}</p>
+                          {locPv.line1 ? (
+                            <p className="text-[12px] font-medium leading-snug text-app-text">{locPv.line1}</p>
+                          ) : null}
+                          {locPv.line2 ? (
+                            <p className="text-[12px] leading-snug text-app-muted">{locPv.line2}</p>
+                          ) : null}
+                          {!locPv.line1 && !locPv.line2 && ahPv ? (
+                            <p className="text-[12px] leading-snug text-app-muted">{ahPv}</p>
                           ) : null}
                           {hintPv.length > 0 ? (
                             <ul className="space-y-0.5 text-[11px] font-medium leading-snug text-emerald-800/90">
@@ -1392,6 +1562,16 @@ export default function Discover() {
           reportedProfileId={reportProfileId}
           reporterId={currentUserId}
           onClose={() => setReportProfileId(null)}
+        />
+      )}
+
+      {reportPhotoTarget && currentUserId && (
+        <ReportPhotoModal
+          reportedUserId={reportPhotoTarget.profileId}
+          reporterUserId={currentUserId}
+          portraitUrl={reportPhotoTarget.portraitUrl}
+          fullbodyUrl={reportPhotoTarget.fullbodyUrl}
+          onClose={() => setReportPhotoTarget(null)}
         />
       )}
     </div>

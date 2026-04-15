@@ -21,7 +21,7 @@ import {
   IconPass,
   IconProfileAvatarPlaceholder,
 } from "./ui/Icon";
-import { guidedProfileSentence, premierMomentLine } from "../lib/discoverCardCopy";
+import { guidedProfileSentence } from "../lib/discoverCardCopy";
 
 function getSports(like: LikeReceived): string[] {
   const list = like.profile?.profile_sports ?? [];
@@ -35,19 +35,35 @@ type Props = {
   onLikeBack?: (profileId: string) => void;
   onPass?: (profileId: string) => void;
   onReport?: (profileId: string) => void;
+  onReportPhoto?: (profileId: string) => void;
   /** Retrait silencieux du flux (sans indication à l’autre personne). */
   onBlock?: (profileId: string) => void;
 };
 
-export function LikesYouProfileCard({ like, onLikeBack, onPass, onReport, onBlock }: Props) {
+export function LikesYouProfileCard({
+  like,
+  onLikeBack,
+  onPass,
+  onReport,
+  onReportPhoto,
+  onBlock,
+}: Props) {
   const profile = like.profile;
   if (!profile) return null;
-  const sports = getSports(like).slice(0, 3);
+  const profileWithOptional = profile as { birth_date?: string | null; moment_preference?: string | null };
+  const age = profileWithOptional.birth_date
+    ? Math.floor(
+        (Date.now() - new Date(profileWithOptional.birth_date).getTime()) /
+          (365.25 * 24 * 60 * 60 * 1000),
+      )
+    : null;
+  const sports = getSports(like).slice(0, 2);
+  const momentPreference = profileWithOptional.moment_preference ?? profile.sport_time ?? "evening";
   const guided = guidedProfileSentence({
     sport_phrase: profile.sport_phrase,
+    sport_feeling: profile.sport_feeling,
     firstCommonSport: sports[0] ?? null,
   });
-  const premier = premierMomentLine(profile.premier_moment);
   const photo = profile.main_photo_url?.trim() ?? "";
 
   return (
@@ -61,21 +77,38 @@ export function LikesYouProfileCard({ like, onLikeBack, onPass, onReport, onBloc
         border: `1px solid ${APP_BORDER}`,
       }}
     >
-      <div
-        style={{
-          width: "100%",
-          aspectRatio: "3/4",
-          background: photo
-            ? `center/cover url(${photo})`
-            : "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {!photo && (
-          <IconProfileAvatarPlaceholder className="text-app-muted" size={96} />
+      <div className="relative flex w-full items-center justify-center" style={{ aspectRatio: "3/4" }}>
+        {photo ? (
+          <img
+            src={photo}
+            alt={profile.first_name ? `Photo de ${profile.first_name}` : "Photo du profil"}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              background: "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <IconProfileAvatarPlaceholder className="text-app-muted" size={96} />
+          </div>
         )}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/70 to-transparent" />
+        <div className="absolute bottom-3 left-3 right-3 text-white">
+          <p className="text-base font-semibold leading-tight">
+            {profile.first_name ?? "Sans prénom"}
+            {age != null ? `, ${age}` : ""}
+          </p>
+          <p className="line-clamp-2 truncate text-sm opacity-90">{sports.join(" • ")}</p>
+          <p className="text-xs opacity-80">
+            {momentPreference === "morning" ? "🌅 Matin" : "🌙 Soir"}
+          </p>
+        </div>
       </div>
       <div style={{ padding: "20px 24px" }}>
         <div
@@ -124,7 +157,7 @@ export function LikesYouProfileCard({ like, onLikeBack, onPass, onReport, onBloc
         )}
         <p
           style={{
-            margin: premier ? "0 0 8px 0" : "0 0 12px 0",
+            margin: "0 0 12px 0",
             fontSize: "14px",
             lineHeight: 1.45,
             color: APP_TEXT,
@@ -133,25 +166,6 @@ export function LikesYouProfileCard({ like, onLikeBack, onPass, onReport, onBloc
         >
           {guided}
         </p>
-        {premier ? (
-          <div style={{ margin: "0 0 16px 0" }}>
-            <p
-              style={{
-                margin: "0 0 4px 0",
-                fontSize: "10px",
-                fontWeight: 700,
-                letterSpacing: "0.12em",
-                textTransform: "uppercase",
-                color: APP_TEXT_MUTED,
-              }}
-            >
-              Premier moment
-            </p>
-            <p style={{ margin: 0, fontSize: "13px", lineHeight: 1.45, color: APP_TEXT_MUTED }}>
-              {premier}
-            </p>
-          </div>
-        ) : null}
         <div style={{ display: "flex", gap: "12px" }}>
           {onPass && (
             <button
@@ -266,6 +280,24 @@ export function LikesYouProfileCard({ like, onLikeBack, onPass, onReport, onBloc
               }}
             >
               {REPORT_LINK_LABEL}
+            </button>
+          )}
+          {onReportPhoto && (
+            <button
+              type="button"
+              onClick={() => onReportPhoto(profile.id)}
+              style={{
+                padding: 0,
+                border: "none",
+                background: "transparent",
+                color: APP_TEXT_MUTED,
+                fontSize: "13px",
+                cursor: "pointer",
+                textDecoration: "underline",
+                textAlign: "left",
+              }}
+            >
+              Signaler cette photo
             </button>
           )}
         </div>

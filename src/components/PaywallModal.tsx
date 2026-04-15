@@ -8,6 +8,7 @@ import {
   PAYWALL_LEGAL,
   PAYWALL_CONTEXT,
 } from "../constants/copy";
+import { BETA_MODE } from "../constants/beta";
 import { PAYWALL_FEATURES, PAYWALL_PRICE_MONTHLY, PAYWALL_PRICE_PERIOD } from "../constants/premium";
 import {
   APP_BORDER,
@@ -28,6 +29,8 @@ export function PaywallModal({ onClose, featureName }: Props) {
   const context = featureName && PAYWALL_CONTEXT[featureName];
   const title = context ? context.title : PAYWALL_TITLE;
   const subtitle = context ? context.subtitle : PAYWALL_SUBTITLE;
+
+  if (BETA_MODE) return null;
 
   return (
     <div

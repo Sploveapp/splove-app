@@ -1,3 +1,4 @@
+import { BETA_MODE } from "../constants/beta";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 
 type Props = {
@@ -6,6 +7,8 @@ type Props = {
 };
 
 export function SplovePlusPaywall({ onActivate, onContinueFree }: Props) {
+  if (BETA_MODE) return null;
+
   return (
     <section
       className="rounded-3xl border border-app-border bg-app-card px-5 py-6 shadow-sm ring-1 ring-app-border"

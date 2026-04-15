@@ -1,3 +1,7 @@
+import { computeProfileCompleted } from "./profileCompleteness";
+import { isPhotoVerified } from "./profileVerification";
+import { getSharedSportLabelsForMatch } from "./sportMatchGroups";
+
 /**
  * Discover : qualité de match + fiabilité (anti-fantôme), sans affichage du score brut.
  *
@@ -16,7 +20,6 @@ export type DiscoverScoreProfileInput = {
   profile_completed?: boolean | null;
   sport_feeling?: string | null;
   sport_phrase?: string | null;
-  premier_moment?: string | null;
   main_photo_url?: string | null;
   portrait_url?: string | null;
   avatar_url?: string | null;
@@ -75,7 +78,7 @@ export function profileCompletenessPoints(p: DiscoverScoreProfileInput): number 
   const nSports = Array.isArray(p.profile_sports) ? p.profile_sports.length : 0;
   if (nSports >= 1) pts += 4;
   if (nSports >= 2) pts += 2;
-  if (p.sport_phrase?.trim() || p.premier_moment?.trim() || p.sport_feeling?.trim()) pts += 4;
+  if (p.sport_phrase?.trim() || p.sport_feeling?.trim()) pts += 4;
   if (p.is_photo_verified) pts += 2;
   return Math.min(35, pts);
 }
@@ -267,4 +270,270 @@ export function computeDiscoverMatchScoreBreakdown(
     console.error("[discoverScore] computeDiscoverMatchScoreBreakdown failed", e);
     return { total: 0, common: 0, completeness: 0, lastActive: 0, newness: 0 };
   }
+}
+
+export type DiscoverScoreContext = {
+  mySportMatchKeys: Set<string>;
+  myProfile?: {
+    latitude?: number | null;
+    longitude?: number | null;
+    lat?: number | null;
+    lng?: number | null;
+    /** Rayon max Discover (km) — aligné migration `055_profiles_discovery_geolocation`. */
+    discovery_radius_km?: number | null;
+    max_distance_km?: number | null;
+    search_radius_km?: number | null;
+  } | null;
+  /**
+   * Distance viewer → candidat déjà calculée côté SQL (`profile_distances_from_viewer`).
+   * `undefined` = calcul client (legacy) ; `null` = pas de distance fiable (pas d’exclusion géo).
+   */
+  distanceKmOverride?: number | null;
+};
+
+export type DiscoverScoreResult = {
+  score: number;
+  distanceKm: number | null;
+  sharedSportsCount: number;
+  reasons: string[];
+  excluded: boolean;
+  exclusionReason?: string;
+};
+
+export const DISCOVER_SCORE_WEIGHTS = {
+  sports: { one: 18, two: 27, threeOrMore: 35 },
+  proximity: {
+    lte3km: 30,
+    lte10km: 24,
+    lte20km: 18,
+    lte35km: 10,
+    lte50km: 4,
+  },
+  recency: { lt1d: 20, lt3d: 16, lt7d: 10, lt14d: 5, older: 1 },
+  qualityMax: 10,
+  verification: 5,
+} as const;
+
+function firstFiniteNumber(values: unknown[]): number | null {
+  for (const v of values) {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim()) {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
+}
+
+function toCoords(input: unknown): { lat: number; lng: number } | null {
+  if (!input || typeof input !== "object") return null;
+  const o = input as Record<string, unknown>;
+  const lat = firstFiniteNumber([o.latitude, o.lat]);
+  const lng = firstFiniteNumber([o.longitude, o.lng, o.lon, o.long]);
+  if (lat == null || lng == null) return null;
+  return { lat, lng };
+}
+
+function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const la1 = toRad(a.lat);
+  const la2 = toRad(b.lat);
+  const x =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  return R * c;
+}
+
+function bestActivityIso(profile: DiscoverScoreProfileInput): string | null {
+  return (
+    sanitizeIsoDate(profile.last_active_at) ??
+    sanitizeIsoDate(profile.last_reply_at) ??
+    sanitizeIsoDate(profile.created_at)
+  );
+}
+
+export function getSharedSportsCount(
+  mySportMatchKeys: Set<string>,
+  profile: DiscoverScoreProfileInput,
+): number {
+  if (!(mySportMatchKeys instanceof Set) || mySportMatchKeys.size === 0) return 0;
+  return getSharedSportLabelsForMatch(
+    mySportMatchKeys,
+    profile as { profile_sports?: { sports?: { slug?: string | null; label?: string | null } | null }[] | null },
+  ).length;
+}
+
+export function getDistanceScore(input: {
+  viewer: unknown;
+  candidate: unknown;
+  searchRadiusKm?: number | null;
+}): { score: number; distanceKm: number | null; excluded: boolean; exclusionReason?: string } {
+  const viewer = toCoords(input.viewer);
+  const candidate = toCoords(input.candidate);
+  if (!viewer || !candidate) return { score: 0, distanceKm: null, excluded: false };
+  const distanceKm = haversineKm(viewer, candidate);
+  const radius = firstFiniteNumber([input.searchRadiusKm]);
+  if (radius != null && radius > 0 && distanceKm > radius) {
+    return {
+      score: 0,
+      distanceKm,
+      excluded: true,
+      exclusionReason: "outside_search_radius",
+    };
+  }
+  if (distanceKm <= 3) return { score: DISCOVER_SCORE_WEIGHTS.proximity.lte3km, distanceKm, excluded: false };
+  if (distanceKm <= 10) return { score: DISCOVER_SCORE_WEIGHTS.proximity.lte10km, distanceKm, excluded: false };
+  if (distanceKm <= 20) return { score: DISCOVER_SCORE_WEIGHTS.proximity.lte20km, distanceKm, excluded: false };
+  if (distanceKm <= 35) return { score: DISCOVER_SCORE_WEIGHTS.proximity.lte35km, distanceKm, excluded: false };
+  if (distanceKm <= 50) return { score: DISCOVER_SCORE_WEIGHTS.proximity.lte50km, distanceKm, excluded: false };
+  return { score: 0, distanceKm, excluded: false };
+}
+
+/** Même logique que `getDistanceScore` une fois la distance (km) connue, sans lat/lng du candidat côté client. */
+export function getDistanceScoreFromKm(
+  distanceKm: number | null,
+  searchRadiusKm: number | null,
+): { score: number; distanceKm: number | null; excluded: boolean; exclusionReason?: string } {
+  if (distanceKm == null || !Number.isFinite(distanceKm)) {
+    return { score: 0, distanceKm: null, excluded: false };
+  }
+  const radius = firstFiniteNumber([searchRadiusKm]);
+  if (radius != null && radius > 0 && distanceKm > radius) {
+    return {
+      score: 0,
+      distanceKm,
+      excluded: true,
+      exclusionReason: "outside_search_radius",
+    };
+  }
+  if (distanceKm <= 3) return { score: DISCOVER_SCORE_WEIGHTS.proximity.lte3km, distanceKm, excluded: false };
+  if (distanceKm <= 10) return { score: DISCOVER_SCORE_WEIGHTS.proximity.lte10km, distanceKm, excluded: false };
+  if (distanceKm <= 20) return { score: DISCOVER_SCORE_WEIGHTS.proximity.lte20km, distanceKm, excluded: false };
+  if (distanceKm <= 35) return { score: DISCOVER_SCORE_WEIGHTS.proximity.lte35km, distanceKm, excluded: false };
+  if (distanceKm <= 50) return { score: DISCOVER_SCORE_WEIGHTS.proximity.lte50km, distanceKm, excluded: false };
+  return { score: 0, distanceKm, excluded: false };
+}
+
+export function getRecencyScore(profile: DiscoverScoreProfileInput): number {
+  const iso = bestActivityIso(profile);
+  if (!iso) return 0;
+  const ageMs = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ageMs) || ageMs < 0) return 0;
+  const day = 24 * 60 * 60 * 1000;
+  if (ageMs < day) return DISCOVER_SCORE_WEIGHTS.recency.lt1d;
+  if (ageMs < 3 * day) return DISCOVER_SCORE_WEIGHTS.recency.lt3d;
+  if (ageMs < 7 * day) return DISCOVER_SCORE_WEIGHTS.recency.lt7d;
+  if (ageMs < 14 * day) return DISCOVER_SCORE_WEIGHTS.recency.lt14d;
+  return DISCOVER_SCORE_WEIGHTS.recency.older;
+}
+
+export function getProfileQualityScore(profile: DiscoverScoreProfileInput): number {
+  let pts = 0;
+  if (typeof profile.portrait_url === "string" && profile.portrait_url.trim()) pts += 3;
+  if (typeof profile.fullbody_url === "string" && profile.fullbody_url.trim()) pts += 3;
+  if (typeof profile.sport_phrase === "string" && profile.sport_phrase.trim()) pts += 1;
+  if (typeof profile.sport_feeling === "string" && profile.sport_feeling.trim()) pts += 1;
+  const nSports = Array.isArray(profile.profile_sports) ? profile.profile_sports.length : 0;
+  if (nSports >= 2) pts += 1;
+  if (
+    profile.profile_completed === true ||
+    computeProfileCompleted({
+      first_name: profile.first_name ?? null,
+      birth_date: profile.birth_date ?? null,
+      portrait_url: profile.portrait_url ?? null,
+      fullbody_url: profile.fullbody_url ?? null,
+    })
+  ) {
+    pts += 2;
+  }
+  return Math.min(DISCOVER_SCORE_WEIGHTS.qualityMax, pts);
+}
+
+export function getVerificationScore(profile: {
+  is_photo_verified?: boolean | null;
+  photo_verification_status?: string | null;
+  photo_status?: string | null;
+}): number {
+  if (isPhotoVerified(profile)) return DISCOVER_SCORE_WEIGHTS.verification;
+  const status = `${profile.photo_verification_status ?? profile.photo_status ?? ""}`
+    .toLowerCase()
+    .trim();
+  return status === "verified" ? DISCOVER_SCORE_WEIGHTS.verification : 0;
+}
+
+export function buildDiscoverScore(
+  profile: DiscoverScoreProfileInput,
+  context: DiscoverScoreContext,
+): DiscoverScoreResult {
+  const sharedSportsCount = getSharedSportsCount(context.mySportMatchKeys, profile);
+  if (sharedSportsCount <= 0) {
+    return {
+      score: 0,
+      distanceKm: null,
+      sharedSportsCount,
+      reasons: [],
+      excluded: true,
+      exclusionReason: "no_shared_sports",
+    };
+  }
+
+  const sportsScore =
+    sharedSportsCount >= 3
+      ? DISCOVER_SCORE_WEIGHTS.sports.threeOrMore
+      : sharedSportsCount === 2
+        ? DISCOVER_SCORE_WEIGHTS.sports.two
+        : DISCOVER_SCORE_WEIGHTS.sports.one;
+  const radius = firstFiniteNumber([
+    context.myProfile?.discovery_radius_km,
+    context.myProfile?.search_radius_km,
+    context.myProfile?.max_distance_km,
+  ]);
+  const distancePart =
+    context.distanceKmOverride !== undefined
+      ? getDistanceScoreFromKm(context.distanceKmOverride, radius)
+      : getDistanceScore({
+          viewer: context.myProfile ?? null,
+          candidate: profile,
+          searchRadiusKm: radius,
+        });
+  if (distancePart.excluded) {
+    return {
+      score: 0,
+      distanceKm: distancePart.distanceKm,
+      sharedSportsCount,
+      reasons: [],
+      excluded: true,
+      exclusionReason: distancePart.exclusionReason,
+    };
+  }
+
+  const recencyScore = getRecencyScore(profile);
+  const qualityScore = getProfileQualityScore(profile);
+  const verificationScore = getVerificationScore(profile);
+  const score = sportsScore + distancePart.score + recencyScore + qualityScore + verificationScore;
+
+  const reasons: string[] = [];
+  reasons.push(
+    sharedSportsCount >= 3
+      ? "3+ sports en commun"
+      : `${sharedSportsCount} sport${sharedSportsCount > 1 ? "s" : ""} en commun`,
+  );
+  if (distancePart.distanceKm != null) {
+    reasons.push(`À ${Math.round(distancePart.distanceKm)} km`);
+  }
+  if (recencyScore >= 10) reasons.push("Actif récemment");
+  if (qualityScore >= 7) reasons.push("Profil complet");
+  if (verificationScore > 0) reasons.push("Profil vérifié");
+
+  return {
+    score,
+    distanceKm: distancePart.distanceKm,
+    sharedSportsCount,
+    reasons: reasons.slice(0, 4),
+    excluded: false,
+  };
 }

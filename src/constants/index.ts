@@ -4,6 +4,9 @@
 
 export const APP_NAME = "SPLove";
 
+/** Window event to refresh the Messages tab badge after reads or realtime updates. */
+export const INBOX_REFRESH_EVENT = "splove:inbox-refresh";
+
 /** Options du prompt "Le sport me fait me sentir..." */
 export const SPORT_FEELING_OPTIONS = [
   "vivant",

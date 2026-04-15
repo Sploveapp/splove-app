@@ -35,7 +35,7 @@ COMMENT ON TABLE public.sports IS
 CREATE TABLE IF NOT EXISTS public.profile_sports (
   id BIGSERIAL PRIMARY KEY,
   profile_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-  sport_id UUID NOT NULL REFERENCES public.sports(id) ON DELETE CASCADE,
+  sport_id BIGINT NOT NULL REFERENCES public.sports(id) ON DELETE CASCADE,
   level TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(profile_id, sport_id)

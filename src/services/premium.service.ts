@@ -1,3 +1,4 @@
+import { BETA_MODE } from "../constants/beta";
 import { supabase } from "../lib/supabase";
 import type { Subscription } from "../types/premium.types";
 
@@ -30,6 +31,7 @@ export async function getActiveSubscription(
  * Indique si l'utilisateur a accès à SPLove+ (abonnement actif).
  */
 export async function hasPremiumAccess(profileId: string): Promise<boolean> {
+  if (BETA_MODE) return true;
   const sub = await getActiveSubscription(profileId);
   return sub != null;
 }

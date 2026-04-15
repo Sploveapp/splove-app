@@ -1,7 +1,12 @@
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
+import { BETA_MODE } from "../constants/beta";
 
 export default function Checkout() {
   const navigate = useNavigate();
+
+  if (BETA_MODE) {
+    return <Navigate to="/splove-plus" replace />;
+  }
 
   return (
     <div className="min-h-0 bg-app-bg">

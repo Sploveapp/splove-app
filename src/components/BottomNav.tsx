@@ -48,9 +48,11 @@ export function BottomNav({ inboxCount }: Props) {
         className={`app-bottom-nav__tab${isMessages ? " app-bottom-nav__tab--active" : ""}`}
         aria-current={isMessages ? "page" : undefined}
         aria-label={
-          inboxCount > 0
-            ? `Messages, ${inboxCount} conversation${inboxCount > 1 ? "s" : ""}`
-            : "Messages"
+          inboxCount <= 0
+            ? "Messages"
+            : inboxCount > 9
+              ? "Messages, plus de 9 conversations non lues"
+              : `Messages, ${inboxCount} conversation${inboxCount > 1 ? "s" : ""} non lue${inboxCount > 1 ? "s" : ""}`
         }
         onClick={() => navigate("/messages")}
       >

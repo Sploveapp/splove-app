@@ -14,6 +14,13 @@ type Props = {
   onClose: () => void;
   sharedSports: string[];
   onSubmit: (payload: ActivityPayload) => Promise<void>;
+  titleOverride?: string;
+  descriptionOverride?: string;
+  submitLabel?: string;
+  initialSport?: string;
+  initialPlace?: string;
+  /** Contre-proposition : retour vers la vue précédente sans envoi ni changement de statut. */
+  onBack?: () => void;
 };
 
 const WHEN_OPTIONS: { value: ActivityWhen; label: string }[] = [
@@ -26,7 +33,18 @@ const WHEN_OPTIONS: { value: ActivityWhen; label: string }[] = [
 
 const QUICK_NOTE_CHIPS = ["Ça te dit ?", "Partant(e) ?", "On y va ?", "Pourquoi pas 🙂"] as const;
 
-export function ActivityProposalModal({ open, sharedSports, onClose, onSubmit }: Props) {
+export function ActivityProposalModal({
+  open,
+  sharedSports,
+  onClose,
+  onSubmit,
+  titleOverride,
+  descriptionOverride,
+  submitLabel,
+  initialSport,
+  initialPlace,
+  onBack,
+}: Props) {
   const firstSport = sharedSports[0] ?? "";
   const [sport, setSport] = useState(firstSport);
   const [sportOther, setSportOther] = useState("");
@@ -42,16 +60,18 @@ export function ActivityProposalModal({ open, sharedSports, onClose, onSubmit }:
 
   useEffect(() => {
     if (!open) return;
-    const initial = sharedSports.length > 0 ? sharedSports[0]! : "";
+    const prefSport = (initialSport ?? "").trim();
+    const isSharedSport = prefSport.length > 0 && sharedSports.includes(prefSport);
+    const initial = isSharedSport ? prefSport : sharedSports.length > 0 ? sharedSports[0]! : "";
     setSport(initial);
-    setSportOther("");
+    setSportOther(isSharedSport ? "" : prefSport);
     setWhen("tomorrow");
-    setPlace("");
+    setPlace((initialPlace ?? "").trim());
     setNoteText("");
     setShowCustomNote(false);
     setError(null);
     setSending(false);
-  }, [open, sharedKey]);
+  }, [open, sharedKey, initialSport, initialPlace]);
 
   if (!open) return null;
 
@@ -61,6 +81,7 @@ export function ActivityProposalModal({ open, sharedSports, onClose, onSubmit }:
       : sport === "__other__"
         ? sportOther.trim()
         : sport.trim();
+  const canSubmit = Boolean(resolvedSport && when);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -118,14 +139,25 @@ export function ActivityProposalModal({ open, sharedSports, onClose, onSubmit }:
         className="mb-safe max-h-[min(92vh,640px)] w-full max-w-md overflow-y-auto rounded-t-3xl bg-app-card shadow-2xl ring-1 ring-app-border/80 sm:rounded-3xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-app-border bg-app-card/95 px-5 py-4 backdrop-blur-sm">
-          <h2 id="activity-modal-title" className="text-base font-semibold tracking-tight text-app-text">
-            Programmer une activité
-          </h2>
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-app-border bg-app-card/95 px-5 py-4 backdrop-blur-sm">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {onBack ? (
+              <button
+                type="button"
+                onClick={onBack}
+                className="shrink-0 rounded-full px-2 py-1 text-sm font-medium text-app-muted hover:bg-app-border hover:text-app-text"
+              >
+                Retour
+              </button>
+            ) : null}
+            <h2 id="activity-modal-title" className="min-w-0 truncate text-base font-semibold tracking-tight text-app-text">
+              {titleOverride ?? "Programmer une activité"}
+            </h2>
+          </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full px-2 py-1 text-sm font-medium text-app-muted hover:bg-app-border hover:text-app-text"
+            className="shrink-0 rounded-full px-2 py-1 text-sm font-medium text-app-muted hover:bg-app-border hover:text-app-text"
           >
             Fermer
           </button>
@@ -133,7 +165,8 @@ export function ActivityProposalModal({ open, sharedSports, onClose, onSubmit }:
 
         <div className="space-y-5 px-5 py-5">
           <p className="text-[13px] leading-relaxed text-app-muted">
-            Propose un sport, un moment et un lieu. Vous pourrez ajuster les détails ensemble dans le chat.
+            {descriptionOverride ??
+              "Propose un sport, un moment et un lieu. Vous pourrez ajuster les détails ensemble dans le chat."}
           </p>
 
           <div>
@@ -259,11 +292,11 @@ export function ActivityProposalModal({ open, sharedSports, onClose, onSubmit }:
           <div className="flex flex-col gap-2 pt-1">
             <button
               type="submit"
-              disabled={sending}
+              disabled={sending || !canSubmit}
               className="w-full rounded-2xl px-4 py-3.5 text-[15px] font-semibold shadow-sm disabled:opacity-60"
               style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              {sending ? "Envoi…" : "Envoyer la proposition"}
+              {sending ? "Envoi…" : submitLabel ?? "Envoyer la proposition"}
             </button>
             <button
               type="button"

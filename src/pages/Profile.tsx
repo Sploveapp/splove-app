@@ -23,6 +23,9 @@ import {
   TEXT_ON_BRAND,
 } from "../constants/theme";
 import { supabase } from "../lib/supabase";
+import { getCurrentPositionCoords } from "../utils/geolocation";
+import { reverseGeocodeCity } from "../lib/geocoding";
+import { updateProfileLocation } from "../lib/profileLocation";
 import { IconSignOut } from "../components/ui/Icon";
 
 const FEATURE_COMING_SOON_MESSAGE = "Fonction bientôt disponible";
@@ -65,6 +68,11 @@ export default function Profile() {
   const [prefOpenToAdapted, setPrefOpenToAdapted] = useState(true);
   const [accessibilitySaving, setAccessibilitySaving] = useState(false);
   const [accessibilityMessage, setAccessibilityMessage] = useState<string | null>(null);
+  const [locCity, setLocCity] = useState("");
+  const [locRadius, setLocRadius] = useState("");
+  const [locSaving, setLocSaving] = useState(false);
+  const [locMessage, setLocMessage] = useState<string | null>(null);
+  const [geoLoading, setGeoLoading] = useState(false);
 
   const syncAccessibilityFromProfile = useCallback(() => {
     if (!profile) return;
@@ -76,6 +84,18 @@ export default function Profile() {
   useEffect(() => {
     syncAccessibilityFromProfile();
   }, [syncAccessibilityFromProfile]);
+
+  useEffect(() => {
+    if (!profile) return;
+    const pr = profile as Record<string, unknown>;
+    setLocCity(typeof pr.city === "string" ? pr.city : "");
+    const dr = pr.discovery_radius_km;
+    if (typeof dr === "number" && Number.isFinite(dr) && dr > 0) {
+      setLocRadius(String(Math.round(dr)));
+    } else {
+      setLocRadius("");
+    }
+  }, [profile]);
 
   useEffect(() => {
     const onStorage = () => setBubbleTheme(loadMessageBubbleThemeFromStorage());
@@ -101,6 +121,71 @@ export default function Profile() {
   async function handleLogout() {
     await supabase.auth.signOut();
     navigate("/auth", { replace: true });
+  }
+
+  async function handleSaveLocation() {
+    if (!user?.id || !profile) return;
+    setLocMessage(null);
+    setLocSaving(true);
+    try {
+      const radiusParsed = locRadius === "" ? null : Number(locRadius);
+      const radiusFinal =
+        radiusParsed != null && Number.isFinite(radiusParsed) && radiusParsed > 0
+          ? Math.round(radiusParsed)
+          : 25;
+      const pr = profile as Record<string, unknown>;
+      const lat = typeof pr.latitude === "number" && Number.isFinite(pr.latitude) ? pr.latitude : null;
+      const lng = typeof pr.longitude === "number" && Number.isFinite(pr.longitude) ? pr.longitude : null;
+      const { error } = await updateProfileLocation(supabase, user.id, {
+        city: locCity.trim() || null,
+        latitude: lat,
+        longitude: lng,
+        discovery_radius_km: radiusFinal,
+        location_source: "manual",
+      });
+      if (error) {
+        setLocMessage(error.message || "Enregistrement impossible.");
+        return;
+      }
+      await refetchProfile();
+      setLocMessage("Localisation enregistrée.");
+    } finally {
+      setLocSaving(false);
+    }
+  }
+
+  async function handleUseMyLocation() {
+    if (!user?.id || !profile) return;
+    setLocMessage(null);
+    setGeoLoading(true);
+    try {
+      const c = await getCurrentPositionCoords();
+      if (!c) {
+        setLocMessage("Position indisponible. Vérifie les autorisations ou saisis ta ville.");
+        return;
+      }
+      const radiusParsed = locRadius === "" ? null : Number(locRadius);
+      const radiusFinal =
+        radiusParsed != null && Number.isFinite(radiusParsed) && radiusParsed > 0
+          ? Math.round(radiusParsed)
+          : 25;
+      const cityLabel = await reverseGeocodeCity(c.lat, c.lng);
+      const { error } = await updateProfileLocation(supabase, user.id, {
+        city: (cityLabel ?? locCity.trim()) || null,
+        latitude: c.lat,
+        longitude: c.lng,
+        discovery_radius_km: radiusFinal,
+        location_source: "device",
+      });
+      if (error) {
+        setLocMessage(error.message || "Enregistrement impossible.");
+        return;
+      }
+      await refetchProfile();
+      setLocMessage("Position enregistrée.");
+    } finally {
+      setGeoLoading(false);
+    }
   }
 
   async function handleSaveAccessibility() {
@@ -549,6 +634,155 @@ export default function Profile() {
                   ? "✓ Enregistré"
                   : "Enregistrer ces préférences"}
             </button>
+          </div>
+
+          <div
+            style={{
+              background: APP_CARD,
+              borderRadius: "20px",
+              padding: "20px 24px",
+              boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+              marginBottom: "20px",
+            }}
+          >
+            <h2
+              style={{
+                margin: "0 0 8px 0",
+                fontSize: "16px",
+                fontWeight: 600,
+                color: APP_TEXT,
+              }}
+            >
+              Localisation
+            </h2>
+            <p
+              style={{
+                margin: "0 0 14px 0",
+                fontSize: "13px",
+                fontWeight: 500,
+                color: APP_TEXT_MUTED,
+                lineHeight: 1.45,
+              }}
+            >
+              Utilisée pour te montrer des profils à proximité sur Discover. Approximatif, sans carte.
+            </p>
+            <label
+              style={{
+                display: "block",
+                marginBottom: "8px",
+                fontSize: "13px",
+                fontWeight: 600,
+                color: APP_TEXT,
+              }}
+            >
+              Ville
+            </label>
+            <input
+              type="text"
+              value={locCity}
+              onChange={(e) => {
+                setLocCity(e.target.value);
+                setLocMessage(null);
+              }}
+              placeholder="ex. Lyon"
+              autoComplete="address-level2"
+              style={{
+                width: "100%",
+                marginBottom: "14px",
+                padding: "10px 12px",
+                borderRadius: "12px",
+                border: "1px solid #2A2A2E",
+                background: APP_BG,
+                fontSize: "15px",
+                color: APP_TEXT,
+                boxSizing: "border-box",
+              }}
+            />
+            <label
+              style={{
+                display: "block",
+                marginBottom: "8px",
+                fontSize: "13px",
+                fontWeight: 600,
+                color: APP_TEXT,
+              }}
+            >
+              Rayon de recherche (km)
+            </label>
+            <select
+              value={locRadius}
+              onChange={(e) => {
+                setLocRadius(e.target.value);
+                setLocMessage(null);
+              }}
+              style={{
+                width: "100%",
+                marginBottom: "14px",
+                padding: "10px 12px",
+                borderRadius: "12px",
+                border: "1px solid #2A2A2E",
+                background: APP_BG,
+                fontSize: "15px",
+                color: APP_TEXT,
+                boxSizing: "border-box",
+              }}
+            >
+              <option value="">Pas de limite de distance</option>
+              <option value="10">10 km</option>
+              <option value="25">25 km</option>
+              <option value="50">50 km</option>
+              <option value="100">100 km</option>
+            </select>
+            <button
+              type="button"
+              disabled={geoLoading}
+              onClick={() => void handleUseMyLocation()}
+              style={{
+                width: "100%",
+                marginBottom: "10px",
+                padding: "10px 14px",
+                borderRadius: "12px",
+                border: `1px solid #2A2A2E`,
+                background: APP_BG,
+                color: APP_TEXT,
+                fontSize: "14px",
+                fontWeight: 600,
+                cursor: geoLoading ? "wait" : "pointer",
+              }}
+            >
+              {geoLoading ? "Localisation…" : "Utiliser ma position actuelle"}
+            </button>
+            <button
+              type="button"
+              disabled={locSaving}
+              onClick={() => void handleSaveLocation()}
+              style={{
+                width: "100%",
+                padding: "10px 14px",
+                borderRadius: "12px",
+                border: "none",
+                background: locSaving ? CTA_DISABLED_BG : BRAND_BG,
+                color: TEXT_ON_BRAND,
+                fontSize: "14px",
+                fontWeight: 600,
+                cursor: locSaving ? "wait" : "pointer",
+              }}
+            >
+              {locSaving ? "Enregistrement…" : "Enregistrer la localisation"}
+            </button>
+            {locMessage ? (
+              <p
+                style={{
+                  margin: "12px 0 0 0",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  color: locMessage.includes("Enregistr") ? "rgb(52 211 153)" : APP_TEXT_MUTED,
+                  lineHeight: 1.45,
+                }}
+              >
+                {locMessage}
+              </p>
+            ) : null}
           </div>
 
           <div

@@ -1,0 +1,297 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { CHAT_MESSAGES_TABLE } from "../supabase";
+import { buildInitialActivityProposalPayload, buildUpdatedActivityProposalPayload } from "./activityPayload";
+import { buildMetadataPayloadForInsert } from "./activityProposal";
+import type { ActivityProposalRowLike } from "./messageTypes";
+
+export type ActivityMutationError = {
+  code: "forbidden" | "rpc" | "message" | "unknown";
+  message: string;
+};
+
+/** Best-effort : aligne `messages.metadata` sur `activity_proposals` (RPC migration 055). */
+async function syncProposalMessageMetadata(client: SupabaseClient, proposalId: string): Promise<void> {
+  const { error } = await client.rpc("sync_activity_proposal_message_metadata", {
+    p_proposal_id: proposalId,
+  });
+  if (error) {
+    console.warn("[activityProposalMutations] sync metadata (non bloquant)", error);
+  }
+}
+
+/** Fusionne un patch dans `messages.payload` (RPC migration 056). */
+async function patchActivityProposalSourcePayload(
+  client: SupabaseClient,
+  args: {
+    conversationId: string;
+    activityProposalId: string;
+    patch: Record<string, unknown>;
+  },
+): Promise<void> {
+  const { error } = await client.rpc("patch_activity_proposal_source_message_payload", {
+    p_conversation_id: args.conversationId,
+    p_activity_proposal_id: args.activityProposalId,
+    p_patch: args.patch,
+  });
+  if (error) {
+    console.warn("[activityProposalMutations] patch payload (non bloquant)", error);
+  }
+}
+
+export async function acceptActivityProposal(
+  client: SupabaseClient,
+  args: { proposalId: string; conversationId: string; currentUserId: string },
+): Promise<{ data: ActivityProposalRowLike } | { error: ActivityMutationError }> {
+  const { data, error } = await client.rpc("respond_to_activity_proposal", {
+    p_proposal_id: args.proposalId,
+    p_action: "accepted",
+  });
+  if (error) {
+    return { error: { code: "rpc", message: error.message ?? "Réponse impossible." } };
+  }
+  const row = data as ActivityProposalRowLike | null;
+  if (!row) {
+    return {
+      error: {
+        code: "forbidden",
+        message: "Cette proposition n’est plus modifiable ou a déjà été traitée.",
+      },
+    };
+  }
+  await syncProposalMessageMetadata(client, args.proposalId);
+
+  await patchActivityProposalSourcePayload(client, {
+    conversationId: args.conversationId,
+    activityProposalId: args.proposalId,
+    patch: buildUpdatedActivityProposalPayload("accepted", args.currentUserId),
+  });
+
+  const { error: insErr } = await client.from(CHAT_MESSAGES_TABLE).insert({
+    conversation_id: args.conversationId,
+    sender_id: args.currentUserId,
+    body: "✅ Créneau accepté",
+    message_type: "activity_proposal_response",
+    activity_proposal_id: args.proposalId,
+    metadata: { response: "accepted" },
+    payload: { response: "accepted" },
+  });
+  if (insErr) {
+    console.error("[acceptActivityProposal] response message (non bloquant)", insErr);
+  }
+
+  return { data: row };
+}
+
+export async function declineActivityProposal(
+  client: SupabaseClient,
+  args: { proposalId: string; conversationId: string; currentUserId: string },
+): Promise<{ data: ActivityProposalRowLike } | { error: ActivityMutationError }> {
+  const { data, error } = await client.rpc("respond_to_activity_proposal", {
+    p_proposal_id: args.proposalId,
+    p_action: "declined",
+  });
+  if (error) {
+    return { error: { code: "rpc", message: error.message ?? "Réponse impossible." } };
+  }
+  const row = data as ActivityProposalRowLike | null;
+  if (!row) {
+    return {
+      error: {
+        code: "forbidden",
+        message: "Cette proposition n’est plus modifiable ou a déjà été traitée.",
+      },
+    };
+  }
+  await syncProposalMessageMetadata(client, args.proposalId);
+
+  await patchActivityProposalSourcePayload(client, {
+    conversationId: args.conversationId,
+    activityProposalId: args.proposalId,
+    patch: buildUpdatedActivityProposalPayload("declined", args.currentUserId),
+  });
+
+  const { error: insErr } = await client.from(CHAT_MESSAGES_TABLE).insert({
+    conversation_id: args.conversationId,
+    sender_id: args.currentUserId,
+    body: "❌ Créneau refusé",
+    message_type: "activity_proposal_response",
+    activity_proposal_id: args.proposalId,
+    metadata: { response: "declined" },
+    payload: { response: "declined" },
+  });
+  if (insErr) {
+    console.error("[declineActivityProposal] response message (non bloquant)", insErr);
+  }
+
+  return { data: row };
+}
+
+export async function cancelActivityProposal(
+  client: SupabaseClient,
+  args: { proposalId: string },
+): Promise<{ data: ActivityProposalRowLike } | { error: ActivityMutationError }> {
+  const { data, error } = await client.rpc("cancel_activity_proposal", {
+    p_proposal_id: args.proposalId,
+  });
+  if (error) {
+    return { error: { code: "rpc", message: error.message ?? "Annulation impossible." } };
+  }
+  const row = data as ActivityProposalRowLike | null;
+  if (!row) {
+    return { error: { code: "forbidden", message: "Ce créneau n’est plus annulable." } };
+  }
+  await syncProposalMessageMetadata(client, args.proposalId);
+
+  await patchActivityProposalSourcePayload(client, {
+    conversationId: row.conversation_id,
+    activityProposalId: args.proposalId,
+    patch: buildUpdatedActivityProposalPayload("cancelled", row.proposer_id),
+  });
+
+  return { data: row };
+}
+
+/** Contre-proposition : RPC `respond_to_activity_proposal` avec action countered + message fil chat. */
+export async function createCounterProposal(
+  client: SupabaseClient,
+  args: {
+    replaceProposalId: string;
+    conversationId: string;
+    currentUserId: string;
+    sport: string;
+    timeSlot: string;
+    location: string;
+    note: string | null;
+  },
+): Promise<{ data: ActivityProposalRowLike } | { error: ActivityMutationError }> {
+  const { data, error } = await client.rpc("respond_to_activity_proposal", {
+    p_proposal_id: args.replaceProposalId,
+    p_action: "countered",
+    p_time_slot: args.timeSlot,
+    p_location: args.location,
+    p_note: args.note,
+    p_sport: args.sport,
+  });
+  if (error) {
+    return { error: { code: "rpc", message: error.message ?? "Contre-proposition impossible." } };
+  }
+  const row = data as ActivityProposalRowLike | null;
+  if (!row) {
+    return {
+      error: {
+        code: "forbidden",
+        message: "Impossible de créer la contre-proposition.",
+      },
+    };
+  }
+  await syncProposalMessageMetadata(client, args.replaceProposalId);
+
+  await patchActivityProposalSourcePayload(client, {
+    conversationId: args.conversationId,
+    activityProposalId: args.replaceProposalId,
+    patch: buildUpdatedActivityProposalPayload("countered", args.currentUserId, {
+      counterProposal: {
+        sport: args.sport,
+        time: args.timeSlot,
+        location: args.location,
+        note: args.note,
+      },
+    }),
+  });
+
+  const userLine = args.note?.trim() || "";
+  const body = userLine.length > 0 ? userLine : "Ça te dit ?";
+  const meta = buildMetadataPayloadForInsert({
+    sport: args.sport,
+    location: args.location,
+    timeLabel: args.timeSlot,
+    proposerId: args.currentUserId,
+    userNote: userLine || null,
+  });
+  const initialPayload = buildInitialActivityProposalPayload({
+    sport: args.sport,
+    location: args.location,
+    timeLabel: args.timeSlot,
+    createdBy: args.currentUserId,
+    userNote: userLine || null,
+  });
+
+  const { error: insErr } = await client.from(CHAT_MESSAGES_TABLE).insert({
+    conversation_id: args.conversationId,
+    sender_id: args.currentUserId,
+    body,
+    message_type: "activity_proposal",
+    activity_proposal_id: row.id,
+    metadata: meta,
+    payload: initialPayload,
+  });
+  if (insErr) {
+    return { error: { code: "message", message: insErr.message ?? "Message non enregistré." } };
+  }
+
+  await syncProposalMessageMetadata(client, row.id);
+
+  return { data: row };
+}
+
+/** Première proposition (pas de remplacement) : RPC create + message court + sync metadata. */
+export async function createPendingActivityProposal(
+  client: SupabaseClient,
+  args: {
+    conversationId: string;
+    currentUserId: string;
+    sport: string;
+    timeSlot: string;
+    location: string;
+    note: string | null;
+  },
+): Promise<{ data: ActivityProposalRowLike } | { error: ActivityMutationError }> {
+  const { data, error } = await client.rpc("create_activity_proposal", {
+    p_conversation_id: args.conversationId,
+    p_sport: args.sport,
+    p_time_slot: args.timeSlot,
+    p_location: args.location,
+    p_note: args.note,
+  });
+  if (error) {
+    return { error: { code: "rpc", message: error.message ?? "Création impossible." } };
+  }
+  const row = data as ActivityProposalRowLike | null;
+  if (!row) {
+    return { error: { code: "unknown", message: "Impossible de créer la proposition." } };
+  }
+
+  const userLine = args.note?.trim() || "";
+  const body = userLine.length > 0 ? userLine : "Ça te dit ?";
+  const meta = buildMetadataPayloadForInsert({
+    sport: args.sport,
+    location: args.location,
+    timeLabel: args.timeSlot,
+    proposerId: args.currentUserId,
+    userNote: userLine || null,
+  });
+  const initialPayload = buildInitialActivityProposalPayload({
+    sport: args.sport,
+    location: args.location,
+    timeLabel: args.timeSlot,
+    createdBy: args.currentUserId,
+    userNote: userLine || null,
+  });
+
+  const { error: insErr } = await client.from(CHAT_MESSAGES_TABLE).insert({
+    conversation_id: args.conversationId,
+    sender_id: args.currentUserId,
+    body,
+    message_type: "activity_proposal",
+    activity_proposal_id: row.id,
+    metadata: meta,
+    payload: initialPayload,
+  });
+  if (insErr) {
+    return { error: { code: "message", message: insErr.message ?? "Message non enregistré." } };
+  }
+
+  await syncProposalMessageMetadata(client, row.id);
+
+  return { data: row };
+}

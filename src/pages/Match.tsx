@@ -9,6 +9,7 @@ import type { ActivityPayload } from "../lib/chatActivity";
 import { COPY_BANNER_48H, computeProposalSchedule, touchMatchOpenedAt } from "../lib/chatActivity";
 import { matchMomentumLine } from "../lib/discoverCardCopy";
 import { ensureConversationWindow } from "../lib/ensureConversationWindow";
+import { BETA_MODE } from "../constants/beta";
 
 export type MatchLocationState = {
   partnerFirstName?: string | null;
@@ -51,12 +52,12 @@ export default function Match() {
     async function loadActiveProposal() {
       if (!conversationId) return;
       const { data } = await supabase
-      .from("activity_proposals")
-      .select("id")
-      .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+        .from("activity_proposals")
+        .select("id")
+        .eq("conversation_id", conversationId)
+        .or("status.eq.pending,status.eq.proposed")
+        .limit(1)
+        .maybeSingle();
       
       setActiveProposalStatus((data as { id?: string } | null)?.id ? "exists" : null);
     }
@@ -73,29 +74,26 @@ export default function Match() {
 
   async function sendActivity(payload: ActivityPayload) {
     if (!user?.id) throw new Error("Non connecté");
-    const { data: activeProposal, error: activeErr } = await supabase
-      .from("activity_proposals")
-      .select("id")
-      .eq("conversation_id", conversationId)
-      .limit(1)
-      .maybeSingle();
-    if (activeErr) throw new Error(activeErr.message);
-    if (activeProposal?.id) {
-      return;
-    }
-
-    const { timeLabel, scheduledAt } = computeProposalSchedule(payload.when);
-
-    const { error: proposalErr } = await supabase.from("activity_proposals").insert({
+    const { timeLabel } = computeProposalSchedule(payload.when);
+    console.log("[Activity] create proposal", {
       conversation_id: conversationId,
-      proposer_id: user.id,
       sport: payload.sport,
       time_slot: timeLabel,
       location: payload.place.trim() || "À définir",
       note: payload.message.trim() || null,
-      scheduled_at: scheduledAt,
     });
-    if (proposalErr) throw new Error(proposalErr.message);
+    console.log("[Chat] création activité", { conversationId, timeSlot: timeLabel });
+    const { error: proposalErr } = await supabase.rpc("create_activity_proposal", {
+      p_conversation_id: conversationId,
+      p_sport: payload.sport,
+      p_time_slot: timeLabel,
+      p_location: payload.place.trim() || "À définir",
+      p_note: payload.message.trim() || null,
+    });
+    if (proposalErr) {
+      console.error("[Chat] création activité erreur", proposalErr);
+      throw new Error(proposalErr.message);
+    }
   }
 
   function goChat() {
@@ -175,12 +173,14 @@ export default function Match() {
               Envoyer un message
             </button>
           </div>
-          <div className="mt-4 text-left">
-            <PriorityProposalUpsell
-              onActivate={() => navigate("/splove-plus")}
-              onStayFree={() => goChat()}
-            />
-          </div>
+          {!BETA_MODE ? (
+            <div className="mt-4 text-left">
+              <PriorityProposalUpsell
+                onActivate={() => navigate("/splove-plus")}
+                onStayFree={() => goChat()}
+              />
+            </div>
+          ) : null}
         </div>
       </main>
 

@@ -66,9 +66,10 @@ export type ProfileInLikesYou = {
   first_name: string | null;
   city: string | null;
   main_photo_url: string | null;
+  portrait_url?: string | null;
+  fullbody_url?: string | null;
   sport_feeling: string | null;
   sport_phrase: string | null;
-  premier_moment: string | null;
   sport_time: string | null;
   is_photo_verified?: boolean | null;
   profile_sports?: { sports: { label: string; slug?: string } | null }[];

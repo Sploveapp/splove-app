@@ -24,6 +24,8 @@ type Props = {
   /** Prolonge la fenêtre 48h côté serveur (match « endormi »). */
   onRelanceWindow?: () => void;
   relanceBusy?: boolean;
+  /** Clic sur le bandeau « créneau proposé » (ouvre le détail côté parent). */
+  onActivityBannerClick?: () => void;
 };
 
 export function ChatPostMatchPanel({
@@ -40,6 +42,7 @@ export function ChatPostMatchPanel({
   hideCardProposeButton = false,
   onRelanceWindow,
   relanceBusy = false,
+  onActivityBannerClick,
 }: Props) {
   const baseExpiresAt =
     windowExpiresAt ?? (matchOpenedAt != null ? matchOpenedAt + HOURS_48_MS : null);
@@ -48,14 +51,19 @@ export function ChatPostMatchPanel({
   const windowExpired = baseExpiresAt != null && nowTick >= baseExpiresAt;
 
   if (productState === "activity_proposed") {
+    if (!onActivityBannerClick) return null;
     return (
       <div className="mb-3 space-y-3">
-        <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-center shadow-sm ring-1 ring-emerald-500/15">
-          <p className="text-[13px] font-semibold leading-snug text-emerald-200">{COPY_BANNER_PROPOSED}</p>
+        <button
+          type="button"
+          onClick={() => onActivityBannerClick()}
+          className="w-full rounded-2xl border border-emerald-400/20 bg-emerald-950/35 px-4 py-3 text-center shadow-sm ring-1 ring-emerald-400/10 transition hover:bg-emerald-950/50 focus:outline-none focus:ring-2 focus:ring-emerald-300/25"
+        >
+          <p className="text-[13px] font-semibold leading-snug text-emerald-100/90">{COPY_BANNER_PROPOSED}</p>
           {proposalStatusLabel ? (
-            <p className="mt-1 text-[12px] font-medium text-emerald-300/90">{proposalStatusLabel}</p>
+            <p className="mt-1 text-[12px] font-medium text-emerald-200/75">{proposalStatusLabel}</p>
           ) : null}
-        </div>
+        </button>
       </div>
     );
   }

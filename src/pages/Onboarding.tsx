@@ -16,7 +16,14 @@ import {
 } from "../constants/copy";
 import { bioPublicTextViolatesPolicy } from "../lib/contentModeration";
 import { isAdultFromBirthIso } from "../lib/ageGate";
-import { PROFILE_UPSERT_ONBOARDING_SELECT } from "../lib/profileSelect";
+import {
+  PROFILE_UPSERT_ONBOARDING_SELECT,
+  PROFILE_UPSERT_ONBOARDING_SELECT_CORE,
+  isUndefinedColumnError,
+} from "../lib/profileSelect";
+import { isProfileRecord } from "../lib/appProfile";
+import { reverseGeocodeCity } from "../lib/geocoding";
+import { getCurrentPositionCoords } from "../utils/geolocation";
 import {
   APP_BORDER,
   APP_CARD,
@@ -25,6 +32,11 @@ import {
   CTA_DISABLED_BG,
   TEXT_ON_BRAND,
 } from "../constants/theme";
+import { PHOTO_VERIFICATION_PLACEHOLDER } from "../constants";
+import { profilePhotoStoragePathFromPublicUrl } from "../lib/profilePhotoStoragePath";
+import { photoModerationHeadline, photoModerationRejectedDetail } from "../lib/photoModerationUi";
+import { invokeModeratePhoto } from "../services/photoModeration.service";
+import type { PhotoModerationStatus } from "../types/photoModeration.types";
 
 const GENDER_OPTIONS = [
   { value: "Femme", label: "Femme" },
@@ -56,7 +68,6 @@ const SPORT_MOTIVATION_OPTIONS = [
 ] as const;
 
 const SPORT_PHRASE_MAX_LENGTH = 120;
-const PREMIER_MOMENT_MAX_LENGTH = 120;
 
 /** Valeurs BDD : UI « Amour » → Amoureux */
 const INTENT_DB_AMOUR = "Amoureux";
@@ -141,7 +152,9 @@ const DEFAULT_SPORT_FALLBACK: SportOption[] = [
   { id: "fallback-9", name: "Natation", slug: "natation" },
 ];
 
-const TOTAL_STEPS = 7;
+const TOTAL_STEPS = 8;
+
+const ONBOARDING_RADIUS_KM_OPTIONS = [10, 25, 50, 100] as const;
 const PHOTO_BUCKET = "profile-photos";
 const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 const PHOTO_ACCEPT_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -259,14 +272,21 @@ const labelClassName = "mb-1 block text-sm font-semibold text-app-text";
 
 export default function Onboarding() {
   const navigate = useNavigate();
-  const { user, isProfileComplete, isLoading, refetchProfile, commitProfileRow, syncAuthSession } =
-    useAuth();
+  const {
+    user,
+    isProfileComplete,
+    isLoading: authLoading,
+    refetchProfile,
+    commitProfileRow,
+    syncAuthSession,
+  } = useAuth();
 
   const [step, setStep] = useState(1);
   const [sportSearch, setSportSearch] = useState("");
   const [stepHint, setStepHint] = useState<string | null>(null);
   const [sportPhraseContactError, setSportPhraseContactError] = useState<string | null>(null);
   const [photoStepError, setPhotoStepError] = useState<string | null>(null);
+  const [moderationSuccessNote, setModerationSuccessNote] = useState<string | null>(null);
   const portraitInputRef = useRef<HTMLInputElement>(null);
   const bodyInputRef = useRef<HTMLInputElement>(null);
   /** Évite la redirection /auth pendant le submit final (race `user` / getSession). */
@@ -280,13 +300,17 @@ export default function Onboarding() {
   const [gender, setGender] = useState("");
   const [interestedIn, setInterestedIn] = useState("");
   const [intent, setIntent] = useState("");
+  const [obLocCity, setObLocCity] = useState("");
+  const [obLocRadiusKm, setObLocRadiusKm] = useState<number>(25);
+  const [obLocLat, setObLocLat] = useState<number | null>(null);
+  const [obLocLng, setObLocLng] = useState<number | null>(null);
+  const [obLocSource, setObLocSource] = useState<"manual" | "device" | null>(null);
+  const [obLocGeoLoading, setObLocGeoLoading] = useState(false);
   const [sportOptions, setSportOptions] = useState<SportOption[]>([]);
   const [selectedSportIds, setSelectedSportIds] = useState<(string | number)[]>([]);
   const [sportTime, setSportTime] = useState("");
   const [sportMotivations, setSportMotivations] = useState<string[]>([]);
   const [sportPhrase, setSportPhrase] = useState("");
-  const [premierMoment, setPremierMoment] = useState("");
-  const [premierMomentContactError, setPremierMomentContactError] = useState<string | null>(null);
   const [portraitFile, setPortraitFile] = useState<File | null>(null);
   const [bodyFile, setBodyFile] = useState<File | null>(null);
   const [photoComplianceConfirmed, setPhotoComplianceConfirmed] = useState(false);
@@ -342,7 +366,7 @@ export default function Onboarding() {
           console.warn("[Onboarding sports] fetch result: timeout");
           setSportOptions(DEFAULT_SPORT_FALLBACK);
           setSportsLoadError(
-            "Le catalogue sport met trop de temps à répondre. Vérifiez la connexion. Suggestions locales affichées — reconnectez-vous pour enregistrer des sports réels si besoin.",
+            "Le catalogue sport met trop de temps à répondre. Suggestions locales affichées — vous pourrez actualiser après l’inscription.",
           );
           return;
         }
@@ -387,12 +411,12 @@ export default function Onboarding() {
   }, []);
 
   useEffect(() => {
-    if (step !== 2) return;
+    if (step !== 3) return;
     console.log("[Onboarding sports] mount");
   }, [step]);
 
   useEffect(() => {
-    if (step !== 2) return;
+    if (step !== 3) return;
     console.log("[Onboarding sports] loading:", loadingSports);
     console.log("[Onboarding sports] sports count:", sportOptions.length);
     console.log("[Onboarding sports] input disabled:", false);
@@ -401,29 +425,27 @@ export default function Onboarding() {
   }, [step, loadingSports, sportOptions.length, selectedSportIds, sportsLoadError, error]);
 
   useEffect(() => {
-    if (isLoading) return;
-    if (user?.id) return;
-    if (onboardingSubmitInFlightRef.current) return;
-    let cancelled = false;
-    void supabase.auth.getSession().then(({ data: { session } }) => {
-      if (cancelled) return;
-      if (onboardingSubmitInFlightRef.current) return;
-      if (!session?.user?.id) {
-        navigate("/auth", { replace: true });
-      }
+    console.log("[Onboarding] authLoading / user", {
+      authLoading,
+      userId: user?.id ?? null,
     });
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id, isLoading, navigate]);
+  }, [authLoading, user?.id]);
 
   useEffect(() => {
-    if (isLoading) return;
+    if (authLoading) return;
+    if (user?.id) return;
+    if (onboardingSubmitInFlightRef.current) return;
+    console.log("[Onboarding] redirect to auth (resolved auth, no user)");
+    navigate("/auth", { replace: true });
+  }, [user?.id, authLoading, navigate]);
+
+  useEffect(() => {
+    if (authLoading) return;
     if (!user?.id) return;
     if (isProfileComplete) {
       navigate("/discover", { replace: true });
     }
-  }, [isProfileComplete, isLoading, navigate, user?.id]);
+  }, [isProfileComplete, authLoading, navigate, user?.id]);
 
   const featuredSports = useMemo(
     () => getFeaturedSportsFromList(sportOptions),
@@ -483,7 +505,7 @@ export default function Onboarding() {
     prefOpenToAdaptedActivity,
   ]);
 
-  if (isLoading) {
+  if (authLoading) {
     return (
       <div className="flex min-h-screen flex-col bg-app-bg font-sans">
         <GlobalHeader variant="compact" />
@@ -494,6 +516,10 @@ export default function Onboarding() {
     );
   }
 
+  const locationReady =
+    (obLocCity.trim().length >= 2 || (obLocLat != null && obLocLng != null)) &&
+    [10, 25, 50, 100].includes(obLocRadiusKm);
+
   /** Deux photos obligatoires : portrait (visage) + corps (silhouette / en pied), formats JPG/PNG/WebP. */
   const canSubmit =
     firstName.trim() !== "" &&
@@ -502,6 +528,7 @@ export default function Onboarding() {
     gender !== "" &&
     interestedIn !== "" &&
     intent !== "" &&
+    locationReady &&
     selectedSportIds.length >= 1 &&
     selectedSportIds.length <= 3 &&
     portraitFile != null &&
@@ -519,7 +546,11 @@ export default function Onboarding() {
     if (gender === "") return "Choisissez votre genre.";
     if (interestedIn === "") return "Indiquez qui vous intéresse.";
     if (intent === "") return "Choisissez un type de rencontre.";
-    if (selectedSportIds.length < 1) return "Sélectionnez au moins 1 sport (étape 2).";
+    if (!locationReady) {
+      if (![10, 25, 50, 100].includes(obLocRadiusKm)) return "Choisis un rayon de recherche.";
+      return "Indique ta ville ou utilise ta position.";
+    }
+    if (selectedSportIds.length < 1) return "Sélectionnez au moins 1 sport (étape sports).";
     if (selectedSportIds.length > 3) return "Maximum 3 sports.";
     if (portraitFile == null) return "Ajoutez une photo portrait (étape 5).";
     if (bodyFile == null) return "Ajoutez une photo en pied (étape 6).";
@@ -614,6 +645,19 @@ export default function Onboarding() {
       return true;
     }
     if (current === 2) {
+      const cityOk = obLocCity.trim().length >= 2;
+      const coordsOk = obLocLat != null && obLocLng != null;
+      if (!cityOk && !coordsOk) {
+        setStepHint("Indique ta ville ou utilise ta position actuelle.");
+        return false;
+      }
+      if (![10, 25, 50, 100].includes(obLocRadiusKm)) {
+        setStepHint("Choisis un rayon de recherche.");
+        return false;
+      }
+      return true;
+    }
+    if (current === 3) {
       if (selectedSportIds.length < 1) {
         setStepHint("Sélectionnez au moins 1 sport.");
         return false;
@@ -624,22 +668,16 @@ export default function Onboarding() {
       }
       return true;
     }
-    if (current === 4) {
+    if (current === 5) {
       const t = sportPhrase.trim();
       if (t.length > 0 && bioPublicTextViolatesPolicy(sportPhrase)) {
         setSportPhraseContactError(SAFETY_CONTENT_REFUSAL);
         return false;
       }
       setSportPhraseContactError(null);
-      const pm = premierMoment.trim();
-      if (pm.length > 0 && bioPublicTextViolatesPolicy(premierMoment)) {
-        setPremierMomentContactError(SAFETY_CONTENT_REFUSAL);
-        return false;
-      }
-      setPremierMomentContactError(null);
       return true;
     }
-    if (current === 5) {
+    if (current === 6) {
       if (!portraitFile) {
         setPhotoStepError(ONBOARDING_AVATAR_REQUIRED);
         return false;
@@ -647,7 +685,7 @@ export default function Onboarding() {
       setPhotoStepError(null);
       return true;
     }
-    if (current === 6) {
+    if (current === 7) {
       if (!bodyFile) {
         setPhotoStepError(ONBOARDING_FULLBODY_REQUIRED);
         return false;
@@ -659,7 +697,7 @@ export default function Onboarding() {
       setPhotoStepError(null);
       return true;
     }
-    if (current === 7) {
+    if (current === 8) {
       if (!prefOpenToStandardActivity && !prefOpenToAdaptedActivity) {
         setStepHint(ACCESSIBILITY_PREF_BOTH_REQUIRED);
         return false;
@@ -670,27 +708,79 @@ export default function Onboarding() {
   }
 
   function goNext() {
+    if (authLoading || !user?.id) {
+      console.warn("[Onboarding] next step blocked", {
+        reason: authLoading ? "authLoading" : "no user",
+      });
+      return;
+    }
     if (!validateStep(step)) return;
+    if (step === 2 && obLocSource === null && obLocCity.trim().length >= 2) {
+      setObLocSource("manual");
+    }
     setError(null);
-    if (step !== 5 && step !== 6) setPhotoStepError(null);
+    if (step !== 6 && step !== 7) setPhotoStepError(null);
+    setModerationSuccessNote(null);
     setStep((s) => Math.min(TOTAL_STEPS, s + 1));
+  }
+
+  async function handleObUseDeviceLocation() {
+    setStepHint(null);
+    setObLocGeoLoading(true);
+    try {
+      const c = await getCurrentPositionCoords();
+      if (!c) {
+        setStepHint("Position indisponible. Tu peux saisir ta ville manuellement.");
+        return;
+      }
+      const city = await reverseGeocodeCity(c.lat, c.lng);
+      setObLocLat(c.lat);
+      setObLocLng(c.lng);
+      setObLocSource("device");
+      if (city) {
+        setObLocCity(city);
+      } else if (!obLocCity.trim()) {
+        setObLocCity("Ta zone");
+      }
+    } finally {
+      setObLocGeoLoading(false);
+    }
   }
 
   function goBack() {
     setStepHint(null);
     setSportPhraseContactError(null);
-    setPremierMomentContactError(null);
     setPhotoStepError(null);
+    setModerationSuccessNote(null);
     setStep((s) => Math.max(1, s - 1));
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!user?.id) {
-      setError("Session expirée ou introuvable. Reconnectez-vous.");
-      console.error("[Onboarding submit] blocked: no authenticated user");
+    if (authLoading) {
+      console.warn("[Onboarding] final submit blocked: authLoading");
       return;
     }
+    
+    const stillAuthenticated = await syncAuthSession();
+    console.log("[Onboarding] syncAuthSession", stillAuthenticated);
+    
+    const {
+      data: { user: freshUser },
+      error: getUserError,
+    } = await supabase.auth.getUser();
+    
+    console.log("[Onboarding] getUser", { freshUser, getUserError });
+    
+    const authUser = freshUser ?? user;
+    
+    if (getUserError || !authUser?.id) {
+      console.warn("[Onboarding] final submit: no authenticated user after refresh", getUserError);
+      alert("Session expirée ou introuvable. Reconnecte-toi.");
+      navigate("/auth", { replace: true });
+      return;
+    }
+    console.log("[Onboarding] final submit start");
     if (!canSubmit) {
       const hint = getCanSubmitBlockReason() ?? "Complétez les champs obligatoires pour continuer.";
       setStepHint(hint);
@@ -701,6 +791,10 @@ export default function Onboarding() {
       setStep(2);
       return;
     }
+    if (!validateStep(3)) {
+      setStep(3);
+      return;
+    }
 
     const trimmedPhrase = sportPhrase.trim();
     if (
@@ -708,19 +802,6 @@ export default function Onboarding() {
       bioPublicTextViolatesPolicy(sportPhrase)
     ) {
       setSportPhraseContactError(SAFETY_CONTENT_REFUSAL);
-      setStep(4);
-      return;
-    }
-    const trimmedPremier = premierMoment.trim();
-    if (
-      trimmedPremier.length > 0 &&
-      bioPublicTextViolatesPolicy(premierMoment)
-    ) {
-      setPremierMomentContactError(SAFETY_CONTENT_REFUSAL);
-      setStep(4);
-      return;
-    }
-    if (!validateStep(4)) {
       setStep(4);
       return;
     }
@@ -736,18 +817,21 @@ export default function Onboarding() {
       setStep(7);
       return;
     }
+    if (!validateStep(8)) {
+      setStep(8);
+      return;
+    }
     if (!portraitFile || !bodyFile) {
       setPhotoStepError(
         !portraitFile ? ONBOARDING_AVATAR_REQUIRED : ONBOARDING_FULLBODY_REQUIRED
       );
-      setStep(!portraitFile ? 5 : 6);
+      setStep(!portraitFile ? 6 : 7);
       return;
     }
 
     setError(null);
     setStepHint(null);
     setSportPhraseContactError(null);
-    setPremierMomentContactError(null);
     setPhotoStepError(null);
     setLoading(true);
 
@@ -762,12 +846,7 @@ export default function Onboarding() {
       trimmedPhrase.length > 0
         ? trimmedPhrase.slice(0, SPORT_PHRASE_MAX_LENGTH)
         : null;
-    const premierFinal =
-      trimmedPremier.length > 0
-        ? trimmedPremier.slice(0, PREMIER_MOMENT_MAX_LENGTH)
-        : null;
-
-    const authUserId = user.id;
+        const authUserId = authUser.id;
 
     onboardingSubmitInFlightRef.current = true;
     try {
@@ -788,23 +867,120 @@ export default function Onboarding() {
         return;
       }
 
-      const profilePayload = {
+      let slot1Status: PhotoModerationStatus = "approved";
+      let slot2Status: PhotoModerationStatus = "approved";
+      let moderationRejected = false;
+      let moderationUiReason: string | null = null;
+      let modPrimarySlot: 1 | 2 = 1;
+
+      if (!PHOTO_VERIFICATION_PLACEHOLDER) {
+        const path1 = profilePhotoStoragePathFromPublicUrl(portraitUrl);
+        const path2 = profilePhotoStoragePathFromPublicUrl(fullbodyUrl);
+        if (!path1 || !path2) {
+          setLoading(false);
+          setError("Impossible de préparer la vérification des photos. Réessaie.");
+          return;
+        }
+        const m1 = await invokeModeratePhoto({
+          userId: authUserId,
+          photoSlot: 1,
+          storagePath: path1,
+        });
+        if (m1.error || !m1.data?.status) {
+          setLoading(false);
+          setError(m1.error?.message ?? "Vérification photo indisponible.");
+          return;
+        }
+        slot1Status = m1.data.status;
+        const m2 = await invokeModeratePhoto({
+          userId: authUserId,
+          photoSlot: 2,
+          storagePath: path2,
+        });
+        if (m2.error || !m2.data?.status) {
+          setLoading(false);
+          setError(m2.error?.message ?? "Vérification photo indisponible.");
+          return;
+        }
+        slot2Status = m2.data.status;
+        moderationRejected = slot1Status === "rejected" || slot2Status === "rejected";
+        if (moderationRejected) {
+          moderationUiReason =
+            slot1Status === "rejected"
+              ? (m1.data.ui_reason_code ?? null)
+              : (m2.data.ui_reason_code ?? null);
+          modPrimarySlot = slot1Status === "rejected" ? 1 : 2;
+        }
+      }
+
+      const locSourceResolved: "manual" | "device" = obLocSource ?? "manual";
+
+      const moderationAllowsComplete = PHOTO_VERIFICATION_PLACEHOLDER || !moderationRejected;
+
+      let moderationBanner: string | null = null;
+      if (!PHOTO_VERIFICATION_PLACEHOLDER && moderationAllowsComplete) {
+        moderationBanner =
+          slot1Status === "pending_review" || slot2Status === "pending_review"
+            ? "Ta photo est en cours de vérification. Tu peux continuer ; ta fiche Discover s’affichera une fois les photos validées par l’équipe."
+            : "Photo validée.";
+      }
+      setModerationSuccessNote(moderationBanner);
+
+      const profilePayload: Record<string, unknown> = {
         id: authUserId,
         first_name: firstName.trim(),
         birth_date: birthDate,
         gender,
         looking_for: interestedIn,
         intent,
+        city: obLocCity.trim() || null,
+        latitude: obLocLat,
+        longitude: obLocLng,
+        discovery_radius_km: obLocRadiusKm,
+        location_source: locSourceResolved,
+        location_updated_at: new Date().toISOString(),
         sport_time: sportTime || null,
         sport_motivation: sportMotivations.length > 0 ? sportMotivations : null,
         sport_phrase: phraseFinal,
-        premier_moment: premierFinal,
         needs_adapted_activities: needsAdaptedActivities,
         portrait_url: portraitUrl,
         fullbody_url: fullbodyUrl,
         main_photo_url: portraitUrl || fullbodyUrl,
-        profile_completed: true,
+        profile_completed: moderationAllowsComplete,
+        onboarding_completed: moderationAllowsComplete,
+        onboarding_done: moderationAllowsComplete,
+        updated_at: new Date().toISOString(),
       };
+
+      if (PHOTO_VERIFICATION_PLACEHOLDER) {
+        profilePayload.photo1_status = "approved";
+        profilePayload.photo2_status = "approved";
+      }
+
+      if (!PHOTO_VERIFICATION_PLACEHOLDER && moderationRejected) {
+        const detail = photoModerationRejectedDetail(moderationUiReason);
+        setPhotoStepError(
+          detail
+            ? `${photoModerationHeadline("rejected")} — ${detail}.`
+            : photoModerationHeadline("rejected"),
+        );
+        setStep(modPrimarySlot === 1 ? 6 : 7);
+        const failPayload: Record<string, unknown> = {
+          ...profilePayload,
+          profile_completed: false,
+          onboarding_completed: false,
+          onboarding_done: false,
+        };
+        const { error: bailErr } = await supabase
+          .from("profiles")
+          .upsert({ ...failPayload, id: authUser.id }, { onConflict: "id" });
+        if (bailErr) {
+          console.error("[Onboarding submit] upsert after photo rejection:", bailErr);
+          setError(bailErr.message || "Erreur lors de l’enregistrement du profil.");
+        }
+        setLoading(false);
+        return;
+      }
 
       console.log("[Onboarding submit] sending data:", {
         table: "profiles",
@@ -812,11 +988,36 @@ export default function Onboarding() {
         payload: profilePayload,
       });
 
-      const { error: profileError, data: upsertRow } = await supabase
+      let profileUpsertSelect = PROFILE_UPSERT_ONBOARDING_SELECT;
+      let { error: profileError, data: upsertRow } = await supabase
         .from("profiles")
-        .upsert(profilePayload, { onConflict: "id" })
-        .select(PROFILE_UPSERT_ONBOARDING_SELECT)
+        .upsert(
+          {
+            ...profilePayload,
+            id: authUser.id,
+          },
+          { onConflict: "id" }
+        )
+        .select(profileUpsertSelect)
         .maybeSingle();
+
+      if (profileError && isUndefinedColumnError(profileError, "location_source")) {
+        console.warn("[Onboarding submit] upsert: colonne location_source absente, nouvel essai sans");
+        const payloadCore = { ...profilePayload };
+        delete (payloadCore as { location_source?: unknown }).location_source;
+        profileUpsertSelect = PROFILE_UPSERT_ONBOARDING_SELECT_CORE;
+        ({ error: profileError, data: upsertRow } = await supabase
+          .from("profiles")
+          .upsert(
+            {
+              ...payloadCore,
+              id: authUser.id,
+            },
+            { onConflict: "id" }
+          )
+          .select(profileUpsertSelect)
+          .maybeSingle());
+      }
 
       console.log("[Onboarding submit] result:", {
         profileUpsert: { error: profileError?.message ?? null, data: upsertRow ?? null },
@@ -843,7 +1044,13 @@ export default function Onboarding() {
         return;
       }
 
-      commitProfileRow(upsertRow as Record<string, unknown>);
+      if (!isProfileRecord(upsertRow)) {
+        console.error("[Onboarding submit] upsert: réponse inattendue (pas un objet profil)", upsertRow);
+        setError("Réponse serveur incomplète après enregistrement du profil. Réessayez.");
+        return;
+      }
+
+      commitProfileRow(upsertRow);
 
       const validSportIds = selectedSportIds.filter(
         (id) =>
@@ -904,11 +1111,18 @@ export default function Onboarding() {
         return;
       }
 
-      const sessionOk = await syncAuthSession();
+      let sessionOk = await syncAuthSession();
       if (!sessionOk) {
-        console.error("[Onboarding submit] syncAuthSession: no session after success");
-        setError("Session perdue avant la redirection. Reconnectez-vous.");
+        await new Promise((r) => setTimeout(r, 400));
+        sessionOk = await syncAuthSession();
+      }
+      if (!sessionOk) {
+        console.error("[Onboarding submit] syncAuthSession: no session after success — redirect /auth");
+        navigate("/auth", { replace: true });
         return;
+      }
+      if (moderationBanner) {
+        await new Promise((r) => window.setTimeout(r, 1400));
       }
       console.log("[Onboarding submit] navigation /discover");
       navigate("/discover", { replace: true });
@@ -977,23 +1191,25 @@ export default function Onboarding() {
 
             <h1 className="mt-2.5 text-center text-base font-bold leading-snug text-app-text sm:text-lg">
               {step === 1 && "Vous, en quelques mots"}
-              {step === 2 && "Vos sports"}
-              {step === 3 && "Votre rythme"}
-              {step === 4 && "Une phrase qui vous ressemble"}
-              {step === 5 && "Ajoutez votre photo"}
-              {step === 6 && "Photo en pied"}
-              {step === 7 && "Dernière étape"}
+              {step === 2 && "Où veux-tu rencontrer du monde ?"}
+              {step === 3 && "Vos sports"}
+              {step === 4 && "Votre rythme"}
+              {step === 5 && "Une phrase qui vous ressemble"}
+              {step === 6 && "Ajoutez votre photo"}
+              {step === 7 && "Photo en pied"}
+              {step === 8 && "Dernière étape"}
             </h1>
             <p className="mt-0.5 text-center text-xs leading-snug text-app-muted sm:text-sm">
               {step === 1 && "Ici, on se découvre en bougeant."}
-              {step === 2 && "Choisissez 1 à 3 sports pour créer des affinités utiles."}
-              {step === 3 && "Votre rythme nous aide à suggérer des rencontres réalistes."}
-              {step === 4 && "Une phrase simple, vraie, sans lien ni réseau social."}
-              {step === 5 &&
-                "Photo 1 — visage clair, photo personnelle, sans filtre excessif."}
+              {step === 2 && "On te montre des profils autour de ta zone, sans afficher ton adresse exacte."}
+              {step === 3 && "Choisissez 1 à 3 sports pour créer des affinités utiles."}
+              {step === 4 && "Votre rythme nous aide à suggérer des rencontres réalistes."}
+              {step === 5 && "Une phrase simple, vraie, sans lien ni réseau social."}
               {step === 6 &&
+                "Photo 1 — visage clair, photo personnelle, sans filtre excessif."}
+              {step === 7 &&
                 "Photo 2 — silhouette / corps entier ou quasi entier, pour une rencontre en confiance."}
-              {step === 7 && "Derniers accords, puis place aux vraies rencontres."}
+              {step === 8 && "Derniers accords, puis place aux vraies rencontres."}
             </p>
           </div>
 
@@ -1120,6 +1336,53 @@ export default function Onboarding() {
               )}
 
               {step === 2 && (
+                <div className="space-y-4">
+                  <div>
+                    <label className={labelClassName} htmlFor="ob-loc-city">
+                      Ville
+                    </label>
+                    <input
+                      id="ob-loc-city"
+                      type="text"
+                      placeholder="Ex. Marseille"
+                      value={obLocCity}
+                      onChange={(e) => {
+                        setObLocCity(e.target.value);
+                        setObLocSource(null);
+                      }}
+                      autoComplete="address-level2"
+                      className={inputClassName}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelClassName} htmlFor="ob-loc-radius">
+                      Rayon
+                    </label>
+                    <select
+                      id="ob-loc-radius"
+                      value={obLocRadiusKm}
+                      onChange={(e) => setObLocRadiusKm(Number(e.target.value))}
+                      className={inputClassName}
+                    >
+                      {ONBOARDING_RADIUS_KM_OPTIONS.map((km) => (
+                        <option key={km} value={km}>
+                          {km} km
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={obLocGeoLoading}
+                    onClick={() => void handleObUseDeviceLocation()}
+                    className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-sm font-semibold text-app-text transition hover:bg-app-border disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {obLocGeoLoading ? "Localisation…" : "Utiliser ma position actuelle"}
+                  </button>
+                </div>
+              )}
+
+              {step === 3 && (
                 <div className="space-y-2.5">
                   <p className="text-xs text-app-muted">
                     1 à 3 sports · suggestions ci-dessous, ou recherche (min. 3 lettres)
@@ -1226,7 +1489,7 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 3 && (
+              {step === 4 && (
                 <div className="space-y-3">
                   <div>
                     <label className={labelClassName} htmlFor="ob-time">
@@ -1274,7 +1537,7 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 4 && (
+              {step === 5 && (
                 <div className="space-y-5">
                   <div>
                     <label className={labelClassName} htmlFor="ob-phrase">
@@ -1312,46 +1575,10 @@ export default function Onboarding() {
                       </p>
                     )}
                   </div>
-                  <div>
-                    <label className={labelClassName} htmlFor="ob-premier">
-                      Premier moment
-                    </label>
-                    <p className="mb-2 text-xs leading-snug text-app-muted">
-                      Une idée courte de première sortie réelle (optionnel).
-                    </p>
-                    <input
-                      id="ob-premier"
-                      type="text"
-                      placeholder="Ex. Un café puis une séance courte en salle."
-                      value={premierMoment}
-                      maxLength={PREMIER_MOMENT_MAX_LENGTH}
-                      onChange={(e) => {
-                        setPremierMoment(e.target.value.slice(0, PREMIER_MOMENT_MAX_LENGTH));
-                        setPremierMomentContactError(null);
-                      }}
-                      onBlur={(e) => {
-                        const v = e.target.value;
-                        if (v.trim().length > 0 && bioPublicTextViolatesPolicy(v)) {
-                          setPremierMomentContactError(SAFETY_CONTENT_REFUSAL);
-                        } else {
-                          setPremierMomentContactError(null);
-                        }
-                      }}
-                      className={inputClassName}
-                    />
-                    <p className="mt-1 text-xs text-app-muted">
-                      {premierMoment.length}/{PREMIER_MOMENT_MAX_LENGTH}
-                    </p>
-                    {premierMomentContactError && (
-                      <p className="mt-1.5 text-sm leading-snug text-red-600" role="alert">
-                        {premierMomentContactError}
-                      </p>
-                    )}
-                  </div>
                 </div>
               )}
 
-              {step === 5 && (
+              {step === 6 && (
                 <div className="space-y-3">
                   <ul className="space-y-1 rounded-xl border border-app-border bg-app-bg/90 px-3 py-2.5 text-[11px] leading-snug text-app-muted sm:text-xs">
                     <li className="flex gap-2">
@@ -1420,7 +1647,7 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 6 && (
+              {step === 7 && (
                 <div className="space-y-3">
                   <ul className="space-y-1 rounded-xl border border-app-border bg-app-bg/90 px-3 py-2.5 text-[11px] leading-snug text-app-muted sm:text-xs">
                     <li className="flex gap-2">
@@ -1502,7 +1729,7 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 7 && (
+              {step === 8 && (
                 <div className="space-y-4">
                   <p className="text-sm leading-relaxed text-app-muted">{ACCESSIBILITY_SECTION_INTRO}</p>
                   <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-app-border bg-app-card px-3 py-2.5 text-sm text-app-text">
@@ -1560,13 +1787,16 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {stepHint && step !== 5 && step !== 6 && (
+              {stepHint && step !== 6 && step !== 7 && (
                 <p className="mt-3 text-sm text-red-600">{stepHint}</p>
               )}
               {finalStepBlockReason && (
                 <p className="mt-3 text-sm text-red-600">{finalStepBlockReason}</p>
               )}
               {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+              {moderationSuccessNote && (
+                <p className="mt-3 text-sm font-medium text-emerald-700">{moderationSuccessNote}</p>
+              )}
             </div>
 
             <div className="shrink-0 border-t border-app-border bg-app-card px-3 py-2.5 sm:px-4 sm:py-3">
@@ -1586,18 +1816,19 @@ export default function Onboarding() {
                   <button
                     type="button"
                     onClick={goNext}
-                    className="flex-1 rounded-xl py-3 text-sm font-semibold text-white shadow-sm"
+                    disabled={authLoading}
+                    className="flex-1 rounded-xl py-3 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-70"
                     style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
                   >
-                    Suivant
+                    {step === 2 ? "Enregistrer ma localisation" : "Suivant"}
                   </button>
                 ) : (
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || authLoading}
                     className="flex-1 rounded-xl py-3 text-sm font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-70 sm:text-base"
                     style={{
-                      background: !loading ? BRAND_BG : CTA_DISABLED_BG,
+                      background: !loading && !authLoading && user?.id ? BRAND_BG : CTA_DISABLED_BG,
                       color: TEXT_ON_BRAND,
                     }}
                   >

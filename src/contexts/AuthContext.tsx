@@ -10,7 +10,9 @@ import {
 import { flushSync } from "react-dom";
 import { supabase } from "../lib/supabase";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
-import { PROFILE_SELECT } from "../lib/profileSelect";
+import { PROFILE_SELECT, PROFILE_SELECT_CORE, isUndefinedColumnError } from "../lib/profileSelect";
+import type { AppProfile } from "../lib/appProfile";
+import { isProfileRecord } from "../lib/appProfile";
 import { isAdultFromBirthIso } from "../lib/ageGate";
 import type { User, Session } from "@supabase/supabase-js";
 
@@ -33,6 +35,12 @@ export type Profile = {
   photo_status?: string | null;
   portrait_rejection_code?: string | null;
   body_rejection_code?: string | null;
+  /** Modération automatique (slots 1 = portrait, 2 = corps) — migration 058. */
+  photo1_status?: string | null;
+  photo2_status?: string | null;
+  photo_moderation_overall?: string | null;
+  is_under_review?: boolean | null;
+  moderation_strikes_count?: number | null;
   /** Activités adaptées — optionnel, voir migration 005 / 041. */
   needs_adapted_activities?: boolean | null;
   pref_open_to_standard_activity?: boolean | null;
@@ -50,7 +58,7 @@ type AuthState = {
   /** Recharge le profil depuis Supabase ; n’efface pas le profil en cache si la lecture échoue. */
   refetchProfile: () => Promise<Profile | null>;
   /** Met à jour le profil depuis une ligne serveur (ex. retour d’upsert onboarding), avec flushSync. */
-  commitProfileRow: (row: Record<string, unknown>) => void;
+  commitProfileRow: (row: unknown) => void;
   /** Re-lit la session Supabase et met à jour `user` / `session` de façon synchrone. Retourne false si aucun utilisateur. */
   syncAuthSession: () => Promise<boolean>;
   signOut: () => Promise<void>;
@@ -59,9 +67,13 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null);
 
 /** Évite un `isLoading` infini si getSession / fetch profil ne se termine jamais. */
-/** Filet si une promesse reste pendante malgré les courses (getSession + loadProfile peuvent aller jusqu’à ~2 × races). */
 const AUTH_INIT_WATCHDOG_MS = 25_000;
-const PROFILE_LOAD_RACE_MS = 10_000;
+/** Première fenêtre pour getSession — si dépassée, on attend encore la même promesse (pas de reset user trop tôt). */
+const GET_SESSION_SOFT_MS = 12_000;
+/** Filet dur après le soft timeout (même promesse getSession). */
+const GET_SESSION_HARD_EXTRA_MS = 20_000;
+/** Chargement profil (init + onAuthStateChange) — timeout ≠ session invalide. */
+const PROFILE_LOAD_RACE_MS = 12_000;
 
 function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T | "timeout"> {
   return new Promise((resolve) => {
@@ -79,12 +91,54 @@ function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T | "timeo
   });
 }
 
+type GetSessionResult = Awaited<ReturnType<typeof supabase.auth.getSession>>;
+
+/**
+ * Ne pas traiter un « timeout » court comme absence de session : la promesse native peut encore résoudre.
+ */
+async function resolveGetSession(): Promise<GetSessionResult | "hard-timeout"> {
+  const sessionPromise = supabase.auth.getSession();
+  let first = await raceWithTimeout(sessionPromise, GET_SESSION_SOFT_MS);
+  if (first === "timeout") {
+    console.warn(
+      "[AuthContext] getSession soft timeout — awaiting same promise (hard window)",
+      GET_SESSION_HARD_EXTRA_MS,
+      "ms",
+    );
+    first = await raceWithTimeout(sessionPromise, GET_SESSION_HARD_EXTRA_MS);
+  }
+  if (first === "timeout") {
+    console.error("[AuthContext] getSession hard timeout — no session");
+    return "hard-timeout";
+  }
+  return first;
+}
+
+function profileRowToProfile(row: AppProfile): Profile {
+  return {
+    ...row,
+    profile_completed: !!row.profile_completed,
+    is_photo_verified: !!(row as { is_photo_verified?: boolean | null }).is_photo_verified,
+  } as Profile;
+}
+
 async function fetchProfile(userId: string): Promise<Profile | null> {
-  const { data, error } = await supabase
+  let selectCols = PROFILE_SELECT;
+  let { data, error } = await supabase
     .from("profiles")
-    .select(PROFILE_SELECT)
+    .select(selectCols)
     .eq("id", userId)
     .maybeSingle();
+
+  if (error && isUndefinedColumnError(error, "location_source")) {
+    console.warn("[AuthContext] fetchProfile: location_source absent en base, relecture sans cette colonne");
+    selectCols = PROFILE_SELECT_CORE;
+    ({ data, error } = await supabase
+      .from("profiles")
+      .select(selectCols)
+      .eq("id", userId)
+      .maybeSingle());
+  }
 
   if (error) {
     console.error("fetchProfile error:", error);
@@ -96,11 +150,19 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
   if (!row) {
     const created = await ensureProfileRowForAuthUserId(userId);
     if (!created) return null;
-    const retry = await supabase
+    let retry = await supabase
       .from("profiles")
-      .select(PROFILE_SELECT)
+      .select(selectCols)
       .eq("id", userId)
       .maybeSingle();
+    if (retry.error && isUndefinedColumnError(retry.error, "location_source")) {
+      selectCols = PROFILE_SELECT_CORE;
+      retry = await supabase
+        .from("profiles")
+        .select(selectCols)
+        .eq("id", userId)
+        .maybeSingle();
+    }
     if (retry.error) {
       console.error("fetchProfile retry error:", retry.error);
       return null;
@@ -110,11 +172,12 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
 
   if (!row) return null;
 
-  return {
-    ...row,
-    profile_completed: !!row.profile_completed,
-    is_photo_verified: !!(row as { is_photo_verified?: boolean }).is_photo_verified,
-  } as Profile;
+  if (!isProfileRecord(row)) {
+    console.error("[AuthContext] fetchProfile: réponse inattendue (pas un objet profil)", row);
+    return null;
+  }
+
+  return profileRowToProfile(row);
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -123,6 +186,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  /** Incrémenté à chaque loadProfile — ignore les réponses obsolètes (courses onAuthStateChange). */
+  const profileLoadGenRef = useRef(0);
 
   /** État précédent pour éviter un second `SIGNED_IN` (doublon Supabase / reconnexion) qui remet toute l’app en « Chargement… ». */
   const sessionGateRef = useRef<{ userId: string | null; hasProfile: boolean }>({
@@ -139,16 +205,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       return;
     }
-    const p = await fetchProfile(userId);
-    setProfile(p);
+    const gen = ++profileLoadGenRef.current;
+    console.log("[AuthContext] profile load start", { userId: userId.slice(0, 8) + "…" });
+    try {
+      const p = await fetchProfile(userId);
+      if (gen !== profileLoadGenRef.current) {
+        console.log("[AuthContext] profile load ignored (stale)");
+        return;
+      }
+      setProfile(p);
+      if (p) {
+        console.log("[AuthContext] profile load success");
+      } else {
+        console.warn("[AuthContext] profile load fail (null row)");
+      }
+    } catch (e) {
+      console.error("[AuthContext] profile load error", e);
+    }
   }, []);
 
-  const commitProfileRow = useCallback((row: Record<string, unknown>) => {
-    const normalized = {
-      ...row,
-      profile_completed: !!(row as { profile_completed?: unknown }).profile_completed,
-      is_photo_verified: !!(row as { is_photo_verified?: unknown }).is_photo_verified,
-    } as Profile;
+  const commitProfileRow = useCallback((row: unknown) => {
+    if (!isProfileRecord(row)) {
+      console.error("[AuthContext] commitProfileRow: valeur invalide (pas un profil)", row);
+      return;
+    }
+    const normalized = profileRowToProfile(row);
     flushSync(() => {
       setProfile(normalized);
     });
@@ -202,16 +283,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, AUTH_INIT_WATCHDOG_MS);
 
     async function init() {
+      console.log("[AuthContext] init start");
       setError(null);
 
       try {
-        const sessionRace = raceWithTimeout(supabase.auth.getSession(), PROFILE_LOAD_RACE_MS);
-        const sessionResult = await sessionRace;
+        const sessionResult = await resolveGetSession();
 
         if (!mounted) return;
 
-        if (sessionResult === "timeout") {
-          console.error("[AuthContext] getSession timeout");
+        if (sessionResult === "hard-timeout") {
           setError("Connexion trop lente. Vérifiez le réseau puis réessayez.");
           setSession(null);
           setUser(null);
@@ -225,7 +305,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } = sessionResult;
 
         if (sessionError) {
-          console.error("getSession error:", sessionError);
+          console.error("[AuthContext] getSession error:", sessionError);
           setError(sessionError.message);
           setSession(null);
           setUser(null);
@@ -237,18 +317,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(initialSession?.user ?? null);
 
         if (initialSession?.user?.id) {
-          const prof = await raceWithTimeout(loadProfile(initialSession.user.id), PROFILE_LOAD_RACE_MS);
+          const uid = initialSession.user.id;
+          console.log("[AuthContext] session restored", { userId: uid.slice(0, 8) + "…" });
+          const prof = await raceWithTimeout(loadProfile(uid), PROFILE_LOAD_RACE_MS);
           if (prof === "timeout") {
-            console.error("[AuthContext] loadProfile (init) timeout");
-            setError((prev) => prev ?? "Profil lent à charger. Vous pouvez réessayer depuis la page de connexion.");
+            console.error(
+              "[AuthContext] loadProfile (init) slow (race timeout) — in-flight load may still complete",
+            );
           }
         } else {
           setProfile(null);
+          console.log("[AuthContext] no session");
         }
       } finally {
         window.clearTimeout(watchdog);
         if (mounted) {
           setIsLoading(false);
+          console.log("[AuthContext] auth ready");
         }
       }
     }
@@ -288,11 +373,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const prof = await raceWithTimeout(loadProfile(uid), PROFILE_LOAD_RACE_MS);
           if (prof === "timeout") {
-            console.error("[AuthContext] loadProfile (onAuthStateChange) timeout");
-            setError((prev) => prev ?? "Profil lent à charger. Réessayez.");
+            console.error(
+              "[AuthContext] loadProfile (onAuthStateChange) slow (race timeout) — in-flight load may still complete",
+            );
           }
         } catch (e) {
-          console.error("AuthProvider onAuthStateChange loadProfile:", e);
+          console.error("[AuthContext] onAuthStateChange loadProfile:", e);
         } finally {
           if (mounted) setIsLoading(false);
         }

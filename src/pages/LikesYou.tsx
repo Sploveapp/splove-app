@@ -6,7 +6,9 @@ import { BlurredProfileCard } from "../components/BlurredProfileCard";
 import { LikesYouProfileCard } from "../components/LikesYouProfileCard";
 import { PaywallModal } from "../components/PaywallModal";
 import { ReportModal } from "../components/ReportModal";
+import { ReportPhotoModal } from "../components/ReportPhotoModal";
 import { supabase } from "../lib/supabase";
+import { BETA_MODE } from "../constants/beta";
 import {
   BLOCK_PROFILE_CONFIRM,
   LIKES_YOU_TITLE,
@@ -23,6 +25,22 @@ export default function LikesYou() {
   const { list, setList, loading, error } = useLikesReceived(currentUserId);
   const [showPaywall, setShowPaywall] = useState(false);
   const [reportProfileId, setReportProfileId] = useState<string | null>(null);
+  const [reportPhotoTarget, setReportPhotoTarget] = useState<{
+    profileId: string;
+    portraitUrl: string | null;
+    fullbodyUrl: string | null;
+  } | null>(null);
+
+  function openPhotoReport(profileId: string) {
+    const item = list.find((l) => l.profile?.id === profileId);
+    const p = item?.profile;
+    if (!p) return;
+    setReportPhotoTarget({
+      profileId,
+      portraitUrl: String(p.portrait_url ?? p.main_photo_url ?? "").trim() || null,
+      fullbodyUrl: String(p.fullbody_url ?? "").trim() || null,
+    });
+  }
 
   async function handleBlockProfile(profileId: string) {
     if (!currentUserId) return;
@@ -143,12 +161,13 @@ export default function LikesYou() {
     );
   }}
   onReport={(profileId) => setReportProfileId(profileId)}
+  onReportPhoto={(profileId) => openPhotoReport(profileId)}
   onBlock={(profileId) => void handleBlockProfile(profileId)}
 />
           ))}
       </main>
 
-      {showPaywall && (
+      {showPaywall && !BETA_MODE && (
         <PaywallModal
           featureName="likes_you"
           onClose={() => setShowPaywall(false)}
@@ -160,6 +179,16 @@ export default function LikesYou() {
           reportedProfileId={reportProfileId}
           reporterId={currentUserId}
           onClose={() => setReportProfileId(null)}
+        />
+      )}
+
+      {reportPhotoTarget && currentUserId && (
+        <ReportPhotoModal
+          reportedUserId={reportPhotoTarget.profileId}
+          reporterUserId={currentUserId}
+          portraitUrl={reportPhotoTarget.portraitUrl}
+          fullbodyUrl={reportPhotoTarget.fullbodyUrl}
+          onClose={() => setReportPhotoTarget(null)}
         />
       )}
     </div>
