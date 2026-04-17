@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   type ActivityPayload,
-  type ActivityWhen,
   formatActivityProposalNote,
-  whenLabelFr,
 } from "../lib/chatActivity";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { SAFETY_CONTENT_REFUSAL } from "../constants/copy";
@@ -19,17 +17,10 @@ type Props = {
   submitLabel?: string;
   initialSport?: string;
   initialPlace?: string;
+  initialScheduledAt?: string;
   /** Contre-proposition : retour vers la vue précédente sans envoi ni changement de statut. */
   onBack?: () => void;
 };
-
-const WHEN_OPTIONS: { value: ActivityWhen; label: string }[] = [
-  { value: "tonight", label: "Ce soir" },
-  { value: "tomorrow", label: "Demain" },
-  { value: "weekend", label: "Ce week-end" },
-  { value: "week", label: "Cette semaine" },
-  { value: "other", label: "Autre moment" },
-];
 
 const QUICK_NOTE_CHIPS = ["Ça te dit ?", "Partant(e) ?", "On y va ?", "Pourquoi pas 🙂"] as const;
 
@@ -43,13 +34,14 @@ export function ActivityProposalModal({
   submitLabel,
   initialSport,
   initialPlace,
+  initialScheduledAt,
   onBack,
 }: Props) {
   const firstSport = sharedSports[0] ?? "";
   const [sport, setSport] = useState(firstSport);
   const [sportOther, setSportOther] = useState("");
-  const [when, setWhen] = useState<ActivityWhen>("tomorrow");
   const [place, setPlace] = useState("");
+  const [scheduledAtLocal, setScheduledAtLocal] = useState("");
   /** Ligne courte choisie par puce ou saisie — composée dans formatActivityProposalNote. */
   const [noteText, setNoteText] = useState("");
   const [showCustomNote, setShowCustomNote] = useState(false);
@@ -65,13 +57,26 @@ export function ActivityProposalModal({
     const initial = isSharedSport ? prefSport : sharedSports.length > 0 ? sharedSports[0]! : "";
     setSport(initial);
     setSportOther(isSharedSport ? "" : prefSport);
-    setWhen("tomorrow");
     setPlace((initialPlace ?? "").trim());
+    if (initialScheduledAt) {
+      const d = new Date(initialScheduledAt);
+      if (!Number.isNaN(d.getTime())) {
+        const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
+        setScheduledAtLocal(local.toISOString().slice(0, 16));
+      } else {
+        setScheduledAtLocal("");
+      }
+    } else {
+      const fallback = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      fallback.setHours(18, 0, 0, 0);
+      const local = new Date(fallback.getTime() - fallback.getTimezoneOffset() * 60_000);
+      setScheduledAtLocal(local.toISOString().slice(0, 16));
+    }
     setNoteText("");
     setShowCustomNote(false);
     setError(null);
     setSending(false);
-  }, [open, sharedKey, initialSport, initialPlace]);
+  }, [open, sharedKey, initialSport, initialPlace, initialScheduledAt]);
 
   if (!open) return null;
 
@@ -81,7 +86,7 @@ export function ActivityProposalModal({
       : sport === "__other__"
         ? sportOther.trim()
         : sport.trim();
-  const canSubmit = Boolean(resolvedSport && when);
+  const canSubmit = Boolean(resolvedSport && scheduledAtLocal.trim().length > 0);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -91,10 +96,16 @@ export function ActivityProposalModal({
     }
     const fullMessage = formatActivityProposalNote({
       sport: resolvedSport,
-      when,
+      when: "other",
       place: place.trim(),
       userLine: noteText,
     });
+    const scheduledAtDate = new Date(scheduledAtLocal);
+    if (Number.isNaN(scheduledAtDate.getTime())) {
+      setError("Choisissez une date et une heure valides.");
+      return;
+    }
+    const scheduledAtIso = scheduledAtDate.toISOString();
     const pieces = [place.trim(), noteText.trim(), sportOther.trim(), resolvedSport];
     for (const p of pieces) {
       if (p && messageContainsDisallowedContent(p)) {
@@ -111,9 +122,10 @@ export function ActivityProposalModal({
     try {
       await onSubmit({
         sport: resolvedSport,
-        when,
+        when: "other",
         place: place.trim(),
         message: fullMessage,
+        scheduledAt: scheduledAtIso,
       });
       onClose();
     } catch (err) {
@@ -207,31 +219,15 @@ export function ActivityProposalModal({
           </div>
 
           <div>
-            <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-app-muted">
-              Moment
-            </span>
-            <div className="flex flex-wrap gap-2">
-              {WHEN_OPTIONS.map((o) => (
-                <button
-                  key={o.value}
-                  type="button"
-                  onClick={() => setWhen(o.value)}
-                  className={`rounded-full px-3.5 py-2 text-sm font-medium transition ${
-                    when === o.value
-                      ? "text-white shadow-sm"
-                      : "bg-app-border text-app-text hover:bg-app-border/90"
-                  }`}
-                  style={
-                    when === o.value ? { backgroundColor: BRAND_BG, color: TEXT_ON_BRAND } : undefined
-                  }
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-            <p className="mt-1.5 text-[13px] text-app-muted">
-              {whenLabelFr(when).charAt(0).toUpperCase() + whenLabelFr(when).slice(1)}
-            </p>
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-app-muted">
+              Date / heure
+            </label>
+            <input
+              type="datetime-local"
+              value={scheduledAtLocal}
+              onChange={(e) => setScheduledAtLocal(e.target.value)}
+              className="w-full rounded-xl border border-app-border bg-app-card px-3 py-3 text-[15px] text-app-text outline-none focus:ring-2 focus:ring-[#FF1E2D]/25"
+            />
           </div>
 
           <div>

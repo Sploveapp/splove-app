@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import {
   ACCESSIBILITY_PREF_ADAPTED_LABEL,
@@ -15,6 +15,7 @@ import { VerifiedBadge } from "../components/VerifiedBadge";
 import { collectPhotoRejectionUserMessages, isPhotoVerified } from "../lib/profileVerification";
 import {
   APP_BG,
+  APP_BORDER,
   APP_CARD,
   APP_TEXT,
   APP_TEXT_MUTED,
@@ -49,9 +50,6 @@ import {
   MESSAGE_BUBBLE_THEME_IDS,
   MESSAGE_BUBBLE_THEME_LABELS,
   getOwnMessageBubbleClassName,
-  loadMessageBubbleThemeFromStorage,
-  saveMessageBubbleThemeToStorage,
-  type MessageBubbleTheme,
 } from "../lib/messageBubbleTheme";
 
 export default function Profile() {
@@ -59,9 +57,6 @@ export default function Profile() {
   const { user, profile, refetchProfile } = useAuth();
   const mainPhoto = profile?.main_photo_url?.trim() || null;
   const [imageError, setImageError] = useState(false);
-  const [bubbleTheme, setBubbleTheme] = useState<MessageBubbleTheme>(() =>
-    loadMessageBubbleThemeFromStorage(),
-  );
   const [comingSoonOpen, setComingSoonOpen] = useState(false);
   const [needsAdaptedActivities, setNeedsAdaptedActivities] = useState(false);
   const [prefOpenToStandard, setPrefOpenToStandard] = useState(true);
@@ -77,8 +72,8 @@ export default function Profile() {
   const syncAccessibilityFromProfile = useCallback(() => {
     if (!profile) return;
     setNeedsAdaptedActivities(!!profile.needs_adapted_activities);
-    setPrefOpenToStandard(profile.pref_open_to_standard_activity !== false);
-    setPrefOpenToAdapted(profile.pref_open_to_adapted_activity !== false);
+    setPrefOpenToStandard(true);
+    setPrefOpenToAdapted(true);
   }, [profile]);
 
   useEffect(() => {
@@ -96,12 +91,6 @@ export default function Profile() {
       setLocRadius("");
     }
   }, [profile]);
-
-  useEffect(() => {
-    const onStorage = () => setBubbleTheme(loadMessageBubbleThemeFromStorage());
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
 
   useEffect(() => {
     if (!comingSoonOpen) return;
@@ -242,6 +231,26 @@ export default function Profile() {
         >
           Mon profil
         </h1>
+
+        <button
+          type="button"
+          onClick={() => navigate("/mes-rencontres")}
+          style={{
+            width: "100%",
+            marginBottom: "20px",
+            padding: "14px 16px",
+            borderRadius: "14px",
+            border: `1px solid ${APP_BORDER}`,
+            background: APP_CARD,
+            color: APP_TEXT,
+            fontSize: "15px",
+            fontWeight: 600,
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+        >
+          Mes rencontres
+        </button>
 
         {user && (
           <>
@@ -439,51 +448,59 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Ton style de discussion
+              Couleur de tes messages
             </h2>
             <p
               style={{
-                margin: "0 0 16px 0",
+                margin: "0 0 12px 0",
                 fontSize: "13px",
                 fontWeight: 500,
                 color: APP_TEXT_MUTED,
                 lineHeight: 1.45,
               }}
             >
-              Tes messages à toi ; le reste reste sobre.
+              Le style des bulles se choisit{" "}
+              <strong style={{ color: APP_TEXT, fontWeight: 600 }}>dans chaque conversation</strong>{" "}
+              : menu <span aria-hidden="true">⋮</span> en haut à droite, puis « Style de discussion ». Ce
+              n’est pas un réglage global du profil.
+            </p>
+            <p style={{ margin: "0 0 14px 0", fontSize: "13px", fontWeight: 500, color: APP_TEXT_MUTED }}>
+              <Link
+                to="/messages"
+                style={{ color: BRAND_BG, fontWeight: 600, textDecoration: "underline" }}
+              >
+                Ouvrir Mes messages
+              </Link>
+            </p>
+            <p
+              style={{
+                margin: "0 0 10px 0",
+                fontSize: "12px",
+                fontWeight: 600,
+                color: APP_TEXT_MUTED,
+                letterSpacing: "0.02em",
+                textTransform: "uppercase",
+              }}
+            >
+              Aperçu des styles (non appliqué ici)
             </p>
             <div
               className="grid grid-cols-2 gap-3 sm:grid-cols-3"
-              role="radiogroup"
-              aria-label="Style des bulles envoyées"
+              aria-hidden="true"
             >
-              {MESSAGE_BUBBLE_THEME_IDS.map((id) => {
-                const selected = bubbleTheme === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    onClick={() => {
-                      saveMessageBubbleThemeToStorage(id);
-                      setBubbleTheme(id);
-                    }}
-                    className={`flex flex-col items-stretch gap-2 rounded-xl border p-3 text-center transition ${
-                      selected
-                        ? "border-app-accent/40 bg-app-bg/95 ring-2 ring-app-accent/20"
-                        : "border-app-border/95 bg-app-card hover:bg-app-border/90"
-                    }`}
-                  >
-                    <div className="flex w-full min-w-0 justify-end">
-                      <div className={getOwnMessageBubbleClassName(id)}>Bonjour !</div>
-                    </div>
-                    <span className="text-center text-[12px] font-semibold text-app-text">
-                      {MESSAGE_BUBBLE_THEME_LABELS[id]}
-                    </span>
-                  </button>
-                );
-              })}
+              {MESSAGE_BUBBLE_THEME_IDS.map((id) => (
+                <div
+                  key={id}
+                  className="flex flex-col items-stretch gap-2 rounded-xl border border-app-border/95 bg-app-card p-3 text-center"
+                >
+                  <div className="flex w-full min-w-0 justify-end">
+                    <div className={getOwnMessageBubbleClassName(id)}>Bonjour !</div>
+                  </div>
+                  <span className="text-center text-[12px] font-semibold text-app-text">
+                    {MESSAGE_BUBBLE_THEME_LABELS[id]}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -828,6 +845,24 @@ export default function Profile() {
               <li style={{ marginBottom: "6px" }}>Signaler un comportement</li>
               <li>Ne plus voir quelqu’un</li>
             </ul>
+            <button
+              type="button"
+              onClick={() => navigate("/account-settings")}
+              style={{
+                marginTop: "16px",
+                width: "100%",
+                padding: "10px 14px",
+                borderRadius: "12px",
+                border: "none",
+                background: BRAND_BG,
+                color: TEXT_ON_BRAND,
+                fontSize: "14px",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Gérer mon compte
+            </button>
           </div>
 
           <button

@@ -1,3 +1,5 @@
+import { isAdultFromBirthIso } from "./ageGate";
+
 /**
  * Vérifications optionnelles côté client (ex. formulaires).
  *
@@ -10,8 +12,20 @@ export type ProfileCompletenessInput = {
   gender?: string | null;
   looking_for?: string | null;
   intent?: string | null;
+  city?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  discovery_radius_km?: number | null;
+  sport_time?: string | null;
+  sport_phrase?: string | null;
+  needs_adapted_activities?: boolean | null;
+  practice_preferences?: string[] | null;
+  onboarding_sports_count?: number | null;
+  onboarding_sports_with_level_count?: number | null;
   portrait_url?: string | null;
   fullbody_url?: string | null;
+  onboarding_completed?: boolean | null;
+  profile_completed?: boolean | null;
 };
 
 /** Indicatif : les champs typiques d’un profil « rempli » (pas la source de vérité pour les routes). */
@@ -32,4 +46,26 @@ export function isProfileComplete(
 ): boolean {
   if (!profile) return false;
   return computeProfileCompleted(profile);
+}
+
+export function isOnboardingComplete(profile: ProfileCompletenessInput | null | undefined): boolean {
+  if (!profile) return false;
+  const hasBaseIdentity = Boolean(
+    profile.first_name?.trim() &&
+      profile.birth_date &&
+      profile.gender &&
+      profile.looking_for &&
+      profile.intent
+  );
+  const hasLocation =
+    Boolean(profile.city?.trim() && profile.city.trim().length >= 2) ||
+    (typeof profile.latitude === "number" && typeof profile.longitude === "number");
+  const hasRadius = [10, 25, 50, 100].includes(Number(profile.discovery_radius_km ?? 0));
+  const isAdult = Boolean(profile.birth_date && isAdultFromBirthIso(profile.birth_date));
+  const hasPhotos = Boolean(profile.portrait_url?.trim() && profile.fullbody_url?.trim());
+  const hasPrompt = Boolean(profile.sport_phrase?.trim());
+  const sportsCount = Number(profile.onboarding_sports_count ?? 0);
+  const sportsWithIntensity = Number(profile.onboarding_sports_with_level_count ?? 0);
+  const hasSportsWithIntensity = sportsCount > 0 && sportsWithIntensity === sportsCount;
+  return hasBaseIdentity && isAdult && hasLocation && hasRadius && hasPhotos && hasPrompt && hasSportsWithIntensity;
 }

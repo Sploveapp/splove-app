@@ -41,6 +41,7 @@ export type MessageBubbleThemeStorageV1 = {
   theme: MessageBubbleTheme;
 };
 
+/** @deprecated Stockage global — plus utilisé par l’UI profil ; la couleur est par conversation (`chat-accent:`). */
 export const MESSAGE_BUBBLE_THEME_STORAGE_KEY = "splove.messageBubbleTheme.v1";
 export const MESSAGE_BUBBLE_THEME_CONVERSATION_STORAGE_PREFIX = "chat-accent:";
 

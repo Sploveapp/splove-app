@@ -7,9 +7,9 @@ import { insertBlock, isBlockedWith } from "../services/blocks.service";
 import { isPhotoVerified } from "../lib/profileVerification";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { IconSend } from "../components/ui/Icon";
-import { ActivityProposalBubble } from "../components/chat/ActivityProposalBubble";
+import { ActivityProposalCard } from "../components/ActivityProposalCard";
 import { ActivityResponseBubble } from "../components/chat/ActivityResponseBubble";
-import { ActivityProposalModal } from "../components/ActivityProposalModal";
+import { ActivityProposalComposer } from "../components/ActivityProposalComposer";
 import { ChatEmojiPicker } from "../components/ChatEmojiPicker";
 import { ChatPostMatchPanel } from "../components/ChatPostMatchPanel";
 import type { ActivityPayload } from "../lib/chatActivity";
@@ -34,6 +34,11 @@ import {
   getAvailableProposalActions,
 } from "../lib/messages/activityProposalRules";
 import { ensureConversationWindow } from "../lib/ensureConversationWindow";
+import {
+  ACTIVITY_PROPOSALS_SELECT,
+  ACTIVITY_PROPOSALS_SELECT_MINIMAL,
+  isMissingColumnError,
+} from "../lib/activityProposalsQuery";
 import {
   BLOCK_PROFILE_CONFIRM,
   BLOCK_PROFILE_LINK_LABEL,
@@ -114,13 +119,14 @@ type ProposalRow = {
   conversation_id: string;
   proposer_id: string;
   sport: string;
+  place?: string | null;
   time_slot: string;
   location: string | null;
+  counter_of?: string | null;
   note: string | null;
   created_at: string | null;
   status?: ProposalStatus | string | null;
   scheduled_at?: string | null;
-  match_id?: string | null;
   boost_awarded?: boolean | null;
   supersedes_proposal_id?: string | null;
   responded_by?: string | null;
@@ -160,7 +166,7 @@ function formatProposalWhenLine(p: ProposalRow): string {
       /* ignore */
     }
   }
-  return p.time_slot?.trim() || "Créneau à confirmer";
+  return p.time_slot?.trim() || "Date à confirmer";
 }
 
 function normalizeProposalStatus(p: ProposalRow): string {
@@ -182,20 +188,20 @@ function proposalStatusLabelFr(p: ProposalRow): string {
   if (s === "declined") return "Refusée";
   if (s === "expired") return "Expirée";
   if (s === "cancelled") return "Annulée";
-  if (s === "alternative_requested") return "Autre créneau demandé";
-  if (s === "replaced" || s === "countered") return "Créneau remplacé";
+  if (s === "alternative_requested") return "Autre activité demandée";
+  if (s === "replaced" || s === "countered") return "Contre-proposition envoyée";
   if (s === "pending" || s === "proposed") return "En attente de réponse";
-  return "Créneau";
+  return "Proposition";
 }
 
 /** Libellé figé sous la carte / le détail lorsque la proposition n’est plus modifiable. */
 function proposalFrozenStateLineFr(p: ProposalRow): string {
   const s = normalizeProposalStatus(p);
   if (s === "accepted") return "✅ Accepté";
-  if (s === "declined") return "Pas dispo pour ce créneau";
-  if (s === "expired") return "Créneau expiré";
-  if (s === "cancelled") return "Créneau annulé";
-  if (s === "countered" || s === "replaced") return "Créneau remplacé";
+  if (s === "declined") return "Pas dispo pour cette activité";
+  if (s === "expired") return "Proposition expirée";
+  if (s === "cancelled") return "Proposition annulée";
+  if (s === "countered" || s === "replaced") return "Contre-proposition envoyée";
   return proposalStatusLabelFr(p);
 }
 
@@ -218,6 +224,8 @@ export default function Chat() {
   const [proposalActionInFlightId, setProposalActionInFlightId] = useState<string | null>(null);
   /** Fin de fenêtre pour afficher « … est en train d’écrire » (partenaire uniquement). */
   const [partnerTypingUntil, setPartnerTypingUntil] = useState(0);
+  /** Table `conversation_typing` parfois absente — désactive upserts + realtime après erreur schéma. */
+  const [conversationTypingDisabled, setConversationTypingDisabled] = useState(false);
   const typingPulseTimerRef = useRef<number | null>(null);
   const typingStopTimerRef = useRef<number | null>(null);
   const [counterReplaceProposalId, setCounterReplaceProposalId] = useState<string | null>(null);
@@ -322,13 +330,30 @@ export default function Chat() {
 
   const reloadProposals = useCallback(async (cid: string) => {
     console.log("[Chat] reloadProposals: start", { conversationId: cid });
-    const { data, error } = await supabase
+    let data: unknown = null;
+    let error = null as { message?: string; code?: string } | null;
+    let usedSelect = ACTIVITY_PROPOSALS_SELECT;
+
+    const first = await supabase
       .from("activity_proposals")
-      .select(
-        "id, conversation_id, proposer_id, sport, time_slot, location, note, created_at, status, scheduled_at, match_id, boost_awarded, supersedes_proposal_id, responded_by, responded_at",
-      )
+      .select(ACTIVITY_PROPOSALS_SELECT)
       .eq("conversation_id", cid)
       .order("created_at", { ascending: true });
+
+    if (first.error && isMissingColumnError(first.error)) {
+      usedSelect = ACTIVITY_PROPOSALS_SELECT_MINIMAL;
+      const second = await supabase
+        .from("activity_proposals")
+        .select(ACTIVITY_PROPOSALS_SELECT_MINIMAL)
+        .eq("conversation_id", cid)
+        .order("created_at", { ascending: true });
+      data = second.data;
+      error = second.error;
+    } else {
+      data = first.data;
+      error = first.error;
+    }
+
     if (error) {
       console.error("[Chat] reloadProposals: select error", {
         conversationId: cid,
@@ -338,6 +363,8 @@ export default function Chat() {
       return;
     }
     const rows = (data as ProposalRow[]) ?? [];
+    console.log("[Chat] activity_proposals select (no match_id):", usedSelect);
+    console.log("[Chat] activity_proposals first row keys:", rows[0] ? Object.keys(rows[0] as object) : []);
     console.log("[Chat] reloadProposals: response", {
       conversationId: cid,
       rowCount: rows.length,
@@ -687,7 +714,7 @@ export default function Chat() {
   }, [conversationId, authLoading, reloadChatMessages]);
 
   const sendTypingStop = useCallback(async () => {
-    if (!conversationId || !user?.id) return;
+    if (!conversationId || !user?.id || conversationTypingDisabled) return;
     const { error } = await supabase.from("conversation_typing").upsert(
       {
         conversation_id: conversationId,
@@ -696,22 +723,39 @@ export default function Chat() {
       },
       { onConflict: "conversation_id,user_id" },
     );
-    if (error) console.warn("[Chat] conversation_typing stop", error);
-  }, [conversationId, user?.id]);
+    if (error) {
+      const msg = `${error.message ?? ""} ${(error as { code?: string }).code ?? ""}`.toLowerCase();
+      if (msg.includes("does not exist") || msg.includes("schema cache") || msg.includes("42p01")) {
+        setConversationTypingDisabled(true);
+        setPartnerTypingUntil(0);
+      } else {
+        console.warn("[Chat] conversation_typing stop", error);
+      }
+    }
+  }, [conversationId, user?.id, conversationTypingDisabled]);
 
   const scheduleTypingPulse = useCallback(() => {
-    if (!conversationId || !user?.id || pairBlocked) return;
+    if (!conversationId || !user?.id || pairBlocked || conversationTypingDisabled) return;
     if (typingPulseTimerRef.current != null) window.clearTimeout(typingPulseTimerRef.current);
     typingPulseTimerRef.current = window.setTimeout(() => {
       typingPulseTimerRef.current = null;
-      void supabase.from("conversation_typing").upsert(
-        {
-          conversation_id: conversationId,
-          user_id: user.id,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "conversation_id,user_id" },
-      );
+      void (async () => {
+        const { error } = await supabase.from("conversation_typing").upsert(
+          {
+            conversation_id: conversationId,
+            user_id: user.id,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "conversation_id,user_id" },
+        );
+        if (error) {
+          const msg = `${error.message ?? ""} ${(error as { code?: string }).code ?? ""}`.toLowerCase();
+          if (msg.includes("does not exist") || msg.includes("schema cache") || msg.includes("42p01")) {
+            setConversationTypingDisabled(true);
+            setPartnerTypingUntil(0);
+          }
+        }
+      })();
     }, TYPING_PULSE_DEBOUNCE_MS);
 
     if (typingStopTimerRef.current != null) window.clearTimeout(typingStopTimerRef.current);
@@ -719,7 +763,7 @@ export default function Chat() {
       typingStopTimerRef.current = null;
       void sendTypingStop();
     }, TYPING_IDLE_STOP_MS);
-  }, [conversationId, user?.id, pairBlocked, sendTypingStop]);
+  }, [conversationId, user?.id, pairBlocked, conversationTypingDisabled, sendTypingStop]);
 
   useEffect(() => {
     return () => {
@@ -731,7 +775,7 @@ export default function Chat() {
         window.clearTimeout(typingStopTimerRef.current);
         typingStopTimerRef.current = null;
       }
-      if (conversationId && user?.id) {
+      if (conversationId && user?.id && !conversationTypingDisabled) {
         void supabase.from("conversation_typing").upsert(
           {
             conversation_id: conversationId,
@@ -742,10 +786,10 @@ export default function Chat() {
         );
       }
     };
-  }, [conversationId, user?.id]);
+  }, [conversationId, user?.id, conversationTypingDisabled]);
 
   useEffect(() => {
-    if (!conversationId || authLoading || !user?.id) return;
+    if (!conversationId || authLoading || !user?.id || conversationTypingDisabled) return;
     const filter = `conversation_id=eq.${conversationId}`;
     const channel = supabase
       .channel(`conversation_typing:${conversationId}`)
@@ -769,7 +813,7 @@ export default function Chat() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [conversationId, authLoading, user?.id]);
+  }, [conversationId, authLoading, user?.id, conversationTypingDisabled]);
 
   useEffect(() => {
     if (partnerTypingUntil <= 0) return;
@@ -949,7 +993,14 @@ export default function Chat() {
       throw new Error(SAFETY_CONTENT_REFUSAL);
     }
 
-    const { timeLabel } = computeProposalSchedule(payload.when);
+    const fallbackSchedule = computeProposalSchedule(payload.when);
+    const scheduledAtIso = payload.scheduledAt?.trim() || fallbackSchedule.scheduledAt;
+    const timeLabel = (() => {
+      if (!scheduledAtIso) return fallbackSchedule.timeLabel;
+      const d = new Date(scheduledAtIso);
+      if (Number.isNaN(d.getTime())) return fallbackSchedule.timeLabel;
+      return d.toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" });
+    })();
     const loc = payload.place.trim() || "À définir";
 
     if (replaceProposalId) {
@@ -983,6 +1034,7 @@ export default function Chat() {
           timeSlot: timeLabel,
           location: loc,
           note: payload.message.trim() || null,
+          scheduledAt: scheduledAtIso,
         });
         if ("error" in res) throw new Error(res.error.message || genericProposalError());
       } else {
@@ -993,6 +1045,7 @@ export default function Chat() {
           timeSlot: timeLabel,
           location: loc,
           note: payload.message.trim() || null,
+          scheduledAt: scheduledAtIso,
         });
         if ("error" in res) throw new Error(res.error.message || genericProposalError());
       }
@@ -1409,7 +1462,7 @@ export default function Chat() {
                   className="mt-3 w-full rounded-xl py-2.5 text-[13px] font-bold shadow-sm transition hover:opacity-95"
                   style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
                 >
-                  {hasPendingProposal ? "Créneau en cours" : "Proposer une activité"}
+                  {hasPendingProposal ? "Proposition en cours" : "Proposer une activité"}
                 </button>
               </>
             ) : chatSessionPhase === "active_chat" ? (
@@ -1533,7 +1586,7 @@ export default function Chat() {
                 const p = item.proposal;
                 const mine = p.proposer_id === user?.id;
                 return (
-                  <ActivityProposalBubble
+                  <ActivityProposalCard
                     key={item.sortKey}
                     proposal={p}
                     currentUserId={user?.id}
@@ -1548,7 +1601,7 @@ export default function Chat() {
                       setCounterReplaceProposalId(p.id);
                       setCounterPrefill({
                         sport: p.sport?.trim() || "",
-                        place: p.location?.trim() || "",
+                        place: p.place?.trim() || p.location?.trim() || "",
                       });
                       setModalOpen(true);
                     }}
@@ -1658,7 +1711,7 @@ export default function Chat() {
               disabled={pairBlocked}
               className="w-full rounded-xl border border-app-border bg-app-card py-3 text-sm font-semibold text-app-text shadow-sm transition hover:bg-app-border disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Proposer un créneau
+              Proposer une activité
             </button>
           )}
         </div>
@@ -1680,7 +1733,7 @@ export default function Chat() {
           >
             <div className="border-b border-app-border/80 px-4 py-3">
               <h2 id="proposal-detail-title" className="text-base font-bold text-app-text">
-                Détail du créneau
+                Détail de la proposition
               </h2>
               {proposalDetail.supersedes_proposal_id ? (
                 <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-[#FF1E2D]/90">
@@ -1720,7 +1773,7 @@ export default function Chat() {
               ) : null}
               {user?.id && isCounterProposedModalStatus(proposalDetail.status) ? (
                 <div className="rounded-xl border border-app-border/80 bg-app-bg/80 px-3 py-2.5 text-[13px] leading-snug">
-                  <p className="font-semibold text-app-muted">🔁 Nouveau créneau proposé</p>
+                  <p className="font-semibold text-app-muted">🔁 Contre-proposition envoyée</p>
                 </div>
               ) : null}
               {user?.id && proposalDetailActions?.cancel ? (
@@ -1780,14 +1833,14 @@ export default function Chat() {
                         setCounterReplaceProposalId(proposalDetail.id);
                         setCounterPrefill({
                           sport: proposalDetail.sport?.trim() || "",
-                          place: proposalDetail.location?.trim() || "",
+                          place: proposalDetail.place?.trim() || proposalDetail.location?.trim() || "",
                         });
                         setProposalDetail(null);
                         setModalOpen(true);
                       }}
                       className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border disabled:opacity-50"
                     >
-                      Autre
+                      🔁 Proposer autre
                     </button>
                   ) : null}
                 </div>
@@ -1819,7 +1872,7 @@ export default function Chat() {
         </div>
       ) : null}
 
-      <ActivityProposalModal
+      <ActivityProposalComposer
         open={modalOpen}
         onClose={() => {
           setCounterReplaceProposalId(null);
@@ -1830,7 +1883,7 @@ export default function Chat() {
         titleOverride={counterReplaceProposalId ? "Contre-proposition" : undefined}
         descriptionOverride={
           counterReplaceProposalId
-            ? "Proposez un autre créneau. La nouvelle proposition remplace la précédente dans la conversation."
+            ? "Proposez une autre activité. La nouvelle proposition remplace la précédente dans la conversation."
             : undefined
         }
         submitLabel={counterReplaceProposalId ? "Envoyer la nouvelle proposition" : undefined}
@@ -1848,6 +1901,7 @@ export default function Chat() {
         }
         initialSport={counterPrefill?.sport}
         initialPlace={counterPrefill?.place}
+        initialScheduledAt={counterReplaceProposalId ? (proposals.find((x) => x.id === counterReplaceProposalId)?.scheduled_at ?? undefined) : undefined}
         onSubmit={async (p) => {
           await sendActivity(p, counterReplaceProposalId);
           setCounterReplaceProposalId(null);

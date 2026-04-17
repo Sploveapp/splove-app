@@ -35,7 +35,9 @@ export function sportMatchKey(
     return `g:${LABEL_TO_MATCH_GROUP[lab]}`;
   }
   if (s) return `s:${s}`;
-  return `l:${lab}`;
+  /** Même préfixe que le slug (`s:…`) pour que deux profils avec le même mot (ex. skate) matchent même si l’un n’a que le libellé en base et l’autre le slug. */
+  if (lab) return `s:${lab}`;
+  return "s:";
 }
 
 type SportRow = { slug?: string | null; label?: string | null };
@@ -62,10 +64,12 @@ export function getSharedSportLabelsForMatch(
   const out: string[] = [];
   for (const ps of list) {
     const sp = ps.sports;
-    const label = sp?.label?.trim();
-    if (!label) continue;
+    if (!sp) continue;
     const k = sportMatchKey(sp?.slug ?? null, sp?.label ?? null);
-    if (myMatchKeys.has(k)) out.push(label);
+    if (!myMatchKeys.has(k)) continue;
+    const display =
+      (sp.label ?? "").trim() || (sp.slug ?? "").trim() || "Sport";
+    out.push(display);
   }
   return out.sort((a, b) => a.localeCompare(b, "fr"));
 }

@@ -5,13 +5,7 @@ ALTER TABLE public.activity_proposals
   ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
--- Backfill from conversation when possible.
-UPDATE public.activity_proposals ap
-SET match_id = m.id
-FROM public.matches m
-WHERE ap.match_id IS NULL
-  AND ap.conversation_id IS NOT NULL
-  AND m.conversation_id = ap.conversation_id;
+-- Backfill skipped: matches has no conversation_id column in this schema.
 
 -- Backfill placeholder schedule and place for existing rows.
 UPDATE public.activity_proposals
@@ -62,10 +56,7 @@ CREATE POLICY "activity_proposals_select_authenticated"
       SELECT 1
       FROM public.matches m
       WHERE (m.id = activity_proposals.match_id)
-         OR (
-           activity_proposals.conversation_id IS NOT NULL
-           AND m.conversation_id = activity_proposals.conversation_id
-         )
+         
         AND (auth.uid() = m.user_a OR auth.uid() = m.user_b)
     )
   );
@@ -81,10 +72,7 @@ CREATE POLICY "activity_proposals_insert_authenticated"
       SELECT 1
       FROM public.matches m
       WHERE (m.id = activity_proposals.match_id)
-         OR (
-           activity_proposals.conversation_id IS NOT NULL
-           AND m.conversation_id = activity_proposals.conversation_id
-         )
+        -- conversation fallback disabled (no conversation_id on matches)
         AND (auth.uid() = m.user_a OR auth.uid() = m.user_b)
     )
   );
@@ -101,10 +89,7 @@ CREATE POLICY "activity_proposals_update_authenticated"
       SELECT 1
       FROM public.matches m
       WHERE (m.id = activity_proposals.match_id)
-         OR (
-           activity_proposals.conversation_id IS NOT NULL
-           AND m.conversation_id = activity_proposals.conversation_id
-         )
+         
         AND (auth.uid() = m.user_a OR auth.uid() = m.user_b)
     )
   )

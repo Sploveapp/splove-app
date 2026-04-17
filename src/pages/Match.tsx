@@ -10,6 +10,7 @@ import { COPY_BANNER_48H, computeProposalSchedule, touchMatchOpenedAt } from "..
 import { matchMomentumLine } from "../lib/discoverCardCopy";
 import { ensureConversationWindow } from "../lib/ensureConversationWindow";
 import { BETA_MODE } from "../constants/beta";
+import { buildCreateActivityProposalRpcArgs } from "../lib/messages/activityProposalMutations";
 
 export type MatchLocationState = {
   partnerFirstName?: string | null;
@@ -74,6 +75,7 @@ export default function Match() {
 
   async function sendActivity(payload: ActivityPayload) {
     if (!user?.id) throw new Error("Non connecté");
+    if (!conversationId) throw new Error("Conversation introuvable.");
     const { timeLabel } = computeProposalSchedule(payload.when);
     console.log("[Activity] create proposal", {
       conversation_id: conversationId,
@@ -83,13 +85,16 @@ export default function Match() {
       note: payload.message.trim() || null,
     });
     console.log("[Chat] création activité", { conversationId, timeSlot: timeLabel });
-    const { error: proposalErr } = await supabase.rpc("create_activity_proposal", {
-      p_conversation_id: conversationId,
-      p_sport: payload.sport,
-      p_time_slot: timeLabel,
-      p_location: payload.place.trim() || "À définir",
-      p_note: payload.message.trim() || null,
-    });
+    const { error: proposalErr } = await supabase.rpc(
+      "create_activity_proposal",
+      buildCreateActivityProposalRpcArgs({
+        conversationId,
+        sport: payload.sport,
+        timeSlot: timeLabel,
+        location: payload.place.trim() || "À définir",
+        note: payload.message.trim() || null,
+      }),
+    );
     if (proposalErr) {
       console.error("[Chat] création activité erreur", proposalErr);
       throw new Error(proposalErr.message);

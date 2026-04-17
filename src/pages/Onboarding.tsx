@@ -1,21 +1,17 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { env } from "../lib/env";
 import { useAuth } from "../contexts/AuthContext";
 import { GlobalHeader } from "../components/GlobalHeader";
 import {
-  ACCESSIBILITY_PREF_ADAPTED_LABEL,
-  ACCESSIBILITY_PREF_BOTH_REQUIRED,
-  ACCESSIBILITY_PREF_STANDARD_LABEL,
-  ACCESSIBILITY_SECTION_INTRO,
-  ACCESSIBILITY_SELF_LABEL,
   ONBOARDING_AVATAR_REQUIRED,
   ONBOARDING_FULLBODY_REQUIRED,
   ONBOARDING_PHOTO_COMPLIANCE_LABEL,
-  SAFETY_CONTENT_REFUSAL,
 } from "../constants/copy";
 import { bioPublicTextViolatesPolicy } from "../lib/contentModeration";
 import { isAdultFromBirthIso } from "../lib/ageGate";
+import { isOnboardingComplete } from "../lib/profileCompleteness";
 import {
   PROFILE_UPSERT_ONBOARDING_SELECT,
   PROFILE_UPSERT_ONBOARDING_SELECT_CORE,
@@ -66,12 +62,200 @@ const SPORT_MOTIVATION_OPTIONS = [
   "Se vider la tête",
   "La performance",
 ] as const;
+const SPORT_INTENSITY_OPTIONS = [
+  { value: "chill", label: "Chill" },
+  { value: "regular", label: "Regular" },
+  { value: "intense", label: "Intense" },
+] as const;
+const PRACTICE_PREFERENCE_OPTIONS = [
+  { value: "gentle_activities", label: "Activités douces" },
+  { value: "slow_pace", label: "Rythme calme" },
+  { value: "accessible_venue", label: "Lieu accessible" },
+  { value: "avoid_stairs", label: "Éviter les escaliers" },
+  { value: "low_impact", label: "Faible impact" },
+  { value: "discuss_case_by_case", label: "En discuter au cas par cas" },
+] as const;
 
 const SPORT_PHRASE_MAX_LENGTH = 120;
+const OPTIONAL_PROFILE_WARNING_MESSAGE =
+  "Certaines données optionnelles n’ont pas pu être enregistrées, mais vous pouvez continuer.";
+const SPORT_PHRASE_EXTERNAL_CONTACT_ERROR =
+  "Les coordonnées, réseaux sociaux et moyens de contact externes ne sont pas autorisés.";
+const OPTIONAL_PROFILE_COLUMNS = [
+  "onboarding_sports_count",
+  "onboarding_sports_with_level_count",
+  "location_source",
+] as const;
 
-/** Valeurs BDD : UI « Amour » → Amoureux */
+function isMissingOptionalProfileColumnError(
+  error: { code?: string | number; message?: string } | null | undefined,
+  columnName: (typeof OPTIONAL_PROFILE_COLUMNS)[number]
+): boolean {
+  return isUndefinedColumnError(error, columnName);
+}
+
+function getMissingOptionalProfileColumns(
+  error: { code?: string | number; message?: string } | null | undefined
+): (typeof OPTIONAL_PROFILE_COLUMNS)[number][] {
+  return OPTIONAL_PROFILE_COLUMNS.filter((columnName) =>
+    isMissingOptionalProfileColumnError(error, columnName)
+  );
+}
+
+function stripOptionalProfileColumnsFromPayload(
+  payload: Record<string, unknown>,
+  columns: readonly (typeof OPTIONAL_PROFILE_COLUMNS)[number][]
+): Record<string, unknown> {
+  const next = { ...payload };
+  for (const columnName of columns) {
+    delete (next as Record<string, unknown>)[columnName];
+  }
+  return next;
+}
+
+function stripOptionalColumnsFromSelect(select: string): string {
+  const optional = new Set<string>(OPTIONAL_PROFILE_COLUMNS);
+  return select
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part && !optional.has(part))
+    .join(", ");
+}
+
+function extractFaultyColumnNameFromPostgrestMessage(message: string | undefined): string | null {
+  if (!message) return null;
+  const m =
+    message.match(/Could not find the '([^']+)' column/i) ??
+    message.match(/column\s+["']?([a-zA-Z0-9_]+)["']?\s+does not exist/i);
+  return m?.[1] ?? null;
+}
+
+/** Ordre de retrait défensif + mapping legacy (schéma mixte prod). */
+const PROD_SANITIZE_AGGRESSIVE_STRIP_ORDER = [
+  "practice_preferences",
+  "looking_for",
+  "sport_time",
+  "main_photo_url",
+  "portrait_url",
+  "fullbody_url",
+] as const;
+
+type ProdPayloadSanitizeContext = {
+  interestedIn: string;
+  sportTime: string;
+  practicePreferences: string[];
+  portraitUrl: string;
+  fullbodyUrl: string;
+};
+
+function applyLegacyMappingAfterRemoval(
+  removedKey: string,
+  next: Record<string, unknown>,
+  ctx: ProdPayloadSanitizeContext
+): void {
+  switch (removedKey) {
+    case "practice_preferences":
+      next.accessibility_tags = ctx.practicePreferences;
+      break;
+    case "looking_for":
+      next.interested_in = ctx.interestedIn;
+      break;
+    case "sport_time":
+      next.sport_time_pref = ctx.sportTime || null;
+      break;
+    case "portrait_url":
+      next.avatar_url = ctx.portraitUrl;
+      break;
+    case "fullbody_url":
+      next.photo2_path = ctx.fullbodyUrl;
+      break;
+    case "main_photo_url":
+      if (next.avatar_url == null || String(next.avatar_url).trim() === "") {
+        next.avatar_url = ctx.portraitUrl;
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * Retire une colonne faute (message PostgREST) ou une colonne « risquée » par phase agressive,
+ * puis applique le mapping legacy quand c’est pertinent.
+ */
+function sanitizeProfilesPayloadForProd(
+  payload: Record<string, unknown>,
+  errorMessage: string | undefined,
+  ctx: ProdPayloadSanitizeContext,
+  aggressivePhase: number
+): Record<string, unknown> {
+  const next = { ...payload };
+  if (aggressivePhase < 0) {
+    const faulty = extractFaultyColumnNameFromPostgrestMessage(errorMessage);
+    if (faulty) {
+      delete next[faulty];
+      applyLegacyMappingAfterRemoval(faulty, next, ctx);
+    }
+    return next;
+  }
+  const key = PROD_SANITIZE_AGGRESSIVE_STRIP_ORDER[aggressivePhase];
+  if (key) {
+    delete next[key];
+    applyLegacyMappingAfterRemoval(key, next, ctx);
+  }
+  return next;
+}
+
+/** Valeurs BDD existantes (`profiles.intent`) — ne pas casser Discover/Matching. */
 const INTENT_DB_AMOUR = "Amoureux";
 const INTENT_DB_AMICAL = "Amical";
+
+type OnboardingIntentUiValue = "activity_first" | "open_to_dating" | "open";
+
+type OnboardingIntentCard = {
+  uiValue: OnboardingIntentUiValue;
+  title: string;
+  text: string;
+};
+
+const ONBOARDING_INTENT_CARDS: OnboardingIntentCard[] = [
+  {
+    uiValue: "activity_first",
+    title: "Autour d’une activité, sans pression",
+    text: "On se rencontre, on bouge, et on voit le feeling.",
+  },
+  {
+    uiValue: "open_to_dating",
+    title: "Avec une vraie ouverture à la rencontre",
+    text: "Je suis là pour rencontrer quelqu’un… naturellement.",
+  },
+  {
+    uiValue: "open",
+    title: "Je préfère rester ouvert(e)",
+    text: "Je laisse la rencontre me surprendre.",
+  },
+];
+
+/** Lecture robuste legacy -> carte UI (legacy historique inclus : dating/friendly/both). */
+function uiIntentFromDbIntent(dbValue: unknown): OnboardingIntentUiValue | "" {
+  if (typeof dbValue !== "string") return "";
+  const raw = dbValue.trim();
+  if (!raw) return "";
+  const norm = raw.toLowerCase();
+  if (norm === "friendly" || norm === "amical") return "activity_first";
+  if (norm === "dating" || norm === "amoureux") return "open_to_dating";
+  if (norm === "both") return "open";
+  if (norm === "activity_first" || norm === "open_to_dating" || norm === "open") return norm;
+  return "";
+}
+
+/** Écriture carte UI -> valeur BDD existante (`profiles.intent`). */
+function dbIntentFromUiIntent(uiValue: string): string {
+  if (uiValue === "open_to_dating") return INTENT_DB_AMOUR;
+  if (uiValue === "activity_first") return INTENT_DB_AMICAL;
+  if (uiValue === "open") return INTENT_DB_AMICAL;
+  return "";
+}
 
 type SportOption = { id: string | number; name: string; slug?: string };
 
@@ -167,11 +351,36 @@ async function uploadOnboardingPhoto(
   const ext =
     file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
   const path = `${userId}/${kind}-${Date.now()}.${ext}`;
+  console.log("[Onboarding submit] sending data:", {
+    step: `upload photo ${kind}`,
+    bucket: PHOTO_BUCKET,
+    path,
+    mimeType: file.type || `image/${ext}`,
+    sizeBytes: file.size,
+  });
   const { error } = await supabase.storage.from(PHOTO_BUCKET).upload(path, file, {
     upsert: true,
     contentType: file.type || `image/${ext}`,
   });
-  if (error) throw error;
+  if (error) {
+    console.error("[Onboarding submit] error:", {
+      step: `upload photo ${kind}`,
+      bucket: PHOTO_BUCKET,
+      path,
+      message: error.message,
+      code: (error as { code?: string }).code,
+      details: (error as { details?: string }).details,
+      hint: (error as { hint?: string }).hint,
+      error,
+    });
+    throw error;
+  }
+  console.log("[Onboarding submit] result:", {
+    step: `upload photo ${kind}`,
+    ok: true,
+    bucket: PHOTO_BUCKET,
+    path,
+  });
   const { data } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
   return data.publicUrl;
 }
@@ -299,7 +508,7 @@ export default function Onboarding() {
   const [birthDate, setBirthDate] = useState("");
   const [gender, setGender] = useState("");
   const [interestedIn, setInterestedIn] = useState("");
-  const [intent, setIntent] = useState("");
+  const [intent, setIntent] = useState<OnboardingIntentUiValue | "">("");
   const [obLocCity, setObLocCity] = useState("");
   const [obLocRadiusKm, setObLocRadiusKm] = useState<number>(25);
   const [obLocLat, setObLocLat] = useState<number | null>(null);
@@ -308,15 +517,14 @@ export default function Onboarding() {
   const [obLocGeoLoading, setObLocGeoLoading] = useState(false);
   const [sportOptions, setSportOptions] = useState<SportOption[]>([]);
   const [selectedSportIds, setSelectedSportIds] = useState<(string | number)[]>([]);
+  const [sportLevelsById, setSportLevelsById] = useState<Record<string, string>>({});
   const [sportTime, setSportTime] = useState("");
   const [sportMotivations, setSportMotivations] = useState<string[]>([]);
   const [sportPhrase, setSportPhrase] = useState("");
   const [portraitFile, setPortraitFile] = useState<File | null>(null);
   const [bodyFile, setBodyFile] = useState<File | null>(null);
   const [photoComplianceConfirmed, setPhotoComplianceConfirmed] = useState(false);
-  const [needsAdaptedActivities, setNeedsAdaptedActivities] = useState(false);
-  const [prefOpenToStandardActivity, setPrefOpenToStandardActivity] = useState(true);
-  const [prefOpenToAdaptedActivity, setPrefOpenToAdaptedActivity] = useState(true);
+  const [practicePreferences, setPracticePreferences] = useState<string[]>([]);
   const [confirm18, setConfirm18] = useState(false);
   const [acceptTerms, setAcceptTerms] = useState(false);
 
@@ -324,8 +532,120 @@ export default function Onboarding() {
   const [loadingSports, setLoadingSports] = useState(true);
   const [sportsLoadError, setSportsLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [optionalProfileWarning, setOptionalProfileWarning] = useState<string | null>(null);
+  const [hydratingDraft, setHydratingDraft] = useState(false);
+  const hydratedDraftRef = useRef(false);
+
+  function logDetailedError(
+    step: string,
+    error: unknown,
+    extra?: Record<string, unknown>
+  ): void {
+    const maybe = error as {
+      message?: string;
+      code?: string | number;
+      details?: string;
+      hint?: string;
+    } | null;
+    console.error("[Onboarding submit] error:", {
+      step,
+      ...extra,
+      message: maybe?.message,
+      code: maybe?.code,
+      details: maybe?.details,
+      hint: maybe?.hint,
+      error,
+    });
+  }
 
   const SPORTS_FETCH_TIMEOUT_MS = 10_000;
+
+  async function saveOnboardingDraft(currentStep: number): Promise<void> {
+    if (!user?.id) return;
+    const userId = user.id;
+    try {
+      const nowIso = new Date().toISOString();
+      const payload: Record<string, unknown> = {
+        id: userId,
+        updated_at: nowIso,
+      };
+      if (currentStep >= 1) {
+        payload.first_name = firstName.trim() || null;
+        payload.birth_date = birthDate || null;
+        payload.gender = gender || null;
+        payload.looking_for = interestedIn || null;
+        payload.intent = intent ? dbIntentFromUiIntent(intent) : null;
+      }
+      if (currentStep >= 2) {
+        payload.city = obLocCity.trim() || null;
+        payload.latitude = obLocLat;
+        payload.longitude = obLocLng;
+        payload.discovery_radius_km = obLocRadiusKm;
+        payload.location_source = (obLocSource ?? (obLocCity.trim() ? "manual" : null)) as
+          | "manual"
+          | "device"
+          | null;
+        payload.location_updated_at = nowIso;
+      }
+      if (currentStep >= 4) {
+        payload.sport_time = sportTime || null;
+        payload.sport_motivation = sportMotivations.length > 0 ? sportMotivations : null;
+      }
+      if (currentStep >= 5) {
+        payload.sport_phrase = sportPhrase.trim() ? sportPhrase.trim().slice(0, SPORT_PHRASE_MAX_LENGTH) : null;
+      }
+      if (currentStep >= 8) payload.practice_preferences = practicePreferences;
+      payload.onboarding_sports_count = selectedSportIds.length;
+      payload.onboarding_sports_with_level_count = selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length;
+
+      let { error: upsertError } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+      if (upsertError) {
+        const missingColumns = getMissingOptionalProfileColumns(upsertError);
+        if (missingColumns.length > 0) {
+          console.warn("[Onboarding draft] optional columns missing, retrying without columns", {
+            missingColumns,
+            code: upsertError.code,
+            message: upsertError.message,
+          });
+          const fallbackPayload = stripOptionalProfileColumnsFromPayload(payload, missingColumns);
+          ({ error: upsertError } = await supabase.from("profiles").upsert(fallbackPayload, {
+            onConflict: "id",
+          }));
+          if (upsertError) {
+            console.warn("[Onboarding draft] save fallback failed", upsertError);
+          }
+        }
+      }
+      if (upsertError) {
+        console.warn("[Onboarding draft] save failed", upsertError);
+      }
+
+      if (currentStep >= 3) {
+        const validSportIds = selectedSportIds.filter(
+          (id) => typeof id === "number" || (typeof id === "string" && !String(id).startsWith("fallback-"))
+        );
+        const { error: delErr } = await supabase.from("profile_sports").delete().eq("profile_id", userId);
+        if (delErr) {
+          console.warn("[Onboarding draft] profile_sports delete failed", delErr);
+          return;
+        }
+        if (validSportIds.length > 0) {
+          const { error: insErr } = await supabase
+            .from("profile_sports")
+            .insert(
+              validSportIds.map((sportId) => ({
+                profile_id: userId,
+                sport_id: sportId,
+                level: sportLevelsById[String(sportId)] ?? null,
+              }))
+            );
+          if (insErr) console.warn("[Onboarding draft] profile_sports insert failed", insErr);
+        }
+      }
+    } catch (draftErr) {
+      console.warn("[Onboarding draft] unexpected save error", draftErr);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -425,6 +745,102 @@ export default function Onboarding() {
   }, [step, loadingSports, sportOptions.length, selectedSportIds, sportsLoadError, error]);
 
   useEffect(() => {
+    if (!user?.id || authLoading || hydratedDraftRef.current) return;
+    const userId = user.id;
+    let cancelled = false;
+    async function hydrateDraft() {
+      setHydratingDraft(true);
+      try {
+        let profileSelect =
+          "first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_motivation, sport_phrase, practice_preferences";
+        let { data: p, error: profileErr } = await supabase
+          .from("profiles")
+          .select(profileSelect)
+          .eq("id", userId)
+          .maybeSingle();
+        if (profileErr && isUndefinedColumnError(profileErr, "practice_preferences")) {
+          console.warn("[Onboarding draft] hydrate fallback without practice_preferences");
+          profileSelect =
+            "first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_motivation, sport_phrase";
+          ({ data: p, error: profileErr } = await supabase
+            .from("profiles")
+            .select(profileSelect)
+            .eq("id", userId)
+            .maybeSingle());
+        }
+        if (profileErr) {
+          const missingColumns = getMissingOptionalProfileColumns(profileErr);
+          if (missingColumns.length > 0) {
+            console.warn("[Onboarding draft] hydrate select optional columns missing, retrying", {
+              missingColumns,
+              code: profileErr.code,
+              message: profileErr.message,
+            });
+            profileSelect = stripOptionalColumnsFromSelect(profileSelect);
+            ({ data: p, error: profileErr } = await supabase
+              .from("profiles")
+              .select(profileSelect)
+              .eq("id", userId)
+              .maybeSingle());
+          }
+        }
+        if (profileErr) {
+          console.warn("[Onboarding draft] hydrate profile failed", profileErr);
+          return;
+        }
+        if (cancelled || !p || typeof p !== "object") return;
+        const row = p as Record<string, unknown>;
+        setFirstName(String(row.first_name ?? ""));
+        const isoBirth = typeof row.birth_date === "string" ? row.birth_date : "";
+        setBirthDate(isoBirth);
+        if (isoBirth.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          const [y, m, d] = isoBirth.split("-");
+          setBirthInput(`${d}/${m}/${y}`);
+        }
+        setGender(String(row.gender ?? ""));
+        setInterestedIn(String(row.looking_for ?? ""));
+        setIntent(uiIntentFromDbIntent(row.intent));
+        setObLocCity(String(row.city ?? ""));
+        setObLocLat(typeof row.latitude === "number" ? row.latitude : null);
+        setObLocLng(typeof row.longitude === "number" ? row.longitude : null);
+        setObLocRadiusKm(
+          typeof row.discovery_radius_km === "number" && [10, 25, 50, 100].includes(row.discovery_radius_km)
+            ? row.discovery_radius_km
+            : 25
+        );
+        const src = row.location_source;
+        setObLocSource(src === "manual" || src === "device" ? src : null);
+        setSportTime(String(row.sport_time ?? ""));
+        setSportMotivations(Array.isArray(row.sport_motivation) ? (row.sport_motivation as string[]) : []);
+        setSportPhrase(String(row.sport_phrase ?? ""));
+        setPracticePreferences(Array.isArray(row.practice_preferences) ? (row.practice_preferences as string[]) : []);
+
+        const { data: ps, error: sportErr } = await supabase
+          .from("profile_sports")
+          .select("sport_id, level")
+          .eq("profile_id", userId);
+        if (!cancelled && !sportErr && ps) {
+          const rows = ps as { sport_id: string | number; level?: string | null }[];
+          setSelectedSportIds(rows.map((x) => x.sport_id));
+          const levels: Record<string, string> = {};
+          for (const rowSport of rows) {
+            const lv = (rowSport.level ?? "").trim();
+            if (lv) levels[String(rowSport.sport_id)] = lv;
+          }
+          setSportLevelsById(levels);
+        }
+      } finally {
+        hydratedDraftRef.current = true;
+        if (!cancelled) setHydratingDraft(false);
+      }
+    }
+    void hydrateDraft();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, authLoading]);
+
+  useEffect(() => {
     console.log("[Onboarding] authLoading / user", {
       authLoading,
       userId: user?.id ?? null,
@@ -501,8 +917,6 @@ export default function Onboarding() {
     confirm18,
     acceptTerms,
     photoComplianceConfirmed,
-    prefOpenToStandardActivity,
-    prefOpenToAdaptedActivity,
   ]);
 
   if (authLoading) {
@@ -531,9 +945,11 @@ export default function Onboarding() {
     locationReady &&
     selectedSportIds.length >= 1 &&
     selectedSportIds.length <= 3 &&
+    selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)])) &&
+    sportPhrase.trim().length > 0 &&
+    !bioPublicTextViolatesPolicy(sportPhrase) &&
     portraitFile != null &&
     bodyFile != null &&
-    (prefOpenToStandardActivity || prefOpenToAdaptedActivity) &&
     photoComplianceConfirmed &&
     confirm18 &&
     acceptTerms;
@@ -552,11 +968,15 @@ export default function Onboarding() {
     }
     if (selectedSportIds.length < 1) return "Sélectionnez au moins 1 sport (étape sports).";
     if (selectedSportIds.length > 3) return "Maximum 3 sports.";
+    if (!selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)]))) {
+      return "Renseignez une intensité pour chaque sport sélectionné.";
+    }
+    if (sportPhrase.trim().length === 0) return "Ajoutez une phrase de profil (étape 5).";
+    if (bioPublicTextViolatesPolicy(sportPhrase)) {
+      return SPORT_PHRASE_EXTERNAL_CONTACT_ERROR;
+    }
     if (portraitFile == null) return "Ajoutez une photo portrait (étape 5).";
     if (bodyFile == null) return "Ajoutez une photo en pied (étape 6).";
-    if (!prefOpenToStandardActivity && !prefOpenToAdaptedActivity) {
-      return ACCESSIBILITY_PREF_BOTH_REQUIRED;
-    }
     if (!confirm18) return "Cochez la confirmation « 18 ans ou plus ».";
     if (!acceptTerms) return "Acceptez les conditions d’utilisation et la politique de confidentialité.";
     if (!photoComplianceConfirmed) {
@@ -666,12 +1086,20 @@ export default function Onboarding() {
         setStepHint("Maximum 3 sports.");
         return false;
       }
+      if (!selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)]))) {
+        setStepHint("Choisissez une intensité pour chaque sport sélectionné.");
+        return false;
+      }
       return true;
     }
     if (current === 5) {
       const t = sportPhrase.trim();
+      if (!t) {
+        setSportPhraseContactError("Ajoutez une phrase de profil.");
+        return false;
+      }
       if (t.length > 0 && bioPublicTextViolatesPolicy(sportPhrase)) {
-        setSportPhraseContactError(SAFETY_CONTENT_REFUSAL);
+        setSportPhraseContactError(SPORT_PHRASE_EXTERNAL_CONTACT_ERROR);
         return false;
       }
       setSportPhraseContactError(null);
@@ -697,17 +1125,11 @@ export default function Onboarding() {
       setPhotoStepError(null);
       return true;
     }
-    if (current === 8) {
-      if (!prefOpenToStandardActivity && !prefOpenToAdaptedActivity) {
-        setStepHint(ACCESSIBILITY_PREF_BOTH_REQUIRED);
-        return false;
-      }
-      return true;
-    }
+    if (current === 8) return true;
     return true;
   }
 
-  function goNext() {
+  async function goNext() {
     if (authLoading || !user?.id) {
       console.warn("[Onboarding] next step blocked", {
         reason: authLoading ? "authLoading" : "no user",
@@ -719,8 +1141,10 @@ export default function Onboarding() {
       setObLocSource("manual");
     }
     setError(null);
+    setOptionalProfileWarning(null);
     if (step !== 6 && step !== 7) setPhotoStepError(null);
     setModerationSuccessNote(null);
+    await saveOnboardingDraft(step);
     setStep((s) => Math.min(TOTAL_STEPS, s + 1));
   }
 
@@ -753,6 +1177,12 @@ export default function Onboarding() {
     setPhotoStepError(null);
     setModerationSuccessNote(null);
     setStep((s) => Math.max(1, s - 1));
+  }
+
+  function togglePracticePreference(value: string) {
+    setPracticePreferences((prev) =>
+      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
+    );
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -801,8 +1231,8 @@ export default function Onboarding() {
       trimmedPhrase.length > 0 &&
       bioPublicTextViolatesPolicy(sportPhrase)
     ) {
-      setSportPhraseContactError(SAFETY_CONTENT_REFUSAL);
-      setStep(4);
+      setSportPhraseContactError(SPORT_PHRASE_EXTERNAL_CONTACT_ERROR);
+      setStep(5);
       return;
     }
     if (!validateStep(5)) {
@@ -850,18 +1280,25 @@ export default function Onboarding() {
 
     onboardingSubmitInFlightRef.current = true;
     try {
-      console.log("[Onboarding submit] start");
+      console.log("[Onboarding submit] start", {
+        userId: authUserId,
+        selectedSportsCount: selectedSportIds.length,
+      });
 
       let portraitUrl: string;
       let fullbodyUrl: string;
       try {
+        console.log("[Onboarding submit] start: upload photo portrait");
         portraitUrl = await uploadOnboardingPhoto(authUserId, portraitFile, "portrait");
+        console.log("[Onboarding submit] result: upload photo portrait", { portraitUrl });
+        console.log("[Onboarding submit] start: upload photo fullbody");
         fullbodyUrl = await uploadOnboardingPhoto(authUserId, bodyFile, "full");
+        console.log("[Onboarding submit] result: upload photo fullbody", { fullbodyUrl });
       } catch (uploadErr) {
-        console.error("[Onboarding submit] error:", uploadErr);
+        logDetailedError("upload photos", uploadErr);
         setError(
           uploadErr instanceof Error
-            ? uploadErr.message
+            ? "Impossible d’envoyer les photos. Réessayez."
             : "Impossible d’envoyer les photos. Réessayez."
         );
         return;
@@ -888,7 +1325,10 @@ export default function Onboarding() {
         });
         if (m1.error || !m1.data?.status) {
           setLoading(false);
-          setError(m1.error?.message ?? "Vérification photo indisponible.");
+          logDetailedError("photo moderation slot 1", m1.error ?? new Error("status missing"), {
+            response: m1,
+          });
+          setError("Vérification photo indisponible.");
           return;
         }
         slot1Status = m1.data.status;
@@ -899,7 +1339,10 @@ export default function Onboarding() {
         });
         if (m2.error || !m2.data?.status) {
           setLoading(false);
-          setError(m2.error?.message ?? "Vérification photo indisponible.");
+          logDetailedError("photo moderation slot 2", m2.error ?? new Error("status missing"), {
+            response: m2,
+          });
+          setError("Vérification photo indisponible.");
           return;
         }
         slot2Status = m2.data.status;
@@ -926,13 +1369,31 @@ export default function Onboarding() {
       }
       setModerationSuccessNote(moderationBanner);
 
+      const completionFromData = isOnboardingComplete({
+        first_name: firstName.trim(),
+        birth_date: birthDate,
+        gender,
+        looking_for: interestedIn,
+        intent: dbIntentFromUiIntent(intent),
+        city: obLocCity.trim() || null,
+        latitude: obLocLat,
+        longitude: obLocLng,
+        discovery_radius_km: obLocRadiusKm,
+        portrait_url: portraitUrl,
+        fullbody_url: fullbodyUrl,
+        sport_phrase: phraseFinal,
+        onboarding_sports_count: selectedSportIds.length,
+        onboarding_sports_with_level_count: selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length,
+      });
+      const completionFlag = moderationAllowsComplete && completionFromData;
+
       const profilePayload: Record<string, unknown> = {
         id: authUserId,
         first_name: firstName.trim(),
         birth_date: birthDate,
         gender,
         looking_for: interestedIn,
-        intent,
+        intent: dbIntentFromUiIntent(intent),
         city: obLocCity.trim() || null,
         latitude: obLocLat,
         longitude: obLocLng,
@@ -942,13 +1403,14 @@ export default function Onboarding() {
         sport_time: sportTime || null,
         sport_motivation: sportMotivations.length > 0 ? sportMotivations : null,
         sport_phrase: phraseFinal,
-        needs_adapted_activities: needsAdaptedActivities,
+        practice_preferences: practicePreferences,
+        onboarding_sports_count: selectedSportIds.length,
+        onboarding_sports_with_level_count: selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length,
         portrait_url: portraitUrl,
         fullbody_url: fullbodyUrl,
         main_photo_url: portraitUrl || fullbodyUrl,
-        profile_completed: moderationAllowsComplete,
-        onboarding_completed: moderationAllowsComplete,
-        onboarding_done: moderationAllowsComplete,
+        profile_completed: completionFlag,
+        onboarding_completed: completionFlag,
         updated_at: new Date().toISOString(),
       };
 
@@ -969,74 +1431,187 @@ export default function Onboarding() {
           ...profilePayload,
           profile_completed: false,
           onboarding_completed: false,
-          onboarding_done: false,
         };
-        const { error: bailErr } = await supabase
+        let { error: bailErr } = await supabase
           .from("profiles")
           .upsert({ ...failPayload, id: authUser.id }, { onConflict: "id" });
         if (bailErr) {
-          console.error("[Onboarding submit] upsert after photo rejection:", bailErr);
-          setError(bailErr.message || "Erreur lors de l’enregistrement du profil.");
+          const missingColumns = getMissingOptionalProfileColumns(bailErr);
+          if (missingColumns.length > 0) {
+            console.warn("[Onboarding submit] rejection upsert optional columns missing, retrying", {
+              missingColumns,
+              code: bailErr.code,
+              message: bailErr.message,
+            });
+            const failPayloadFallback = stripOptionalProfileColumnsFromPayload(failPayload, missingColumns);
+            ({ error: bailErr } = await supabase
+              .from("profiles")
+              .upsert({ ...failPayloadFallback, id: authUser.id }, { onConflict: "id" }));
+          }
+        }
+        if (bailErr) {
+          logDetailedError("profiles upsert after photo rejection", bailErr, {
+            payload: failPayload,
+          });
+          setError("Erreur lors de l’enregistrement du profil.");
         }
         setLoading(false);
         return;
       }
 
-      console.log("[Onboarding submit] sending data:", {
-        table: "profiles",
-        operation: "upsert",
-        payload: profilePayload,
-      });
+      const prodSanitizeCtx: ProdPayloadSanitizeContext = {
+        interestedIn,
+        sportTime,
+        practicePreferences,
+        portraitUrl: portraitUrl,
+        fullbodyUrl: fullbodyUrl,
+      };
 
+      /** Payload prod : même base que le métier ; retries retirent colonnes / mappent legacy. */
+      let payloadForUpsert: Record<string, unknown> = { ...profilePayload };
       let profileUpsertSelect = PROFILE_UPSERT_ONBOARDING_SELECT;
-      let { error: profileError, data: upsertRow } = await supabase
-        .from("profiles")
-        .upsert(
-          {
-            ...profilePayload,
-            id: authUser.id,
-          },
-          { onConflict: "id" }
-        )
-        .select(profileUpsertSelect)
-        .maybeSingle();
+      let profileError: { message?: string; code?: string | number } | null = null;
+      let upsertRow: unknown = null;
+      let aggressivePhase = 0;
 
-      if (profileError && isUndefinedColumnError(profileError, "location_source")) {
-        console.warn("[Onboarding submit] upsert: colonne location_source absente, nouvel essai sans");
-        const payloadCore = { ...profilePayload };
-        delete (payloadCore as { location_source?: unknown }).location_source;
-        profileUpsertSelect = PROFILE_UPSERT_ONBOARDING_SELECT_CORE;
-        ({ error: profileError, data: upsertRow } = await supabase
+      for (let attempt = 0; attempt < 24; attempt++) {
+        console.log("[Onboarding submit] sending data:", {
+          table: "profiles",
+          operation: attempt === 0 ? "upsert" : "upsert retry",
+          attempt: attempt + 1,
+          payload: payloadForUpsert,
+        });
+
+        console.log("[Onboarding submit] start: upsert profiles", {
+          select: profileUpsertSelect,
+          payload: payloadForUpsert,
+        });
+
+        const profilesRequest = await supabase
           .from("profiles")
           .upsert(
             {
-              ...payloadCore,
+              ...payloadForUpsert,
               id: authUser.id,
             },
             { onConflict: "id" }
           )
           .select(profileUpsertSelect)
-          .maybeSingle());
+          .maybeSingle();
+
+        profileError = profilesRequest.error;
+        upsertRow = profilesRequest.data;
+
+        console.log("[Onboarding submit] result: upsert profiles raw", {
+          error: profileError ?? null,
+          hasData: Boolean(upsertRow),
+        });
+
+        if (!profileError) {
+          break;
+        }
+
+        if (attempt === 0) {
+          const faultyColumn = extractFaultyColumnNameFromPostgrestMessage(profileError.message);
+          console.error("[Onboarding submit] upsert/select failure details", {
+            operation: "profiles upsert(...).select(...).maybeSingle()",
+            select: profileUpsertSelect,
+            faultyColumn,
+            message: profileError.message,
+            code: profileError.code,
+            details: (profileError as { details?: string }).details,
+            hint: (profileError as { hint?: string }).hint,
+          });
+          const upsertOnlyCheck = await supabase.from("profiles").upsert(
+            {
+              ...payloadForUpsert,
+              id: authUser.id,
+            },
+            { onConflict: "id" }
+          );
+          const upsertOnlyError = upsertOnlyCheck.error;
+          console.log("[Onboarding submit] diagnostic: profiles upsert-only check", {
+            upsertOnlyOk: !upsertOnlyError,
+            upsertOnlyError: upsertOnlyError ?? null,
+          });
+          if (!upsertOnlyError) {
+            console.error("[Onboarding submit] diagnostic verdict: upsert OK but select KO");
+          } else {
+            console.error("[Onboarding submit] diagnostic verdict: upsert KO");
+          }
+        }
+
+        const missingOptional = getMissingOptionalProfileColumns(profileError);
+        if (missingOptional.length > 0) {
+          console.warn("[Onboarding submit] profiles upsert optional columns missing, retrying", {
+            missingOptional,
+            code: profileError.code,
+            message: profileError.message,
+          });
+          const payloadStripped = stripOptionalProfileColumnsFromPayload(payloadForUpsert, missingOptional);
+          const hasLocationSource = !missingOptional.includes("location_source");
+          profileUpsertSelect = hasLocationSource
+            ? stripOptionalColumnsFromSelect(PROFILE_UPSERT_ONBOARDING_SELECT)
+            : stripOptionalColumnsFromSelect(PROFILE_UPSERT_ONBOARDING_SELECT_CORE);
+          const prevSerialized = JSON.stringify(payloadForUpsert);
+          payloadForUpsert = payloadStripped;
+          if (JSON.stringify(payloadForUpsert) !== prevSerialized) {
+            setOptionalProfileWarning(OPTIONAL_PROFILE_WARNING_MESSAGE);
+          }
+          continue;
+        }
+
+        const faulty = extractFaultyColumnNameFromPostgrestMessage(profileError.message);
+        const prevSerialized = JSON.stringify(payloadForUpsert);
+        if (faulty) {
+          payloadForUpsert = sanitizeProfilesPayloadForProd(
+            payloadForUpsert,
+            profileError.message,
+            prodSanitizeCtx,
+            -1
+          );
+        } else if (aggressivePhase < PROD_SANITIZE_AGGRESSIVE_STRIP_ORDER.length) {
+          payloadForUpsert = sanitizeProfilesPayloadForProd(
+            payloadForUpsert,
+            undefined,
+            prodSanitizeCtx,
+            aggressivePhase
+          );
+          aggressivePhase += 1;
+        } else {
+          break;
+        }
+
+        if (JSON.stringify(payloadForUpsert) === prevSerialized) {
+          console.warn("[Onboarding submit] profiles upsert: no payload change after sanitize, stopping retries");
+          break;
+        }
       }
 
       console.log("[Onboarding submit] result:", {
+        step: "upsert profiles",
         profileUpsert: { error: profileError?.message ?? null, data: upsertRow ?? null },
+        select: profileUpsertSelect,
+        payloadFinal: payloadForUpsert,
       });
 
       if (profileError || !upsertRow) {
         if (profileError) {
-          console.error(
-            "[Onboarding submit] profiles upsert failed — code:",
-            profileError.code,
-            "message:",
-            profileError.message,
-            profileError,
-          );
-          const msg = profileError.message || "";
+          logDetailedError("profiles upsert", profileError, {
+            select: profileUpsertSelect,
+            payloadInitial: profilePayload,
+            payloadFinal: payloadForUpsert,
+            fallbackTriggered: profileUpsertSelect !== PROFILE_UPSERT_ONBOARDING_SELECT,
+          });
+          console.error("[Onboarding submit] verdict: upsert/select KO", {
+            outcome: "upsert KO OR select KO",
+            select: profileUpsertSelect,
+            faultyColumn: extractFaultyColumnNameFromPostgrestMessage(profileError.message),
+          });
           setError(
-            /18 ans|réservé aux personnes/i.test(msg)
+            /18 ans|réservé aux personnes/i.test(profileError.message || "")
               ? "SPLove est réservé aux personnes de 18 ans ou plus."
-              : msg || "Erreur lors de l’enregistrement du profil."
+              : "Erreur lors de l’enregistrement du profil."
           );
         } else {
           setError("Réponse serveur incomplète après enregistrement du profil. Réessayez.");
@@ -1070,15 +1645,22 @@ export default function Onboarding() {
           .delete()
           .eq("profile_id", authUserId);
         if (deleteSportsErr) {
-          console.error("[Onboarding submit] error:", deleteSportsErr);
-          setError(deleteSportsErr.message);
+          logDetailedError("profile_sports delete", deleteSportsErr, { profile_id: authUserId });
+          setError("Impossible d’enregistrer vos sports pour le moment.");
           return;
         }
+        console.log("[Onboarding submit] result:", { step: "delete profile_sports", ok: true });
 
         const rows = validSportIds.map((sportId) => ({
           profile_id: authUserId,
           sport_id: sportId,
+          level: sportLevelsById[String(sportId)] ?? null,
         }));
+        console.log("[Onboarding submit] sending data:", {
+          table: "profile_sports",
+          operation: "insert",
+          rows,
+        });
 
         const { error: sportsError, data: sportsData } = await supabase
           .from("profile_sports")
@@ -1090,17 +1672,19 @@ export default function Onboarding() {
         });
 
         if (sportsError) {
-          console.error("[Onboarding submit] error:", sportsError);
-          setError(sportsError.message);
+          logDetailedError("profile_sports insert", sportsError, { rows });
+          setError("Impossible d’enregistrer vos sports pour le moment.");
           return;
         }
       }
 
+      console.log("[Onboarding submit] start: refetchProfile");
       void refetchProfile();
+      console.log("[Onboarding submit] result: refetchProfile triggered");
 
-      const gateOk =
-        !!upsertRow.profile_completed && isAdultFromBirthIso(String(upsertRow.birth_date ?? ""));
+      const gateOk = isOnboardingComplete(upsertRow) || completionFlag;
       if (!gateOk) {
+        console.error("[Onboarding submit] verdict: upsert OK + select OK but gating KO");
         console.error("[Onboarding submit] gating incomplet après upsert", {
           profile_completed: upsertRow.profile_completed,
           birth_date: upsertRow.birth_date,
@@ -1117,7 +1701,7 @@ export default function Onboarding() {
         sessionOk = await syncAuthSession();
       }
       if (!sessionOk) {
-        console.error("[Onboarding submit] syncAuthSession: no session after success — redirect /auth");
+        logDetailedError("syncAuthSession after success", new Error("No session after success"));
         navigate("/auth", { replace: true });
         return;
       }
@@ -1127,8 +1711,8 @@ export default function Onboarding() {
       console.log("[Onboarding submit] navigation /discover");
       navigate("/discover", { replace: true });
     } catch (err) {
-      console.error("[Onboarding submit] error:", err);
-      setError(err instanceof Error ? err.message : "Une erreur est survenue.");
+      logDetailedError("handleSubmit catch", err);
+      setError("Une erreur est survenue. Réessayez.");
     } finally {
       onboardingSubmitInFlightRef.current = false;
       console.log("[Onboarding submit] end");
@@ -1295,42 +1879,44 @@ export default function Onboarding() {
                     </select>
                   </div>
                   <div>
-                    <span className={labelClassName}>Type de rencontre *</span>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setIntent(INTENT_DB_AMOUR)}
-                        className={intentChoiceClass(intent === INTENT_DB_AMOUR)}
-                        style={
-                          intent === INTENT_DB_AMOUR
-                            ? {
-                                borderColor: BRAND_BG,
-                                background: BRAND_BG,
-                                color: TEXT_ON_BRAND,
-                                ["--tw-ring-color" as string]: BRAND_BG,
-                              }
-                            : undefined
-                        }
-                      >
-                        Amour
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIntent(INTENT_DB_AMICAL)}
-                        className={intentChoiceClass(intent === INTENT_DB_AMICAL)}
-                        style={
-                          intent === INTENT_DB_AMICAL
-                            ? {
-                                borderColor: BRAND_BG,
-                                background: BRAND_BG,
-                                color: TEXT_ON_BRAND,
-                              }
-                            : undefined
-                        }
-                      >
-                        Amical
-                      </button>
+                    <span className={labelClassName}>Et si tu rencontrais quelqu’un autrement ?</span>
+                    <p className="mb-2 text-xs leading-snug text-app-muted">
+                      Pas de pression. Juste une activité… et voir où ça mène.
+                    </p>
+                    <div className="grid grid-cols-1 gap-2">
+                      {ONBOARDING_INTENT_CARDS.map((card) => {
+                        const active = intent === card.uiValue;
+                        return (
+                          <button
+                            key={card.uiValue}
+                            type="button"
+                            onClick={() => setIntent(card.uiValue)}
+                            className={`${intentChoiceClass(active)} text-left`}
+                            style={
+                              active
+                                ? {
+                                    borderColor: BRAND_BG,
+                                    background: BRAND_BG,
+                                    color: TEXT_ON_BRAND,
+                                    ["--tw-ring-color" as string]: BRAND_BG,
+                                  }
+                                : undefined
+                            }
+                          >
+                            <span className="flex items-start justify-between gap-2">
+                              <span className="block">
+                                <span className="block font-semibold">{card.title}</span>
+                                <span className={`mt-0.5 block text-xs ${active ? "text-white/90" : "text-app-muted"}`}>
+                                  {card.text}
+                                </span>
+                              </span>
+                              <span className="text-sm">{active ? "✓" : ""}</span>
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
+                    <p className="mt-2 text-xs text-app-muted">Tu pourras changer ça à tout moment.</p>
                   </div>
                 </div>
               )}
@@ -1410,6 +1996,32 @@ export default function Onboarding() {
                         >
                           {featuredNameBySportId.get(s.id) ?? s.name} ×
                         </button>
+                      ))}
+                    </div>
+                  )}
+                  {selectedSports.length > 0 && (
+                    <div className="space-y-2 rounded-xl border border-app-border bg-app-bg/80 px-3 py-2.5">
+                      <p className="text-xs font-semibold text-app-text">Intensité par sport *</p>
+                      {selectedSports.map((sport) => (
+                        <div key={`level-${String(sport.id)}`} className="grid grid-cols-[1fr_auto] items-center gap-2">
+                          <span className="text-xs text-app-text">
+                            {featuredNameBySportId.get(sport.id) ?? sport.name}
+                          </span>
+                          <select
+                            value={sportLevelsById[String(sport.id)] ?? ""}
+                            onChange={(e) =>
+                              setSportLevelsById((prev) => ({ ...prev, [String(sport.id)]: e.target.value }))
+                            }
+                            className="rounded-lg border border-app-border bg-app-card px-2 py-1.5 text-xs text-app-text"
+                          >
+                            <option value="">Choisir</option>
+                            {SPORT_INTENSITY_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       ))}
                     </div>
                   )}
@@ -1559,7 +2171,7 @@ export default function Onboarding() {
                       onBlur={(e) => {
                         const v = e.target.value;
                         if (v.trim().length > 0 && bioPublicTextViolatesPolicy(v)) {
-                          setSportPhraseContactError(SAFETY_CONTENT_REFUSAL);
+                          setSportPhraseContactError(SPORT_PHRASE_EXTERNAL_CONTACT_ERROR);
                         } else {
                           setSportPhraseContactError(null);
                         }
@@ -1731,38 +2343,28 @@ export default function Onboarding() {
 
               {step === 8 && (
                 <div className="space-y-4">
-                  <p className="text-sm leading-relaxed text-app-muted">{ACCESSIBILITY_SECTION_INTRO}</p>
-                  <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-app-border bg-app-card px-3 py-2.5 text-sm text-app-text">
-                    <input
-                      type="checkbox"
-                      checked={needsAdaptedActivities}
-                      onChange={(e) => setNeedsAdaptedActivities(e.target.checked)}
-                      className="mt-0.5 h-4 w-4 shrink-0 rounded border-app-border"
-                    />
-                    <span>{ACCESSIBILITY_SELF_LABEL}</span>
-                  </label>
-                  <div className="space-y-2 rounded-xl border border-app-border bg-app-bg/80 px-3 py-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-app-muted">
-                      Qui t’intéresse ?
-                    </p>
-                    <label className="flex cursor-pointer items-start gap-2 text-sm text-app-text">
-                      <input
-                        type="checkbox"
-                        checked={prefOpenToStandardActivity}
-                        onChange={(e) => setPrefOpenToStandardActivity(e.target.checked)}
-                        className="mt-0.5 h-4 w-4 shrink-0 rounded border-app-border"
-                      />
-                      <span>{ACCESSIBILITY_PREF_STANDARD_LABEL}</span>
-                    </label>
-                    <label className="flex cursor-pointer items-start gap-2 text-sm text-app-text">
-                      <input
-                        type="checkbox"
-                        checked={prefOpenToAdaptedActivity}
-                        onChange={(e) => setPrefOpenToAdaptedActivity(e.target.checked)}
-                        className="mt-0.5 h-4 w-4 shrink-0 rounded border-app-border"
-                      />
-                      <span>{ACCESSIBILITY_PREF_ADAPTED_LABEL}</span>
-                    </label>
+                  <p className="text-sm leading-relaxed text-app-muted">
+                    Préférences de pratique (optionnel) : ajoute ce qui t’aide à te sentir à l’aise pendant l’activité.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {PRACTICE_PREFERENCE_OPTIONS.map((opt) => {
+                      const active = practicePreferences.includes(opt.value);
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => togglePracticePreference(opt.value)}
+                          className="rounded-xl border-2 px-3 py-2 text-xs font-medium sm:text-sm"
+                          style={{
+                            borderColor: active ? BRAND_BG : APP_BORDER,
+                            background: active ? BRAND_BG : APP_CARD,
+                            color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
                   </div>
                   <label className="flex cursor-pointer items-start gap-2 text-sm text-app-text">
                     <input
@@ -1794,6 +2396,9 @@ export default function Onboarding() {
                 <p className="mt-3 text-sm text-red-600">{finalStepBlockReason}</p>
               )}
               {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+              {optionalProfileWarning && (
+                <p className="mt-3 text-sm text-amber-700">{optionalProfileWarning}</p>
+              )}
               {moderationSuccessNote && (
                 <p className="mt-3 text-sm font-medium text-emerald-700">{moderationSuccessNote}</p>
               )}
@@ -1815,7 +2420,7 @@ export default function Onboarding() {
                 {step < TOTAL_STEPS ? (
                   <button
                     type="button"
-                    onClick={goNext}
+                    onClick={() => void goNext()}
                     disabled={authLoading}
                     className="flex-1 rounded-xl py-3 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-70"
                     style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
@@ -1825,7 +2430,7 @@ export default function Onboarding() {
                 ) : (
                   <button
                     type="submit"
-                    disabled={loading || authLoading}
+                    disabled={loading || authLoading || hydratingDraft}
                     className="flex-1 rounded-xl py-3 text-sm font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-70 sm:text-base"
                     style={{
                       background: !loading && !authLoading && user?.id ? BRAND_BG : CTA_DISABLED_BG,
@@ -1836,6 +2441,16 @@ export default function Onboarding() {
                   </button>
                 )}
               </div>
+              {hydratingDraft ? (
+                <p className="mt-2 text-xs text-app-muted" aria-live="polite">
+                  Restauration de votre progression…
+                </p>
+              ) : null}
+              {env.appEnv !== "production" && env.veriffPublicKey ? (
+                <p className="mt-2 text-xs text-app-muted">
+                  Vérification Veriff prête (non bloquante) : activable après onboarding.
+                </p>
+              ) : null}
             </div>
           </form>
         </div>

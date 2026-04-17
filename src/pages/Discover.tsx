@@ -30,7 +30,6 @@ import {
 } from "../components/ui/Icon";
 import { BETA_MODE } from "../constants/beta";
 import { isPreferenceCompatible } from "../lib/matchingPreferences";
-import { mutualAccessibilityCompatible } from "../lib/accessibilityMatching";
 import { parseProfileIntent } from "../lib/profileIntent";
 import { fetchBlockExclusionDetail, isBlockedWith } from "../services/blocks.service";
 import { VerifiedBadge } from "../components/VerifiedBadge";
@@ -79,15 +78,6 @@ type Profile = {
   needs_adapted_activities?: boolean | null;
   profile_sports?: { sports: { label: string | null; slug?: string | null } | null }[];
   profile_completed?: boolean | null;
-  /** Rafraîchi via RPC `touch_profile_last_active` (migration 045). */
-  last_active_at?: string | null;
-  /** Dénormalisé côté SQL (trigger sur activity_proposals). */
-  activity_proposals_count?: number | null;
-  /** Boost après double retour positif (047) — tri uniquement. */
-  boost_score?: number | null;
-  /** Dernier message envoyé (migration 046). */
-  last_reply_at?: string | null;
-  messages_count?: number | null;
   latitude?: number | null;
   longitude?: number | null;
   lat?: number | null;
@@ -198,10 +188,6 @@ function safeTimeMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
-function finiteScore(n: number | undefined): number {
-  return typeof n === "number" && Number.isFinite(n) ? n : 0;
-}
-
 function stableIdTieBreak(id: string): number {
   let h = 0;
   for (let i = 0; i < id.length; i += 1) {
@@ -224,35 +210,25 @@ const SWIPE_DAMP = 0.55;
 const FEED_PROFILE_IDS_SELECT = "id";
 
 /** Columns for Discover cards — pas de lat/lng des autres profils (distance via RPC SQL). */
+/** Colonnes uniquement présentes sur la `profiles` réelle (pas de compteurs / boost optionnels). */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, last_active_at, last_reply_at, messages_count, activity_proposals_count, boost_score, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, pref_open_to_standard_activity, pref_open_to_adapted_activity, profile_sports!inner(sports(label, slug))";
-
-/** IDs déjà likés — union liker_id/liked_id et from_user/to_user (schémas réels mixtes). */
+  "id, first_name, birth_date, created_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, profile_sports(sports(label, slug))";
+/** IDs déjà likés — schéma `likes` : `liker_id` / `liked_id` uniquement. */
 async function fetchOutgoingLikedUserIds(userId: string): Promise<Set<string>> {
   const out = new Set<string>();
-  const add = (ids: (string | null | undefined)[]) => {
-    for (const x of ids) {
-      if (typeof x === "string" && x.length > 0) out.add(x);
-    }
-  };
+  const { data, error } = await supabase
+    .from("likes")
+    .select("liked_id")
+    .eq("liker_id", userId);
 
-  const [rLiker, rLegacy] = await Promise.all([
-    supabase.from("likes").select("liked_id").eq("liker_id", userId),
-    supabase.from("likes").select("to_user").eq("from_user", userId),
-  ]);
-
-  if (rLiker.error) {
-    console.warn("[Discover feed] likes (liker_id / liked_id):", rLiker.error.message);
-  } else {
-    add((rLiker.data ?? []).map((row: { liked_id?: string | null }) => row.liked_id));
+  if (error) {
+    console.warn("[Discover feed] likes (liker_id / liked_id):", error.message);
+    return out;
   }
-
-  if (rLegacy.error) {
-    console.warn("[Discover feed] likes (from_user / to_user):", rLegacy.error.message);
-  } else {
-    add((rLegacy.data ?? []).map((row: { to_user?: string | null }) => row.to_user));
+  for (const row of data ?? []) {
+    const id = (row as { liked_id?: string | null }).liked_id;
+    if (typeof id === "string" && id.length > 0) out.add(id);
   }
-
   return out;
 }
 /** `public.profiles.id` PK shape — drops malformed ids before like RPC / FK on likes.liked_id. */
@@ -708,10 +684,7 @@ export default function Discover() {
           const bLocal =
             !!myCity && !!b.city && b.city.toLowerCase().trim() === myCity.toLowerCase().trim();
           if (aLocal !== bLocal) return bLocal ? 1 : -1;
-          if (finiteScore(b.reliabilityScore) !== finiteScore(a.reliabilityScore)) {
-            return finiteScore(b.reliabilityScore) - finiteScore(a.reliabilityScore);
-          }
-          return finiteScore(b.discoverScore) - finiteScore(a.discoverScore);
+          return safeTimeMs(b.created_at) - safeTimeMs(a.created_at);
         })
         .slice(0, 3),
     [profiles, myCity]
@@ -747,6 +720,12 @@ export default function Discover() {
       const blockExclude = blockDetail.excluded;
       const sportsSet = collectSportMatchKeysFromProfile(meProfile);
       setMySportMatchKeys(sportsSet);
+      if (import.meta.env.DEV) {
+        console.debug("[Discover debug] viewer", {
+          currentUserId,
+          mySportMatchKeys: [...sportsSet],
+        });
+      }
       if (meRes.error) {
         console.error("[Discover] profil courant query failed", {
           code: meRes.error.code,
@@ -798,12 +777,16 @@ export default function Discover() {
       const useNotIn = likedList.length > 0 && likedList.length < 200;
       const notInClause = useNotIn ? `(${likedList.join(",")})` : null;
 
+      console.warn(
+        "[Discover feed] feed_profiles order/detail: using created_at (no last_active_at — feed_profiles may omit it)",
+      );
+
       let feedIdsQ = supabase
         .from("feed_profiles")
         .select(FEED_PROFILE_IDS_SELECT)
         .neq("id", currentUserId)
         .eq("intent", myIntent)
-        .order("last_active_at", { ascending: false })
+        .order("created_at", { ascending: false })
         .limit(DISCOVER_FETCH_LIMIT);
 
       if (BETA_MODE) {
@@ -854,7 +837,7 @@ export default function Discover() {
         .not("first_name", "is", null)
         .neq("first_name", "")
         .not("birth_date", "is", null)
-        .order("last_active_at", { ascending: false, nullsFirst: false });
+        .order("created_at", { ascending: false, nullsFirst: false });
 
       if (othersRes.error) {
         console.error("[Discover feed] profiles detail query failed", {
@@ -876,7 +859,22 @@ export default function Discover() {
           type: typeof rawData,
         });
       }
+      console.log("[Discover detail] profils détaillés reçus", {
+        count: raw.length,
+        ids: raw.map((r) => r.id).filter(Boolean),
+      });
       console.log("[Discover feed] profiles after completeness filter:", raw.length);
+
+      if (import.meta.env.DEV) {
+        const loadedIds = new Set(raw.map((r) => r.id));
+        const missingDetail = feedIds.filter((id) => !loadedIds.has(id));
+        if (missingDetail.length > 0) {
+          console.debug(
+            "[Discover debug] absents requête profiles (profile_completed, profile_sports, prénom/date)",
+            { count: missingDetail.length, ids: missingDetail },
+          );
+        }
+      }
 
       const distById = new Map<string, number | null>();
       if (raw.length > 0) {
@@ -901,10 +899,6 @@ export default function Discover() {
         looking_for: meProfile.looking_for ?? null,
       };
 
-      const meForAccessibility = {
-        needs_adapted_activities: meProfile.needs_adapted_activities,
-      };
-
       const feedIdSet = new Set(feedIds);
       raw = raw.filter((p) => {
         if (!p?.id || !isValidProfileId(p.id)) return false;
@@ -919,23 +913,63 @@ export default function Discover() {
       }
 
       /** Filtre défensif : même intention (normalisée) que l’utilisateur. */
-      raw = raw.filter((p) => parseProfileIntent(p.intent) === myIntent);
-      console.log("[Discover feed] profiles after intent filter:", raw.length);
-
-      /** Flux principal : genre/préférence + sport commun + préférences activités adaptées (rééciproque). */
-      raw = raw.filter((p) => {
-        if (!isPreferenceCompatible(meForCompat, p)) return false;
-        if (getSharedSportsFromProfile(sportsSet, p).length === 0) return false;
-        if (
-          !mutualAccessibilityCompatible(meForAccessibility, {
-            needs_adapted_activities: p.needs_adapted_activities,
-          })
-        ) {
-          return false;
+      let stage: Profile[] = raw.filter((p) => parseProfileIntent(p.intent) === myIntent);
+      if (import.meta.env.DEV) {
+        const keptIntent = new Set(stage.map((p) => p.id));
+        for (const p of raw) {
+          if (!keptIntent.has(p.id)) {
+            console.debug("[Discover debug] exclusion intent", {
+              id: p.id,
+              first_name: p.first_name,
+              intent: p.intent,
+              parsed: parseProfileIntent(p.intent),
+              expected: myIntent,
+            });
+          }
         }
-        return true;
+      }
+      console.log("[Discover feed] profiles after intent filter:", stage.length);
+
+      stage = stage.filter((p) => {
+        const ok = isPreferenceCompatible(meForCompat, p);
+        if (import.meta.env.DEV && !ok) {
+          console.debug("[Discover debug] exclusion genre/meet_pref", {
+            id: p.id,
+            first_name: p.first_name,
+            me: meForCompat,
+            them: { gender: p.gender, looking_for: p.looking_for },
+          });
+        }
+        return ok;
       });
-      console.log("[Discover feed] profiles after shared sports filter:", raw.length);
+      console.log("[Discover feed] profiles after preference filter:", stage.length);
+
+      if (import.meta.env.DEV) {
+        console.debug("[Discover debug] candidats avant filtre sport", {
+          ids: stage.map((p) => p.id),
+          sportsParProfil: stage.map((p) => ({
+            id: p.id,
+            matchKeys: [...collectSportMatchKeysFromProfile(p)],
+            profile_sports: p.profile_sports,
+          })),
+        });
+      }
+
+      stage = stage.filter((p) => {
+        const n = getSharedSportsFromProfile(sportsSet, p).length;
+        if (import.meta.env.DEV && n === 0) {
+          console.debug("[Discover debug] exclusion aucun sport commun (clés)", {
+            id: p.id,
+            first_name: p.first_name,
+            candidateKeys: [...collectSportMatchKeysFromProfile(p)],
+            viewerKeys: [...sportsSet],
+          });
+        }
+        return n > 0;
+      });
+      console.log("[Discover feed] profiles after shared sports filter:", stage.length);
+
+      raw = stage;
 
       const enriched: ProfileWithAffinity[] = raw.map((p) => {
         let common = 0;
@@ -949,6 +983,15 @@ export default function Discover() {
           myProfile: meProfile,
           distanceKmOverride: distById.has(p.id) ? distById.get(p.id) ?? null : undefined,
         });
+        if (import.meta.env.DEV && discover.excluded) {
+          console.debug("[Discover debug] exclusion score Discover", {
+            id: p.id,
+            first_name: p.first_name,
+            exclusionReason: discover.exclusionReason,
+            sharedSportsCount: discover.sharedSportsCount,
+            distanceKm: discover.distanceKm,
+          });
+        }
         return {
           ...p,
           commonSportsCount: discover.sharedSportsCount || (Number.isFinite(common) ? common : 0),
@@ -980,9 +1023,9 @@ export default function Discover() {
       }
 
       discoverFiltered.sort((a, b) => {
-        const bd = finiteScore(b.discoverScore);
-        const ad = finiteScore(a.discoverScore);
-        if (bd !== ad) return bd - ad;
+        const lb = safeTimeMs(b.created_at);
+        const la = safeTimeMs(a.created_at);
+        if (lb !== la) return lb - la;
         const aDist = typeof a.distanceKm === "number" && Number.isFinite(a.distanceKm) ? a.distanceKm : null;
         const bDist = typeof b.distanceKm === "number" && Number.isFinite(b.distanceKm) ? b.distanceKm : null;
         if (aDist != null && bDist != null && aDist !== bDist) {
@@ -990,9 +1033,6 @@ export default function Discover() {
         }
         if (aDist == null && bDist != null) return 1;
         if (aDist != null && bDist == null) return -1;
-        const la = safeTimeMs(a.last_active_at ?? a.last_reply_at ?? a.created_at);
-        const lb = safeTimeMs(b.last_active_at ?? b.last_reply_at ?? b.created_at);
-        if (lb !== la) return lb - la;
         const stableA = stableIdTieBreak(a.id);
         const stableB = stableIdTieBreak(b.id);
         if (stableA !== stableB) {
@@ -1262,46 +1302,17 @@ export default function Discover() {
           <div className="rounded-2xl border border-[#E11D2E]/10 bg-app-card px-5 py-8 text-center shadow-sm ring-1 ring-app-border">
             <p className="text-base font-semibold leading-snug text-app-text">En attendant…</p>
             <p className="mx-auto mt-2 max-w-[18rem] text-sm leading-relaxed text-app-muted">
-              Affinez vos rencontres avec SPLove+
+              Aucun profil compatible pour l’instant. Tu peux revenir plus tard ou ajuster rayon et sports dans ton profil.
             </p>
-            <button
-              type="button"
-              onClick={() => navigate("/splove-plus")}
-              className="mt-4 rounded-xl border border-app-border px-4 py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border"
+            <p className="mx-auto mt-3 max-w-[19rem] text-[12px] leading-relaxed text-app-muted">
+              SPLove+ peut augmenter ta visibilité ; voir les profils et matcher reste gratuit.
+            </p>
+            <Link
+              to="/splove-plus"
+              className="mt-4 inline-block rounded-xl border border-app-border px-4 py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border"
             >
-              Voir SPLove+
-            </button>
-          </div>
-        )}
-
-        {!loading && !errorMessage && weeklySuggestions.length > 0 && (
-          <div className="mb-5">
-            <PremiumSuggestionsSection
-              title="Très alignés avec vous"
-              subtitle="Trois profils pour passer vite au terrain."
-              items={weeklySuggestions.map((p) => {
-                const cs = firstCommonSportName(p, mySportMatchKeys);
-                return {
-                  id: p.id,
-                  photoUrl: getProfileDisplayPhotoUrl(p),
-                  firstName: p.first_name?.trim() || "Profil",
-                  age: getAgeFromBirthDate(p.birth_date ?? null),
-                  commonSport: cs ?? "",
-                  projectionCopy: cs
-                    ? `Terrain commun : ${cs} — prêt·e à lancer une sortie ?`
-                    : "Ouvrez pour proposer une sortie concrète.",
-                  verified: isPhotoVerified(p),
-                };
-              })}
-              ctaLabel="Voir"
-              onCardCta={(id) => {
-                const sid = String(id).trim();
-                const p = weeklySuggestions.find(
-                  (x) => x.id === sid || x.id.toLowerCase() === sid.toLowerCase()
-                );
-                if (p) handleViewProfileFromSuggestion(p);
-              }}
-            />
+              Découvrir SPLove+ (optionnel)
+            </Link>
           </div>
         )}
 
@@ -1323,6 +1334,37 @@ export default function Discover() {
               onBlock={handleBlock}
             />
           ))}
+
+        {!loading && !errorMessage && weeklySuggestions.length > 0 && (
+          <div className="mb-5 mt-6">
+            <PremiumSuggestionsSection
+              title="Raccourcis (gratuit)"
+              subtitle="Les mêmes profils que dans la pile — accès rapide à une fiche, sans paywall."
+              items={weeklySuggestions.map((p) => {
+                const cs = firstCommonSportName(p, mySportMatchKeys);
+                return {
+                  id: p.id,
+                  photoUrl: getProfileDisplayPhotoUrl(p),
+                  firstName: p.first_name?.trim() || "Profil",
+                  age: getAgeFromBirthDate(p.birth_date ?? null),
+                  commonSport: cs ?? "",
+                  projectionCopy: cs
+                    ? `Terrain commun : ${cs} — prêt·e à lancer une sortie ?`
+                    : "Ouvrez pour proposer une sortie concrète.",
+                  verified: isPhotoVerified(p),
+                };
+              })}
+              ctaLabel="Voir le profil"
+              onCardCta={(id) => {
+                const sid = String(id).trim();
+                const p = weeklySuggestions.find(
+                  (x) => x.id === sid || x.id.toLowerCase() === sid.toLowerCase()
+                );
+                if (p) handleViewProfileFromSuggestion(p);
+              }}
+            />
+          </div>
+        )}
 
         <section
           className="mb-2 mt-1 rounded-xl border border-app-border/50 bg-app-bg/50 px-3 py-3 ring-1 ring-white/[0.03]"

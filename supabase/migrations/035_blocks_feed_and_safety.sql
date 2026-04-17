@@ -287,10 +287,7 @@ BEGIN
           SELECT 1
           FROM public.matches m
           WHERE (m.id = activity_proposals.match_id)
-             OR (
-               activity_proposals.conversation_id IS NOT NULL
-               AND m.conversation_id = activity_proposals.conversation_id
-             )
+             
             AND (auth.uid() = m.user_a OR auth.uid() = m.user_b)
         )
       );
@@ -312,10 +309,7 @@ BEGIN
           SELECT 1
           FROM public.matches m
           WHERE (m.id = activity_proposals.match_id)
-             OR (
-               activity_proposals.conversation_id IS NOT NULL
-               AND m.conversation_id = activity_proposals.conversation_id
-             )
+             
             AND (auth.uid() = m.user_a OR auth.uid() = m.user_b)
         )
       )
@@ -348,10 +342,7 @@ BEGIN
           SELECT 1
           FROM public.matches m
           WHERE (m.id = activity_proposals.match_id)
-             OR (
-               activity_proposals.conversation_id IS NOT NULL
-               AND m.conversation_id = activity_proposals.conversation_id
-             )
+             
             AND (auth.uid() = m.user_a OR auth.uid() = m.user_b)
         )
       );
@@ -373,10 +364,7 @@ BEGIN
           SELECT 1
           FROM public.matches m
           WHERE (m.id = activity_proposals.match_id)
-             OR (
-               activity_proposals.conversation_id IS NOT NULL
-               AND m.conversation_id = activity_proposals.conversation_id
-             )
+             
             AND (auth.uid() = m.user_a OR auth.uid() = m.user_b)
         )
       )

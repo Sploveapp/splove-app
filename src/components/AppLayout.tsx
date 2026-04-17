@@ -12,6 +12,8 @@ export function AppLayout() {
   const location = useLocation();
   const [inboxCount, setInboxCount] = useState(0);
   const isChat = location.pathname.startsWith("/chat/");
+  /** Agenda autonome : pas de bandeau global ; fond clair sur tout le shell (évite l’encadrement sombre type Discover). */
+  const isMesRencontres = /^\/mes-rencontres\/?$/.test(location.pathname);
 
   const loadInboxCount = useCallback(async () => {
     const {
@@ -119,16 +121,18 @@ export function AppLayout() {
     };
   }, [loadInboxCount]);
 
+  const shellBg = isMesRencontres ? "#F4F6F8" : APP_BG;
+
   return (
     <div
       style={{
         minHeight: "100vh",
         display: "flex",
         flexDirection: "column",
-        background: APP_BG,
+        background: shellBg,
       }}
     >
-      {!isChat ? <GlobalHeader /> : null}
+      {!isChat && !isMesRencontres ? <GlobalHeader /> : null}
 
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Outlet />

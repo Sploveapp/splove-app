@@ -11,9 +11,12 @@ export type Subscription = {
   plan: SubscriptionPlan;
   status: SubscriptionStatus;
   started_at: string;
-  ends_at: string | null;
+  /** Absent si la colonne n’existe pas en base (repli premium.service). */
+  ends_at?: string | null;
   created_at: string;
   updated_at: string;
+  external_id?: string | null;
+  provider?: string | null;
 };
 
 export type ProfileBoost = {

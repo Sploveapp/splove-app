@@ -18,6 +18,7 @@ export type ActivityPayload = {
   when: ActivityWhen;
   place: string;
   message: string;
+  scheduledAt?: string;
 };
 
 /** Côté chat après le match (écran « nouveau match » = page `Match`). */

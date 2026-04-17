@@ -10,10 +10,15 @@ import {
 import { flushSync } from "react-dom";
 import { supabase } from "../lib/supabase";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
-import { PROFILE_SELECT, PROFILE_SELECT_CORE, isUndefinedColumnError } from "../lib/profileSelect";
+import {
+  PROFILE_SELECT_CORE,
+  PROFILE_SELECT_MINIMAL,
+  isPostgresUndefinedColumnError,
+} from "../lib/profileSelect";
 import type { AppProfile } from "../lib/appProfile";
 import { isProfileRecord } from "../lib/appProfile";
 import { isAdultFromBirthIso } from "../lib/ageGate";
+import { isOnboardingComplete } from "../lib/profileCompleteness";
 import type { User, Session } from "@supabase/supabase-js";
 
 export type Profile = {
@@ -43,8 +48,6 @@ export type Profile = {
   moderation_strikes_count?: number | null;
   /** Activités adaptées — optionnel, voir migration 005 / 041. */
   needs_adapted_activities?: boolean | null;
-  pref_open_to_standard_activity?: boolean | null;
-  pref_open_to_adapted_activity?: boolean | null;
   [key: string]: unknown;
 };
 
@@ -122,62 +125,69 @@ function profileRowToProfile(row: AppProfile): Profile {
   } as Profile;
 }
 
-async function fetchProfile(userId: string): Promise<Profile | null> {
-  let selectCols = PROFILE_SELECT;
-  let { data, error } = await supabase
-    .from("profiles")
-    .select(selectCols)
-    .eq("id", userId)
-    .maybeSingle();
+function profileFromMinimalRow(raw: { id: string; first_name?: string | null }): Profile | null {
+  const row = {
+    id: raw.id,
+    first_name: raw.first_name ?? null,
+    profile_completed: false,
+  };
+  if (!isProfileRecord(row)) return null;
+  return profileRowToProfile(row as AppProfile);
+}
 
-  if (error && isUndefinedColumnError(error, "location_source")) {
-    console.warn("[AuthContext] fetchProfile: location_source absent en base, relecture sans cette colonne");
-    selectCols = PROFILE_SELECT_CORE;
-    ({ data, error } = await supabase
-      .from("profiles")
-      .select(selectCols)
-      .eq("id", userId)
-      .maybeSingle());
-  }
+/**
+ * Une seule source de colonnes : `PROFILE_SELECT_CORE` (pas `location_source`, pas colonnes absentes en prod).
+ * Si 42703 (colonne inconnue) : **un seul** retry avec `PROFILE_SELECT_MINIMAL`, puis stop.
+ */
+async function fetchProfile(userId: string): Promise<Profile | null> {
+  const q = (cols: string) =>
+    supabase.from("profiles").select(cols).eq("id", userId).maybeSingle();
+
+  let { data, error } = await q(PROFILE_SELECT_CORE);
 
   if (error) {
-    console.error("fetchProfile error:", error);
+    if (isPostgresUndefinedColumnError(error)) {
+      console.warn("[AuthContext] fetchProfile: 42703 — single retry with minimal columns");
+      const min = await q(PROFILE_SELECT_MINIMAL);
+      if (min.error || !min.data) {
+        if (min.error) {
+          console.warn("[AuthContext] fetchProfile: minimal select failed", min.error.message);
+        }
+        return null;
+      }
+      return profileFromMinimalRow(min.data as unknown as { id: string; first_name?: string | null });
+    }
+    console.warn("[AuthContext] fetchProfile:", error.message);
     return null;
   }
 
-  let row = data;
-
-  if (!row) {
+  if (!data) {
     const created = await ensureProfileRowForAuthUserId(userId);
     if (!created) return null;
-    let retry = await supabase
-      .from("profiles")
-      .select(selectCols)
-      .eq("id", userId)
-      .maybeSingle();
-    if (retry.error && isUndefinedColumnError(retry.error, "location_source")) {
-      selectCols = PROFILE_SELECT_CORE;
-      retry = await supabase
-        .from("profiles")
-        .select(selectCols)
-        .eq("id", userId)
-        .maybeSingle();
-    }
+    const retry = await q(PROFILE_SELECT_CORE);
     if (retry.error) {
-      console.error("fetchProfile retry error:", retry.error);
+      if (isPostgresUndefinedColumnError(retry.error)) {
+        console.warn("[AuthContext] fetchProfile retry: 42703 — single minimal select");
+        const min = await q(PROFILE_SELECT_MINIMAL);
+        if (min.error || !min.data) {
+          if (min.error) console.warn("[AuthContext] fetchProfile: minimal after ensure failed", min.error.message);
+          return null;
+        }
+        return profileFromMinimalRow(min.data as unknown as { id: string; first_name?: string | null });
+      }
+      console.warn("[AuthContext] fetchProfile retry:", retry.error.message);
       return null;
     }
-    row = retry.data;
+    if (!retry.data) return null;
+    data = retry.data;
   }
 
-  if (!row) return null;
-
-  if (!isProfileRecord(row)) {
-    console.error("[AuthContext] fetchProfile: réponse inattendue (pas un objet profil)", row);
+  if (!isProfileRecord(data)) {
+    console.warn("[AuthContext] fetchProfile: unexpected profile row shape");
     return null;
   }
 
-  return profileRowToProfile(row);
+  return profileRowToProfile(data);
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -189,6 +199,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   /** Incrémenté à chaque loadProfile — ignore les réponses obsolètes (courses onAuthStateChange). */
   const profileLoadGenRef = useRef(0);
+  /** Évite les fetch profil concurrents / boucles. */
+  const fetchProfileInFlightRef = useRef(false);
 
   /** État précédent pour éviter un second `SIGNED_IN` (doublon Supabase / reconnexion) qui remet toute l’app en « Chargement… ». */
   const sessionGateRef = useRef<{ userId: string | null; hasProfile: boolean }>({
@@ -205,22 +217,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       return;
     }
+    if (fetchProfileInFlightRef.current) {
+      return;
+    }
+    fetchProfileInFlightRef.current = true;
     const gen = ++profileLoadGenRef.current;
-    console.log("[AuthContext] profile load start", { userId: userId.slice(0, 8) + "…" });
     try {
       const p = await fetchProfile(userId);
       if (gen !== profileLoadGenRef.current) {
-        console.log("[AuthContext] profile load ignored (stale)");
         return;
       }
       setProfile(p);
-      if (p) {
-        console.log("[AuthContext] profile load success");
-      } else {
-        console.warn("[AuthContext] profile load fail (null row)");
-      }
     } catch (e) {
-      console.error("[AuthContext] profile load error", e);
+      console.warn("[AuthContext] profile load error", e);
+    } finally {
+      fetchProfileInFlightRef.current = false;
     }
   }, []);
 
@@ -237,13 +248,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refetchProfile = useCallback(async (): Promise<Profile | null> => {
     if (!user?.id) return null;
-    const p = await fetchProfile(user.id);
-    if (p) {
-      flushSync(() => {
-        setProfile(p);
-      });
+    if (fetchProfileInFlightRef.current) return null;
+    fetchProfileInFlightRef.current = true;
+    try {
+      const p = await fetchProfile(user.id);
+      if (p) {
+        flushSync(() => {
+          setProfile(p);
+        });
+      }
+      return p;
+    } finally {
+      fetchProfileInFlightRef.current = false;
     }
-    return p;
   }, [user?.id]);
 
   const syncAuthSession = useCallback(async (): Promise<boolean> => {
@@ -321,9 +338,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.log("[AuthContext] session restored", { userId: uid.slice(0, 8) + "…" });
           const prof = await raceWithTimeout(loadProfile(uid), PROFILE_LOAD_RACE_MS);
           if (prof === "timeout") {
-            console.error(
-              "[AuthContext] loadProfile (init) slow (race timeout) — in-flight load may still complete",
-            );
+            console.warn("[AuthContext] loadProfile (init) slow — in-flight load may still complete");
           }
         } else {
           setProfile(null);
@@ -373,9 +388,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const prof = await raceWithTimeout(loadProfile(uid), PROFILE_LOAD_RACE_MS);
           if (prof === "timeout") {
-            console.error(
-              "[AuthContext] loadProfile (onAuthStateChange) slow (race timeout) — in-flight load may still complete",
-            );
+            console.warn("[AuthContext] loadProfile (onAuthStateChange) slow — in-flight load may still complete");
           }
         } catch (e) {
           console.error("[AuthContext] onAuthStateChange loadProfile:", e);
@@ -395,9 +408,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [loadProfile]);
 
-  /** `profile_completed` en BDD + date de naissance indiquant ≥ 18 ans (même logique que l’onboarding). */
+  /** Validation onboarding globale + âge >= 18 ans. */
   const isProfileComplete =
-    profile?.profile_completed === true && isAdultFromBirthIso(profile.birth_date);
+    isOnboardingComplete(profile) && isAdultFromBirthIso(profile?.birth_date);
 
   const value: AuthState = {
     user,

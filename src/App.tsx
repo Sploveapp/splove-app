@@ -15,6 +15,8 @@ import Match from "./pages/Match";
 import SplovePlus from "./pages/SplovePlus";
 import Checkout from "./pages/Checkout";
 import Messages from "./pages/Messages";
+import AccountSettings from "./pages/AccountSettings";
+import MesRencontres from "./pages/MesRencontres";
 function App() {
   return (
     <HashRouter>
@@ -35,8 +37,10 @@ function App() {
                     <Route path="/discover" element={<Discover />} />
                     <Route path="/activity" element={<Navigate to="/discover" replace />} />
                     <Route path="/messages" element={<Messages />} />
+                    <Route path="/mes-rencontres" element={<MesRencontres />} />
                     <Route path="/likes-you" element={<LikesYou />} />
                     <Route path="/profile" element={<Profile />} />
+                    <Route path="/account-settings" element={<AccountSettings />} />
                     <Route path="/splove-plus" element={<SplovePlus />} />
                     <Route path="/checkout" element={<Checkout />} />
                     <Route path="/match/:conversationId" element={<Match />} />

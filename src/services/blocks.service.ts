@@ -1,5 +1,9 @@
 import { supabase } from "../lib/supabase";
 
+/** Après un échec sur `list_user_ids_blocked_with_me`, ne plus rappeler la RPC (évite le spam console). */
+let listUserIdsBlockedWithMeRpcDisabled = false;
+let listUserIdsBlockedWithMeRpcWarned = false;
+
 function rpcUuidArrayToSet(data: unknown): Set<string> {
   if (data == null) return new Set();
   const arr = Array.isArray(data) ? data : [];
@@ -40,10 +44,17 @@ export async function fetchBlockExclusionDetail(_currentUserId?: string | null):
     errors: [],
   };
 
+  if (listUserIdsBlockedWithMeRpcDisabled) {
+    return empty;
+  }
+
   const { data, error } = await supabase.rpc("list_user_ids_blocked_with_me");
   if (error) {
-    console.error("[blocks] list_user_ids_blocked_with_me", error);
-    empty.errors.push(error.message);
+    listUserIdsBlockedWithMeRpcDisabled = true;
+    if (!listUserIdsBlockedWithMeRpcWarned) {
+      listUserIdsBlockedWithMeRpcWarned = true;
+      console.warn("[blocks] RPC not available, using empty list");
+    }
     return empty;
   }
   empty.excluded = rpcUuidArrayToSet(data);

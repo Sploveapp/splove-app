@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { usePremium } from "../hooks/usePremium";
 import { supabase } from "../lib/supabase";
@@ -35,6 +35,10 @@ function getAgeFromBirthDate(birthDate: string | null): number | null {
   return age >= 18 && age <= 120 ? age : null;
 }
 
+function goToDiscover(navigate: ReturnType<typeof useNavigate>) {
+  navigate("/discover", { replace: false });
+}
+
 export default function SplovePlus() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -42,6 +46,9 @@ export default function SplovePlus() {
   const [boostModalOpen, setBoostModalOpen] = useState(false);
   const [boostEndsAt, setBoostEndsAt] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<PremiumSuggestion[]>([]);
+
+  /** En bêta, accès équivalent SPLove+ sans abonnement (`usePremium` + `hasPremiumAccess`). */
+  const sploveUnlocked = BETA_MODE || hasPlus;
 
   useEffect(() => {
     async function loadData() {
@@ -86,7 +93,7 @@ export default function SplovePlus() {
         isPreferenceCompatible(meForCompat, {
           gender: row.gender,
           looking_for: row.looking_for,
-        })
+        }),
       );
       raw = raw.slice(0, 3);
 
@@ -101,8 +108,8 @@ export default function SplovePlus() {
           (index === 0
             ? "Disponible pour une sortie running cette semaine"
             : index === 1
-            ? "Meme energie pour une session skate"
-            : "Un bon profil pour proposer une activite rapidement"),
+              ? "Meme energie pour une session skate"
+              : "Un bon profil pour proposer une activite rapidement"),
       }));
       setSuggestions(rows);
     }
@@ -131,7 +138,7 @@ export default function SplovePlus() {
 
   const handleUpgrade = () => {
     if (BETA_MODE) {
-      navigate("/discover", { replace: true });
+      goToDiscover(navigate);
       return;
     }
     navigate("/checkout");
@@ -140,7 +147,31 @@ export default function SplovePlus() {
   return (
     <div className="min-h-0 bg-app-bg">
       <main className="mx-auto flex w-full max-w-md flex-col gap-4 px-4 pb-8 pt-3">
-        {hasPlus ? (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => goToDiscover(navigate)}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-app-border bg-app-card text-lg text-app-text transition hover:bg-app-border"
+              aria-label="Retour à Découvrir"
+            >
+              ←
+            </button>
+            <Link
+              to="/discover"
+              className="text-sm font-semibold text-app-accent underline-offset-2 hover:underline"
+            >
+              Retour à Découvrir
+            </Link>
+          </div>
+          {BETA_MODE ? (
+            <p className="text-center text-[11px] font-medium uppercase tracking-wide text-app-muted">
+              Splove+ offert pendant la bêta
+            </p>
+          ) : null}
+        </div>
+
+        {sploveUnlocked ? (
           <>
             <SplovePlusBenefits
               onBoost={() => setBoostModalOpen(true)}
@@ -160,7 +191,7 @@ export default function SplovePlus() {
         ) : (
           <SplovePlusPaywall
             onActivate={handleUpgrade}
-            onContinueFree={() => navigate("/discover", { replace: true })}
+            onContinueFree={() => goToDiscover(navigate)}
           />
         )}
 

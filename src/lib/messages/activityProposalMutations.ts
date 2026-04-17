@@ -9,6 +9,33 @@ export type ActivityMutationError = {
   message: string;
 };
 
+/**
+ * Payload pour `supabase.rpc("create_activity_proposal", …)` — aligné sur les migrations repo :
+ * `051` : (p_conversation_id, p_sport, p_time_slot, p_location, p_note default null)
+ * `061` : + p_scheduled_at optionnel (ne pas l’envoyer tant que des déploiements 051 existent).
+ *
+ * On n’envoie **pas** de clés undefined / null : `p_note` est omis si vide (défaut SQL).
+ */
+export function buildCreateActivityProposalRpcArgs(args: {
+  conversationId: string;
+  sport: string;
+  timeSlot: string;
+  location: string;
+  note: string | null | undefined;
+}): Record<string, string> {
+  const out: Record<string, string> = {
+    p_conversation_id: args.conversationId,
+    p_sport: args.sport.trim(),
+    p_time_slot: args.timeSlot.trim(),
+    p_location: args.location.trim() || "À définir",
+  };
+  const note = typeof args.note === "string" ? args.note.trim() : "";
+  if (note.length > 0) {
+    out.p_note = note;
+  }
+  return out;
+}
+
 /** Best-effort : aligne `messages.metadata` sur `activity_proposals` (RPC migration 055). */
 async function syncProposalMessageMetadata(client: SupabaseClient, proposalId: string): Promise<void> {
   const { error } = await client.rpc("sync_activity_proposal_message_metadata", {
@@ -162,8 +189,10 @@ export async function createCounterProposal(
     timeSlot: string;
     location: string;
     note: string | null;
+    scheduledAt: string | null;
   },
 ): Promise<{ data: ActivityProposalRowLike } | { error: ActivityMutationError }> {
+  /** Pas de `p_scheduled_at` côté RPC sur les BDD alignées 051/052 — la date est portée par le message / métadonnées. */
   const { data, error } = await client.rpc("respond_to_activity_proposal", {
     p_proposal_id: args.replaceProposalId,
     p_action: "countered",
@@ -244,15 +273,19 @@ export async function createPendingActivityProposal(
     timeSlot: string;
     location: string;
     note: string | null;
+    scheduledAt: string | null;
   },
 ): Promise<{ data: ActivityProposalRowLike } | { error: ActivityMutationError }> {
-  const { data, error } = await client.rpc("create_activity_proposal", {
-    p_conversation_id: args.conversationId,
-    p_sport: args.sport,
-    p_time_slot: args.timeSlot,
-    p_location: args.location,
-    p_note: args.note,
-  });
+  const { data, error } = await client.rpc(
+    "create_activity_proposal",
+    buildCreateActivityProposalRpcArgs({
+      conversationId: args.conversationId,
+      sport: args.sport,
+      timeSlot: args.timeSlot,
+      location: args.location,
+      note: args.note,
+    }),
+  );
   if (error) {
     return { error: { code: "rpc", message: error.message ?? "Création impossible." } };
   }

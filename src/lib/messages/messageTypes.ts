@@ -37,13 +37,13 @@ export type ActivityProposalRowLike = {
   conversation_id: string;
   proposer_id: string;
   sport: string;
+  place?: string | null;
   time_slot: string;
   location: string | null;
   note: string | null;
   created_at: string | null;
   status?: string | null;
   scheduled_at?: string | null;
-  match_id?: string | null;
   boost_awarded?: boolean | null;
   supersedes_proposal_id?: string | null;
   responded_by?: string | null;

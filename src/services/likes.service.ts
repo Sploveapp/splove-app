@@ -145,7 +145,7 @@ export function isLikelyNetworkOrTransportError(err: unknown): boolean {
   return false;
 }
 
-/** Vérifie qu’une ligne `likes` existe (schéma from_user / to_user ou liker_id / liked_id). */
+/** Vérifie qu’une ligne `likes` existe (liker_id / liked_id). */
 export async function verifyOutgoingLikeExists(fromUserId: string, toUserId: string): Promise<boolean> {
   
   const r2 = await supabase
