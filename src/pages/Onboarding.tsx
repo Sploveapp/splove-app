@@ -4,12 +4,12 @@ import { supabase } from "../lib/supabase";
 import { env } from "../lib/env";
 import { useAuth } from "../contexts/AuthContext";
 import { GlobalHeader } from "../components/GlobalHeader";
+import { SplashScreen } from "../components/SplashScreen";
 import {
+  ACCESSIBILITY_SECTION_INTRO,
   ONBOARDING_AVATAR_REQUIRED,
   ONBOARDING_FULLBODY_REQUIRED,
-  ONBOARDING_PHOTO_COMPLIANCE_LABEL,
 } from "../constants/copy";
-import { bioPublicTextViolatesPolicy } from "../lib/contentModeration";
 import { isAdultFromBirthIso } from "../lib/ageGate";
 import { isOnboardingComplete } from "../lib/profileCompleteness";
 import {
@@ -46,45 +46,32 @@ const INTERESTED_IN_OPTIONS = [
   { value: "Tous", label: "Tous" },
 ] as const;
 
-const SPORT_TIME_OPTIONS = [
+/** Préférence horaire onboarding (tap) — stockée dans `sport_time`. */
+const ONBOARDING_TIME_QUICK_OPTIONS = [
   { value: "Matin", label: "Matin" },
-  { value: "Midi", label: "Midi" },
   { value: "Soir", label: "Soir" },
-  { value: "Week-end", label: "Week-end" },
 ] as const;
 
-const SPORT_MOTIVATION_OPTIONS = [
-  "Se dépasser",
-  "La nature",
-  "Le fun",
-  "La compétition",
-  "Rencontrer des gens",
-  "Se vider la tête",
-  "La performance",
-] as const;
-const SPORT_INTENSITY_OPTIONS = [
+const ONBOARDING_INTENSITY_QUICK_OPTIONS = [
   { value: "chill", label: "Chill" },
-  { value: "regular", label: "Regular" },
   { value: "intense", label: "Intense" },
 ] as const;
-const PRACTICE_PREFERENCE_OPTIONS = [
-  { value: "gentle_activities", label: "Activités douces" },
-  { value: "slow_pace", label: "Rythme calme" },
-  { value: "accessible_venue", label: "Lieu accessible" },
-  { value: "avoid_stairs", label: "Éviter les escaliers" },
-  { value: "low_impact", label: "Faible impact" },
-  { value: "discuss_case_by_case", label: "En discuter au cas par cas" },
+
+/** Aligné `profileCompleteness` + migration 068 */
+const ORGANIZATION_OPTIONS = [
+  { value: "spontaneous", label: "Spontané" },
+  { value: "planned", label: "Planifié" },
 ] as const;
 
-const SPORT_PHRASE_MAX_LENGTH = 120;
 const OPTIONAL_PROFILE_WARNING_MESSAGE =
   "Certaines données optionnelles n’ont pas pu être enregistrées, mais vous pouvez continuer.";
-const SPORT_PHRASE_EXTERNAL_CONTACT_ERROR =
-  "Les coordonnées, réseaux sociaux et moyens de contact externes ne sont pas autorisés.";
 const OPTIONAL_PROFILE_COLUMNS = [
   "onboarding_sports_count",
   "onboarding_sports_with_level_count",
   "location_source",
+  "sport_intensity",
+  "meet_vibe",
+  "planning_style",
 ] as const;
 
 function isMissingOptionalProfileColumnError(
@@ -210,30 +197,17 @@ function sanitizeProfilesPayloadForProd(
 const INTENT_DB_AMOUR = "Amoureux";
 const INTENT_DB_AMICAL = "Amical";
 
-type OnboardingIntentUiValue = "activity_first" | "open_to_dating" | "open";
+type OnboardingIntentUiValue = "dating_feeling" | "sport_social" | "both";
 
 type OnboardingIntentCard = {
   uiValue: OnboardingIntentUiValue;
   title: string;
-  text: string;
 };
 
 const ONBOARDING_INTENT_CARDS: OnboardingIntentCard[] = [
-  {
-    uiValue: "activity_first",
-    title: "Autour d’une activité, sans pression",
-    text: "On se rencontre, on bouge, et on voit le feeling.",
-  },
-  {
-    uiValue: "open_to_dating",
-    title: "Avec une vraie ouverture à la rencontre",
-    text: "Je suis là pour rencontrer quelqu’un… naturellement.",
-  },
-  {
-    uiValue: "open",
-    title: "Je préfère rester ouvert(e)",
-    text: "Je laisse la rencontre me surprendre.",
-  },
+  { uiValue: "dating_feeling", title: "Rencontre + feeling" },
+  { uiValue: "sport_social", title: "Rencontres sportives" },
+  { uiValue: "both", title: "Les deux" },
 ];
 
 /** Lecture robuste legacy -> carte UI (legacy historique inclus : dating/friendly/both). */
@@ -242,18 +216,16 @@ function uiIntentFromDbIntent(dbValue: unknown): OnboardingIntentUiValue | "" {
   const raw = dbValue.trim();
   if (!raw) return "";
   const norm = raw.toLowerCase();
-  if (norm === "friendly" || norm === "amical") return "activity_first";
-  if (norm === "dating" || norm === "amoureux") return "open_to_dating";
-  if (norm === "both") return "open";
-  if (norm === "activity_first" || norm === "open_to_dating" || norm === "open") return norm;
+  if (norm === "friendly" || norm === "amical" || norm === "activity_first") return "sport_social";
+  if (norm === "dating" || norm === "amoureux" || norm === "open_to_dating") return "dating_feeling";
+  if (norm === "both" || norm === "open") return "both";
   return "";
 }
 
-/** Écriture carte UI -> valeur BDD existante (`profiles.intent`). */
+/** Écriture carte UI -> valeur BDD existante (`profiles.intent` : Amical | Amoureux). */
 function dbIntentFromUiIntent(uiValue: string): string {
-  if (uiValue === "open_to_dating") return INTENT_DB_AMOUR;
-  if (uiValue === "activity_first") return INTENT_DB_AMICAL;
-  if (uiValue === "open") return INTENT_DB_AMICAL;
+  if (uiValue === "sport_social") return INTENT_DB_AMICAL;
+  if (uiValue === "dating_feeling" || uiValue === "both") return INTENT_DB_AMOUR;
   return "";
 }
 
@@ -336,7 +308,8 @@ const DEFAULT_SPORT_FALLBACK: SportOption[] = [
   { id: "fallback-9", name: "Natation", slug: "natation" },
 ];
 
-const TOTAL_STEPS = 8;
+/** 9 étapes formulaire ; écran succès séparé (`postOnboarding`). */
+const TOTAL_STEPS = 9;
 
 const ONBOARDING_RADIUS_KM_OPTIONS = [10, 25, 50, 100] as const;
 const PHOTO_BUCKET = "profile-photos";
@@ -493,7 +466,6 @@ export default function Onboarding() {
   const [step, setStep] = useState(1);
   const [sportSearch, setSportSearch] = useState("");
   const [stepHint, setStepHint] = useState<string | null>(null);
-  const [sportPhraseContactError, setSportPhraseContactError] = useState<string | null>(null);
   const [photoStepError, setPhotoStepError] = useState<string | null>(null);
   const [moderationSuccessNote, setModerationSuccessNote] = useState<string | null>(null);
   const portraitInputRef = useRef<HTMLInputElement>(null);
@@ -520,10 +492,12 @@ export default function Onboarding() {
   const [sportLevelsById, setSportLevelsById] = useState<Record<string, string>>({});
   const [sportTime, setSportTime] = useState("");
   const [sportMotivations, setSportMotivations] = useState<string[]>([]);
-  const [sportPhrase, setSportPhrase] = useState("");
+  const [sportIntensity, setSportIntensity] = useState<"" | "chill" | "intense">("");
+  const [planningStyle, setPlanningStyle] = useState<"" | "spontaneous" | "planned">("");
+  const [sportPhraseOptional, setSportPhraseOptional] = useState("");
+  const [postOnboarding, setPostOnboarding] = useState(false);
   const [portraitFile, setPortraitFile] = useState<File | null>(null);
   const [bodyFile, setBodyFile] = useState<File | null>(null);
-  const [photoComplianceConfirmed, setPhotoComplianceConfirmed] = useState(false);
   const [practicePreferences, setPracticePreferences] = useState<string[]>([]);
   const [confirm18, setConfirm18] = useState(false);
   const [acceptTerms, setAcceptTerms] = useState(false);
@@ -574,6 +548,8 @@ export default function Onboarding() {
         payload.birth_date = birthDate || null;
         payload.gender = gender || null;
         payload.looking_for = interestedIn || null;
+      }
+      if (currentStep >= 4) {
         payload.intent = intent ? dbIntentFromUiIntent(intent) : null;
       }
       if (currentStep >= 2) {
@@ -587,14 +563,17 @@ export default function Onboarding() {
           | null;
         payload.location_updated_at = nowIso;
       }
-      if (currentStep >= 4) {
+      if (currentStep >= 7) {
         payload.sport_time = sportTime || null;
         payload.sport_motivation = sportMotivations.length > 0 ? sportMotivations : null;
+        payload.sport_intensity = sportIntensity || null;
+        payload.meet_vibe = null;
+        payload.planning_style = planningStyle || null;
       }
-      if (currentStep >= 5) {
-        payload.sport_phrase = sportPhrase.trim() ? sportPhrase.trim().slice(0, SPORT_PHRASE_MAX_LENGTH) : null;
+      if (currentStep >= 8) {
+        payload.sport_phrase = sportPhraseOptional.trim() || null;
       }
-      if (currentStep >= 8) payload.practice_preferences = practicePreferences;
+      if (currentStep >= 9) payload.practice_preferences = practicePreferences;
       payload.onboarding_sports_count = selectedSportIds.length;
       payload.onboarding_sports_with_level_count = selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length;
 
@@ -752,7 +731,7 @@ export default function Onboarding() {
       setHydratingDraft(true);
       try {
         let profileSelect =
-          "first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_motivation, sport_phrase, practice_preferences";
+          "first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, practice_preferences";
         let { data: p, error: profileErr } = await supabase
           .from("profiles")
           .select(profileSelect)
@@ -761,7 +740,7 @@ export default function Onboarding() {
         if (profileErr && isUndefinedColumnError(profileErr, "practice_preferences")) {
           console.warn("[Onboarding draft] hydrate fallback without practice_preferences");
           profileSelect =
-            "first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_motivation, sport_phrase";
+            "first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase";
           ({ data: p, error: profileErr } = await supabase
             .from("profiles")
             .select(profileSelect)
@@ -810,10 +789,16 @@ export default function Onboarding() {
         );
         const src = row.location_source;
         setObLocSource(src === "manual" || src === "device" ? src : null);
-        setSportTime(String(row.sport_time ?? ""));
+        const rawTime = String(row.sport_time ?? "");
+        setSportTime(rawTime === "Matin" || rawTime === "Soir" ? rawTime : "");
         setSportMotivations(Array.isArray(row.sport_motivation) ? (row.sport_motivation as string[]) : []);
-        setSportPhrase(String(row.sport_phrase ?? ""));
+        const si = row.sport_intensity;
+        setSportIntensity(si === "chill" || si === "intense" ? si : "");
+        const pl = row.planning_style;
+        setPlanningStyle(pl === "spontaneous" || pl === "planned" ? pl : "");
         setPracticePreferences(Array.isArray(row.practice_preferences) ? (row.practice_preferences as string[]) : []);
+        const sp = row.sport_phrase;
+        setSportPhraseOptional(typeof sp === "string" ? sp : "");
 
         const { data: ps, error: sportErr } = await supabase
           .from("profile_sports")
@@ -856,12 +841,13 @@ export default function Onboarding() {
   }, [user?.id, authLoading, navigate]);
 
   useEffect(() => {
+    if (postOnboarding) return;
     if (authLoading) return;
     if (!user?.id) return;
     if (isProfileComplete) {
       navigate("/discover", { replace: true });
     }
-  }, [isProfileComplete, authLoading, navigate, user?.id]);
+  }, [postOnboarding, isProfileComplete, authLoading, navigate, user?.id]);
 
   const featuredSports = useMemo(
     () => getFeaturedSportsFromList(sportOptions),
@@ -908,23 +894,97 @@ export default function Onboarding() {
     };
   }, [portraitPreviewUrl, bodyPreviewUrl]);
 
-  /** Après un submit refusé, `handleSubmit` remplit `stepHint` ; il faut le purger quand l’utilisateur corrige l’étape 7 (sinon message obsolète alors que `finalStepBlockReason` est déjà à jour). */
+  /** Après un submit refusé, `handleSubmit` remplit `stepHint` ; purger quand l’utilisateur corrige la dernière étape. */
   useEffect(() => {
     if (step !== TOTAL_STEPS) return;
     setStepHint(null);
-  }, [
-    step,
-    confirm18,
-    acceptTerms,
-    photoComplianceConfirmed,
-  ]);
+  }, [step, confirm18, acceptTerms]);
+
+  /** Doit rester avant tout `return` — sinon hooks en moins si Splash / écran succès. */
+  useEffect(() => {
+    setSportLevelsById((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const id of selectedSportIds) {
+        const k = String(id);
+        if (!next[k]) {
+          next[k] = "regular";
+          changed = true;
+        }
+      }
+      for (const k of Object.keys(next)) {
+        if (!selectedSportIds.some((id) => String(id) === k)) {
+          delete next[k];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [selectedSportIds]);
 
   if (authLoading) {
+    return <SplashScreen />;
+  }
+
+  if (postOnboarding) {
     return (
       <div className="flex min-h-screen flex-col bg-app-bg font-sans">
         <GlobalHeader variant="compact" />
-        <div className="flex flex-1 items-center justify-center px-4">
-          <span className="text-sm text-app-muted">Chargement…</span>
+        <div className="flex flex-1 flex-col items-center justify-center px-6 pb-10 pt-6">
+          <div className="w-full max-w-md text-center">
+            <h1 className="text-2xl font-bold leading-snug text-app-text">Ton profil est prêt.</h1>
+            <p className="mt-2 text-sm leading-snug text-app-muted">
+              Fais vérifier ton profil pour inspirer confiance plus vite.
+            </p>
+            <div
+              className="mt-6 w-full rounded-2xl border border-app-border/90 bg-app-card/60 px-4 py-3 text-left"
+              role="region"
+              aria-label="Préférences mobilité, optionnel"
+            >
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">
+                Optionnel — mobilité
+              </p>
+              <p className="mt-1.5 text-sm leading-snug text-app-text">
+                {ACCESSIBILITY_SECTION_INTRO}
+              </p>
+              <button
+                type="button"
+                onClick={() => navigate("/profile", { replace: true })}
+                className="mt-3 text-sm font-semibold text-app-accent underline underline-offset-2"
+              >
+                Régler dans Mon profil
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate("/profile", { replace: true })}
+              className="mt-8 w-full rounded-2xl py-4 text-base font-semibold shadow-sm"
+              style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
+            >
+              Vérifier mon profil
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  sessionStorage.setItem("splove_verify_nudge_dismissed", "1");
+                } catch {
+                  /* ignore */
+                }
+                navigate("/discover", { replace: true });
+              }}
+              className="mt-3 w-full rounded-2xl border border-app-border py-3 text-sm font-semibold text-app-text"
+            >
+              Plus tard
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/discover", { replace: true })}
+              className="mt-4 w-full text-center text-sm font-medium text-app-muted underline underline-offset-2"
+            >
+              Découvrir des profils
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -946,11 +1006,11 @@ export default function Onboarding() {
     selectedSportIds.length >= 1 &&
     selectedSportIds.length <= 3 &&
     selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)])) &&
-    sportPhrase.trim().length > 0 &&
-    !bioPublicTextViolatesPolicy(sportPhrase) &&
+    (sportTime === "Matin" || sportTime === "Soir") &&
+    (sportIntensity === "chill" || sportIntensity === "intense") &&
+    (planningStyle === "spontaneous" || planningStyle === "planned") &&
     portraitFile != null &&
     bodyFile != null &&
-    photoComplianceConfirmed &&
     confirm18 &&
     acceptTerms;
 
@@ -969,19 +1029,21 @@ export default function Onboarding() {
     if (selectedSportIds.length < 1) return "Sélectionnez au moins 1 sport (étape sports).";
     if (selectedSportIds.length > 3) return "Maximum 3 sports.";
     if (!selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)]))) {
-      return "Renseignez une intensité pour chaque sport sélectionné.";
+      return "Chaque sport doit avoir un niveau (réessaie ou repasse l’étape sports).";
     }
-    if (sportPhrase.trim().length === 0) return "Ajoutez une phrase de profil (étape 5).";
-    if (bioPublicTextViolatesPolicy(sportPhrase)) {
-      return SPORT_PHRASE_EXTERNAL_CONTACT_ERROR;
+    if (sportTime !== "Matin" && sportTime !== "Soir") {
+      return "Choisis un moment (matin ou soir) à l’étape « Ton style ».";
     }
-    if (portraitFile == null) return "Ajoutez une photo portrait (étape 5).";
-    if (bodyFile == null) return "Ajoutez une photo en pied (étape 6).";
-    if (!confirm18) return "Cochez la confirmation « 18 ans ou plus ».";
-    if (!acceptTerms) return "Acceptez les conditions d’utilisation et la politique de confidentialité.";
-    if (!photoComplianceConfirmed) {
-      return "Confirmez le respect des consignes photos (étape 6) pour continuer.";
+    if (sportIntensity !== "chill" && sportIntensity !== "intense") {
+      return "Choisis une intensité (chill ou intense).";
     }
+    if (planningStyle !== "spontaneous" && planningStyle !== "planned") {
+      return "Choisis plutôt spontané ou planifié.";
+    }
+    if (portraitFile == null) return "Ajoute tes deux photos (étape Montre qui tu es).";
+    if (bodyFile == null) return "Ajoute tes deux photos (étape Montre qui tu es).";
+    if (!confirm18) return "Coche la confirmation « 18 ans ou plus ».";
+    if (!acceptTerms) return "Accepte les conditions d’utilisation et la politique de confidentialité.";
     return null;
   }
 
@@ -1004,8 +1066,6 @@ export default function Onboarding() {
       setPhotoStepError("Chaque photo doit faire 5 Mo maximum.");
       return;
     }
-    setPhotoComplianceConfirmed(false);
-    setStepHint("Votre photo principale doit montrer clairement votre visage.");
     if (kind === "portrait") setPortraitFile(file);
     else setBodyFile(file);
   }
@@ -1016,12 +1076,6 @@ export default function Onboarding() {
       if (prev.length >= 3) return prev;
       return [...prev, id];
     });
-  };
-
-  const toggleMotivation = (option: string) => {
-    setSportMotivations((prev) =>
-      prev.includes(option) ? prev.filter((m) => m !== option) : [...prev, option]
-    );
   };
 
   function handleBirthInputChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1058,10 +1112,6 @@ export default function Onboarding() {
         setStepHint("Indiquez qui vous intéresse.");
         return false;
       }
-      if (!intent) {
-        setStepHint("Choisissez un type de rencontre.");
-        return false;
-      }
       return true;
     }
     if (current === 2) {
@@ -1087,22 +1137,19 @@ export default function Onboarding() {
         return false;
       }
       if (!selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)]))) {
-        setStepHint("Choisissez une intensité pour chaque sport sélectionné.");
+        setStepHint("Sélectionne à nouveau tes sports.");
+        return false;
+      }
+      return true;
+    }
+    if (current === 4) {
+      if (!intent) {
+        setStepHint("Choisis une intention.");
         return false;
       }
       return true;
     }
     if (current === 5) {
-      const t = sportPhrase.trim();
-      if (!t) {
-        setSportPhraseContactError("Ajoutez une phrase de profil.");
-        return false;
-      }
-      if (t.length > 0 && bioPublicTextViolatesPolicy(sportPhrase)) {
-        setSportPhraseContactError(SPORT_PHRASE_EXTERNAL_CONTACT_ERROR);
-        return false;
-      }
-      setSportPhraseContactError(null);
       return true;
     }
     if (current === 6) {
@@ -1110,22 +1157,42 @@ export default function Onboarding() {
         setPhotoStepError(ONBOARDING_AVATAR_REQUIRED);
         return false;
       }
-      setPhotoStepError(null);
-      return true;
-    }
-    if (current === 7) {
       if (!bodyFile) {
         setPhotoStepError(ONBOARDING_FULLBODY_REQUIRED);
         return false;
       }
-      if (!photoComplianceConfirmed) {
-        setPhotoStepError("Confirme que tes photos respectent les consignes (visage, silhouette, pas d’objets ni captures) pour continuer.");
-        return false;
-      }
       setPhotoStepError(null);
       return true;
     }
-    if (current === 8) return true;
+    if (current === 7) {
+      if (sportTime !== "Matin" && sportTime !== "Soir") {
+        setStepHint("Choisis un moment : matin ou soir.");
+        return false;
+      }
+      if (sportIntensity !== "chill" && sportIntensity !== "intense") {
+        setStepHint("Choisis une intensité : chill ou intense.");
+        return false;
+      }
+      if (planningStyle !== "spontaneous" && planningStyle !== "planned") {
+        setStepHint("Choisis spontané ou planifié.");
+        return false;
+      }
+      return true;
+    }
+    if (current === 8) {
+      return true;
+    }
+    if (current === 9) {
+      if (!confirm18) {
+        setStepHint("Coche « J’ai 18 ans ou plus ».");
+        return false;
+      }
+      if (!acceptTerms) {
+        setStepHint("Accepte les conditions et la politique de confidentialité.");
+        return false;
+      }
+      return true;
+    }
     return true;
   }
 
@@ -1142,7 +1209,7 @@ export default function Onboarding() {
     }
     setError(null);
     setOptionalProfileWarning(null);
-    if (step !== 6 && step !== 7) setPhotoStepError(null);
+    if (step !== 6) setPhotoStepError(null);
     setModerationSuccessNote(null);
     await saveOnboardingDraft(step);
     setStep((s) => Math.min(TOTAL_STEPS, s + 1));
@@ -1173,16 +1240,9 @@ export default function Onboarding() {
 
   function goBack() {
     setStepHint(null);
-    setSportPhraseContactError(null);
     setPhotoStepError(null);
     setModerationSuccessNote(null);
     setStep((s) => Math.max(1, s - 1));
-  }
-
-  function togglePracticePreference(value: string) {
-    setPracticePreferences((prev) =>
-      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
-    );
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -1217,51 +1277,22 @@ export default function Onboarding() {
       console.error("[Onboarding submit] blocked: canSubmit false", { reason: hint });
       return;
     }
-    if (!validateStep(2)) {
-      setStep(2);
-      return;
-    }
-    if (!validateStep(3)) {
-      setStep(3);
-      return;
-    }
-
-    const trimmedPhrase = sportPhrase.trim();
-    if (
-      trimmedPhrase.length > 0 &&
-      bioPublicTextViolatesPolicy(sportPhrase)
-    ) {
-      setSportPhraseContactError(SPORT_PHRASE_EXTERNAL_CONTACT_ERROR);
-      setStep(5);
-      return;
-    }
-    if (!validateStep(5)) {
-      setStep(5);
-      return;
-    }
-    if (!validateStep(6)) {
-      setStep(6);
-      return;
-    }
-    if (!validateStep(7)) {
-      setStep(7);
-      return;
-    }
-    if (!validateStep(8)) {
-      setStep(8);
-      return;
+    for (let s = 1; s <= 9; s++) {
+      if (!validateStep(s)) {
+        setStep(s);
+        return;
+      }
     }
     if (!portraitFile || !bodyFile) {
       setPhotoStepError(
         !portraitFile ? ONBOARDING_AVATAR_REQUIRED : ONBOARDING_FULLBODY_REQUIRED
       );
-      setStep(!portraitFile ? 6 : 7);
+      setStep(6);
       return;
     }
 
     setError(null);
     setStepHint(null);
-    setSportPhraseContactError(null);
     setPhotoStepError(null);
     setLoading(true);
 
@@ -1272,11 +1303,7 @@ export default function Onboarding() {
       return;
     }
 
-    const phraseFinal =
-      trimmedPhrase.length > 0
-        ? trimmedPhrase.slice(0, SPORT_PHRASE_MAX_LENGTH)
-        : null;
-        const authUserId = authUser.id;
+    const authUserId = authUser.id;
 
     onboardingSubmitInFlightRef.current = true;
     try {
@@ -1308,7 +1335,6 @@ export default function Onboarding() {
       let slot2Status: PhotoModerationStatus = "approved";
       let moderationRejected = false;
       let moderationUiReason: string | null = null;
-      let modPrimarySlot: 1 | 2 = 1;
 
       if (!PHOTO_VERIFICATION_PLACEHOLDER) {
         const path1 = profilePhotoStoragePathFromPublicUrl(portraitUrl);
@@ -1352,7 +1378,6 @@ export default function Onboarding() {
             slot1Status === "rejected"
               ? (m1.data.ui_reason_code ?? null)
               : (m2.data.ui_reason_code ?? null);
-          modPrimarySlot = slot1Status === "rejected" ? 1 : 2;
         }
       }
 
@@ -1381,7 +1406,9 @@ export default function Onboarding() {
         discovery_radius_km: obLocRadiusKm,
         portrait_url: portraitUrl,
         fullbody_url: fullbodyUrl,
-        sport_phrase: phraseFinal,
+        sport_time: sportTime,
+        sport_intensity: sportIntensity,
+        planning_style: planningStyle,
         onboarding_sports_count: selectedSportIds.length,
         onboarding_sports_with_level_count: selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length,
       });
@@ -1401,8 +1428,11 @@ export default function Onboarding() {
         location_source: locSourceResolved,
         location_updated_at: new Date().toISOString(),
         sport_time: sportTime || null,
+        sport_intensity: sportIntensity || null,
+        meet_vibe: null,
+        planning_style: planningStyle || null,
         sport_motivation: sportMotivations.length > 0 ? sportMotivations : null,
-        sport_phrase: phraseFinal,
+        sport_phrase: sportPhraseOptional.trim() ? sportPhraseOptional.trim().slice(0, 500) : null,
         practice_preferences: practicePreferences,
         onboarding_sports_count: selectedSportIds.length,
         onboarding_sports_with_level_count: selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length,
@@ -1426,7 +1456,7 @@ export default function Onboarding() {
             ? `${photoModerationHeadline("rejected")} — ${detail}.`
             : photoModerationHeadline("rejected"),
         );
-        setStep(modPrimarySlot === 1 ? 6 : 7);
+        setStep(6);
         const failPayload: Record<string, unknown> = {
           ...profilePayload,
           profile_completed: false,
@@ -1708,8 +1738,8 @@ export default function Onboarding() {
       if (moderationBanner) {
         await new Promise((r) => window.setTimeout(r, 1400));
       }
-      console.log("[Onboarding submit] navigation /discover");
-      navigate("/discover", { replace: true });
+      console.log("[Onboarding submit] success → momentum screen");
+      setPostOnboarding(true);
     } catch (err) {
       logDetailedError("handleSubmit catch", err);
       setError("Une erreur est survenue. Réessayez.");
@@ -1774,26 +1804,27 @@ export default function Onboarding() {
             </div>
 
             <h1 className="mt-2.5 text-center text-base font-bold leading-snug text-app-text sm:text-lg">
-              {step === 1 && "Vous, en quelques mots"}
+              {step === 1 && "Parlons de toi"}
               {step === 2 && "Où veux-tu rencontrer du monde ?"}
-              {step === 3 && "Vos sports"}
-              {step === 4 && "Votre rythme"}
-              {step === 5 && "Une phrase qui vous ressemble"}
-              {step === 6 && "Ajoutez votre photo"}
-              {step === 7 && "Photo en pied"}
-              {step === 8 && "Dernière étape"}
+              {step === 3 && "Quels sports te font vibrer ?"}
+              {step === 4 && "Tu es là pour quoi ?"}
+              {step === 5 && "Sur SPLove, les femmes font le premier pas."}
+              {step === 6 && "Montre qui tu es"}
+              {step === 7 && "Ton style"}
+              {step === 8 && "Ajoute une touche perso"}
+              {step === 9 && "Derniers détails"}
             </h1>
             <p className="mt-0.5 text-center text-xs leading-snug text-app-muted sm:text-sm">
-              {step === 1 && "Ici, on se découvre en bougeant."}
+              {step === 1 && "Prénom, date de naissance, genre et qui t’intéresse."}
               {step === 2 && "On te montre des profils autour de ta zone, sans afficher ton adresse exacte."}
-              {step === 3 && "Choisissez 1 à 3 sports pour créer des affinités utiles."}
-              {step === 4 && "Votre rythme nous aide à suggérer des rencontres réalistes."}
-              {step === 5 && "Une phrase simple, vraie, sans lien ni réseau social."}
-              {step === 6 &&
-                "Photo 1 — visage clair, photo personnelle, sans filtre excessif."}
-              {step === 7 &&
-                "Photo 2 — silhouette / corps entier ou quasi entier, pour une rencontre en confiance."}
-              {step === 8 && "Derniers accords, puis place aux vraies rencontres."}
+              {step === 3 && "Choisis jusqu’à 3 sports"}
+              {step === 4 && "Un choix, c’est tout."}
+              {step === 5 &&
+                "Dans les matchs amoureux femme-homme, c’est la femme qui envoie le premier message. Pour les autres matchs, la personne qui valide le match peut écrire."}
+              {step === 6 && "2 photos suffisent pour commencer"}
+              {step === 7 && "Trois réglages rapides."}
+              {step === 8 && "Optionnel"}
+              {step === 9 && "Dernière ligne droite."}
             </p>
           </div>
 
@@ -1878,46 +1909,6 @@ export default function Onboarding() {
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <span className={labelClassName}>Et si tu rencontrais quelqu’un autrement ?</span>
-                    <p className="mb-2 text-xs leading-snug text-app-muted">
-                      Pas de pression. Juste une activité… et voir où ça mène.
-                    </p>
-                    <div className="grid grid-cols-1 gap-2">
-                      {ONBOARDING_INTENT_CARDS.map((card) => {
-                        const active = intent === card.uiValue;
-                        return (
-                          <button
-                            key={card.uiValue}
-                            type="button"
-                            onClick={() => setIntent(card.uiValue)}
-                            className={`${intentChoiceClass(active)} text-left`}
-                            style={
-                              active
-                                ? {
-                                    borderColor: BRAND_BG,
-                                    background: BRAND_BG,
-                                    color: TEXT_ON_BRAND,
-                                    ["--tw-ring-color" as string]: BRAND_BG,
-                                  }
-                                : undefined
-                            }
-                          >
-                            <span className="flex items-start justify-between gap-2">
-                              <span className="block">
-                                <span className="block font-semibold">{card.title}</span>
-                                <span className={`mt-0.5 block text-xs ${active ? "text-white/90" : "text-app-muted"}`}>
-                                  {card.text}
-                                </span>
-                              </span>
-                              <span className="text-sm">{active ? "✓" : ""}</span>
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <p className="mt-2 text-xs text-app-muted">Tu pourras changer ça à tout moment.</p>
-                  </div>
                 </div>
               )}
 
@@ -1970,9 +1961,7 @@ export default function Onboarding() {
 
               {step === 3 && (
                 <div className="space-y-2.5">
-                  <p className="text-xs text-app-muted">
-                    1 à 3 sports · suggestions ci-dessous, ou recherche (min. 3 lettres)
-                  </p>
+                  <p className="text-xs text-app-muted">Jusqu’à 3 sports · recherche ci-dessous</p>
 
                   {sportsLoadError ? (
                     <p className="rounded-lg border border-amber-200/90 bg-amber-50/90 px-3 py-2 text-xs leading-snug text-amber-950">
@@ -1999,33 +1988,6 @@ export default function Onboarding() {
                       ))}
                     </div>
                   )}
-                  {selectedSports.length > 0 && (
-                    <div className="space-y-2 rounded-xl border border-app-border bg-app-bg/80 px-3 py-2.5">
-                      <p className="text-xs font-semibold text-app-text">Intensité par sport *</p>
-                      {selectedSports.map((sport) => (
-                        <div key={`level-${String(sport.id)}`} className="grid grid-cols-[1fr_auto] items-center gap-2">
-                          <span className="text-xs text-app-text">
-                            {featuredNameBySportId.get(sport.id) ?? sport.name}
-                          </span>
-                          <select
-                            value={sportLevelsById[String(sport.id)] ?? ""}
-                            onChange={(e) =>
-                              setSportLevelsById((prev) => ({ ...prev, [String(sport.id)]: e.target.value }))
-                            }
-                            className="rounded-lg border border-app-border bg-app-card px-2 py-1.5 text-xs text-app-text"
-                          >
-                            <option value="">Choisir</option>
-                            {SPORT_INTENSITY_OPTIONS.map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
                   {featuredSports.length > 0 && (
                     <div>
                       <span className="mb-1.5 block text-xs font-medium text-app-muted">
@@ -2064,7 +2026,7 @@ export default function Onboarding() {
                       id="ob-sport-search"
                       type="search"
                       autoComplete="off"
-                      placeholder="Ex. yoga, ski…"
+                      placeholder="Rechercher un sport"
                       value={sportSearch}
                       onChange={(e) => setSportSearch(e.target.value)}
                       className={inputClassName}
@@ -2103,44 +2065,206 @@ export default function Onboarding() {
 
               {step === 4 && (
                 <div className="space-y-3">
-                  <div>
-                    <label className={labelClassName} htmlFor="ob-time">
-                      Quand préférez-vous bouger ?
-                    </label>
-                    <select
-                      id="ob-time"
-                      value={sportTime}
-                      onChange={(e) => setSportTime(e.target.value)}
-                      className={inputClassName}
-                    >
-                      <option value="">Pas de préférence</option>
-                      {SPORT_TIME_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="grid grid-cols-1 gap-2.5">
+                    {ONBOARDING_INTENT_CARDS.map((card) => {
+                      const active = intent === card.uiValue;
+                      return (
+                        <button
+                          key={card.uiValue}
+                          type="button"
+                          onClick={() => setIntent(card.uiValue)}
+                          className={`${intentChoiceClass(active)} min-h-[52px] w-full`}
+                          style={
+                            active
+                              ? {
+                                  borderColor: BRAND_BG,
+                                  background: BRAND_BG,
+                                  color: TEXT_ON_BRAND,
+                                  ["--tw-ring-color" as string]: BRAND_BG,
+                                }
+                              : undefined
+                          }
+                        >
+                          <span className="flex w-full items-center justify-between gap-2">
+                            <span className="text-base font-semibold">{card.title}</span>
+                            <span className="text-lg">{active ? "✓" : ""}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
+                </div>
+              )}
+
+              {step === 5 && <div className="min-h-[48px]" aria-hidden />}
+
+              {step === 6 && (
+                <div className="space-y-4">
+                  {photoStepError && (
+                    <p className="rounded-lg border border-red-100 bg-red-50/90 px-3 py-2 text-sm text-red-700" role="alert">
+                      {photoStepError}
+                    </p>
+                  )}
+
+                  <div className="space-y-3">
+                    <div>
+                      <span className={labelClassName}>Photo visage</span>
+                      <p className="mb-1.5 text-[11px] text-app-muted">Visage clair, seul(e)</p>
+                      <input
+                        ref={portraitInputRef}
+                        id="ob-photo-portrait"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="sr-only"
+                        onChange={(e) => {
+                          assignPhotoFile(e.target.files?.[0], "portrait");
+                          e.target.value = "";
+                        }}
+                      />
+                      <label
+                        htmlFor="ob-photo-portrait"
+                        className="flex cursor-pointer flex-col overflow-hidden rounded-2xl border-2 border-dashed border-app-border bg-app-bg/80 text-center transition hover:border-app-border"
+                      >
+                        {portraitPreviewUrl ? (
+                          <img
+                            src={portraitPreviewUrl}
+                            alt="Aperçu photo visage"
+                            className="aspect-[3/4] w-full max-w-[280px] mx-auto object-cover"
+                          />
+                        ) : (
+                          <span className="flex aspect-[3/4] w-full max-w-[280px] mx-auto flex-col items-center justify-center gap-1 px-2 py-6">
+                            <span className="text-xs font-semibold text-app-text">Ajouter</span>
+                            <span className="text-[10px] text-app-muted">JPG, PNG, WebP · max 5 Mo</span>
+                          </span>
+                        )}
+                      </label>
+                      {portraitPreviewUrl ? (
+                        <button
+                          type="button"
+                          onClick={() => portraitInputRef.current?.click()}
+                          className="mt-2 w-full max-w-[280px] mx-auto rounded-xl border border-app-border bg-app-card py-2.5 text-sm font-semibold text-app-text hover:bg-app-border"
+                        >
+                          Remplacer
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div>
+                      <span className={labelClassName}>Photo activité</span>
+                      <p className="mb-1.5 text-[11px] text-app-muted">En mouvement ou en pied</p>
+                      <input
+                        ref={bodyInputRef}
+                        id="ob-photo-body"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="sr-only"
+                        onChange={(e) => {
+                          assignPhotoFile(e.target.files?.[0], "body");
+                          e.target.value = "";
+                        }}
+                      />
+                      <label
+                        htmlFor="ob-photo-body"
+                        className="flex cursor-pointer flex-col overflow-hidden rounded-2xl border-2 border-dashed border-app-border bg-app-bg/80 text-center transition hover:border-app-border"
+                      >
+                        {bodyPreviewUrl ? (
+                          <img
+                            src={bodyPreviewUrl}
+                            alt="Aperçu photo activité"
+                            className="aspect-[3/4] w-full max-w-[280px] mx-auto object-cover"
+                          />
+                        ) : (
+                          <span className="flex aspect-[3/4] w-full max-w-[280px] mx-auto flex-col items-center justify-center gap-1 px-2 py-6">
+                            <span className="text-xs font-semibold text-app-text">Ajouter</span>
+                            <span className="text-[10px] text-app-muted">JPG, PNG, WebP · max 5 Mo</span>
+                          </span>
+                        )}
+                      </label>
+                      {bodyPreviewUrl ? (
+                        <button
+                          type="button"
+                          onClick={() => bodyInputRef.current?.click()}
+                          className="mt-2 w-full max-w-[280px] mx-auto rounded-xl border border-app-border bg-app-card py-2.5 text-sm font-semibold text-app-text hover:bg-app-border"
+                        >
+                          Remplacer
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {step === 7 && (
+                <div className="space-y-5">
                   <div>
-                    <span className={`${labelClassName} text-app-muted`}>
-                      Qu’est-ce que vous aimez dans le sport ? (plusieurs choix)
-                    </span>
-                    <div className="mt-1.5 flex flex-wrap gap-2">
-                      {SPORT_MOTIVATION_OPTIONS.map((option) => {
-                        const isSelected = sportMotivations.includes(option);
+                    <span className={labelClassName}>Tu préfères</span>
+                    <div className="mt-2 flex gap-2">
+                      {ONBOARDING_TIME_QUICK_OPTIONS.map((o) => {
+                        const active = sportTime === o.value;
                         return (
                           <button
-                            key={option}
+                            key={o.value}
                             type="button"
-                            onClick={() => toggleMotivation(option)}
-                            className="rounded-xl border-2 py-2 px-3 text-xs font-medium leading-snug sm:text-sm"
+                            onClick={() => setSportTime(o.value)}
+                            className="min-h-[48px] flex-1 rounded-xl border-2 px-3 text-sm font-semibold transition-all sm:text-base"
                             style={{
-                              borderColor: isSelected ? BRAND_BG : APP_BORDER,
-                              background: isSelected ? BRAND_BG : APP_CARD,
-                              color: isSelected ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                              borderColor: active ? BRAND_BG : APP_BORDER,
+                              background: active ? BRAND_BG : APP_CARD,
+                              color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
                             }}
                           >
-                            {option}
+                            {o.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <span className={labelClassName}>Ton rythme</span>
+                    <div className="mt-2 flex gap-2">
+                      {ONBOARDING_INTENSITY_QUICK_OPTIONS.map((o) => {
+                        const active = sportIntensity === o.value;
+                        return (
+                          <button
+                            key={o.value}
+                            type="button"
+                            onClick={() => setSportIntensity(o.value)}
+                            className="min-h-[48px] flex-1 rounded-xl border-2 px-3 text-sm font-semibold transition-all sm:text-base"
+                            style={{
+                              borderColor: active ? BRAND_BG : APP_BORDER,
+                              background: active ? BRAND_BG : APP_CARD,
+                              color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                            }}
+                          >
+                            {o.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <span className={labelClassName}>Organisation</span>
+                    <div className="mt-2 flex flex-col gap-2">
+                      {ORGANIZATION_OPTIONS.map((o) => {
+                        const active = planningStyle === o.value;
+                        return (
+                          <button
+                            key={o.value}
+                            type="button"
+                            onClick={() => setPlanningStyle(o.value)}
+                            className={`${intentChoiceClass(active)} min-h-[48px] w-full text-center`}
+                            style={
+                              active
+                                ? {
+                                    borderColor: BRAND_BG,
+                                    background: BRAND_BG,
+                                    color: TEXT_ON_BRAND,
+                                    ["--tw-ring-color" as string]: BRAND_BG,
+                                  }
+                                : undefined
+                            }
+                          >
+                            {o.label}
                           </button>
                         );
                       })}
@@ -2149,247 +2273,54 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 5 && (
-                <div className="space-y-5">
-                  <div>
-                    <label className={labelClassName} htmlFor="ob-phrase">
-                      Ta phrase en une ligne
-                    </label>
-                    <p className="mb-2 text-xs leading-snug text-app-muted">
-                      Une phrase nette sur ton énergie ou ton style — pas une bio longue.
-                    </p>
-                    <input
-                      id="ob-phrase"
-                      type="text"
-                      placeholder="Ex. Trail le dimanche matin, j’aime le rythme et l’air large."
-                      value={sportPhrase}
-                      maxLength={SPORT_PHRASE_MAX_LENGTH}
-                      onChange={(e) => {
-                        setSportPhrase(e.target.value.slice(0, SPORT_PHRASE_MAX_LENGTH));
-                        setSportPhraseContactError(null);
-                      }}
-                      onBlur={(e) => {
-                        const v = e.target.value;
-                        if (v.trim().length > 0 && bioPublicTextViolatesPolicy(v)) {
-                          setSportPhraseContactError(SPORT_PHRASE_EXTERNAL_CONTACT_ERROR);
-                        } else {
-                          setSportPhraseContactError(null);
-                        }
-                      }}
-                      className={inputClassName}
-                    />
-                    <p className="mt-1 text-xs text-app-muted">
-                      {sportPhrase.length}/{SPORT_PHRASE_MAX_LENGTH}
-                    </p>
-                    {sportPhraseContactError && (
-                      <p className="mt-1.5 text-sm leading-snug text-red-600" role="alert">
-                        {sportPhraseContactError}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {step === 6 && (
-                <div className="space-y-3">
-                  <ul className="space-y-1 rounded-xl border border-app-border bg-app-bg/90 px-3 py-2.5 text-[11px] leading-snug text-app-muted sm:text-xs">
-                    <li className="flex gap-2">
-                      <span className="shrink-0 text-app-muted">·</span>
-                      Photo 1 : visage clair et identifiable (toi seul(e), de face ou trois-quarts).
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="shrink-0 text-app-muted">·</span>
-                      Pas d’objets, paysages, logos, captures d’écran ni images téléchargées sur le web.
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="shrink-0 text-app-muted">·</span>
-                      Pas de photo de groupe ni d’enfant seul sur l’image.
-                    </li>
-                  </ul>
-
-                  {photoStepError && (
-                    <p className="rounded-lg border border-red-100 bg-red-50/90 px-3 py-2 text-sm text-red-700" role="alert">
-                      {photoStepError}
-                    </p>
-                  )}
-
-                  <div className="mx-auto w-full max-w-[280px] space-y-1.5">
-                    <span className={labelClassName}>Photo de profil *</span>
-                    <p className="text-[11px] text-app-muted">
-                      Elle sert de photo principale sur Discover et dans votre profil.
-                    </p>
-                    <input
-                      ref={portraitInputRef}
-                      id="ob-photo-portrait"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className="sr-only"
-                      onChange={(e) => {
-                        assignPhotoFile(e.target.files?.[0], "portrait");
-                        e.target.value = "";
-                      }}
-                    />
-                    <label
-                      htmlFor="ob-photo-portrait"
-                      className="flex cursor-pointer flex-col overflow-hidden rounded-2xl border-2 border-dashed border-app-border bg-app-bg/80 text-center transition hover:border-app-border"
-                    >
-                      {portraitPreviewUrl ? (
-                        <img
-                          src={portraitPreviewUrl}
-                          alt="Aperçu de votre photo de profil"
-                          className="aspect-[3/4] w-full object-cover"
-                        />
-                      ) : (
-                        <span className="flex aspect-[3/4] w-full flex-col items-center justify-center gap-1 px-2 py-6">
-                          <span className="text-xs font-semibold text-app-text">Choisir une photo</span>
-                          <span className="text-[10px] text-app-muted">JPG, PNG, WebP · max 5 Mo</span>
-                        </span>
-                      )}
-                    </label>
-                    {portraitPreviewUrl && (
-                      <button
-                        type="button"
-                        onClick={() => portraitInputRef.current?.click()}
-                        className="w-full rounded-xl border border-app-border bg-app-card py-2.5 text-sm font-semibold text-app-text hover:bg-app-border"
-                      >
-                        Remplacer la photo
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {step === 7 && (
-                <div className="space-y-3">
-                  <ul className="space-y-1 rounded-xl border border-app-border bg-app-bg/90 px-3 py-2.5 text-[11px] leading-snug text-app-muted sm:text-xs">
-                    <li className="flex gap-2">
-                      <span className="shrink-0 text-app-muted">·</span>
-                      Photo 2 : silhouette / corps entier ou quasi entier, toi seul(e) sur l’image.
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="shrink-0 text-app-muted">·</span>
-                      La silhouette doit être lisible (pas seulement un détail ou un accessoire).
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="shrink-0 text-app-muted">·</span>
-                      Même interdits : objets, paysages, logos, captures d’écran, images non personnelles.
-                    </li>
-                  </ul>
-
-                  {photoStepError && (
-                    <p className="rounded-lg border border-red-100 bg-red-50/90 px-3 py-2 text-sm text-red-700" role="alert">
-                      {photoStepError}
-                    </p>
-                  )}
-
-                  <div className="mx-auto w-full max-w-[280px] space-y-1.5">
-                    <span className={labelClassName}>Photo plein corps *</span>
-                    <p className="text-[11px] text-app-muted">
-                      Corps entier (ou quasi), debout de préférence.
-                    </p>
-                    <input
-                      ref={bodyInputRef}
-                      id="ob-photo-body"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className="sr-only"
-                      onChange={(e) => {
-                        assignPhotoFile(e.target.files?.[0], "body");
-                        e.target.value = "";
-                      }}
-                    />
-                    <label
-                      htmlFor="ob-photo-body"
-                      className="flex cursor-pointer flex-col overflow-hidden rounded-2xl border-2 border-dashed border-app-border bg-app-bg/80 text-center transition hover:border-app-border"
-                    >
-                      {bodyPreviewUrl ? (
-                        <img
-                          src={bodyPreviewUrl}
-                          alt="Aperçu photo plein corps"
-                          className="aspect-[3/4] w-full object-cover"
-                        />
-                      ) : (
-                        <span className="flex aspect-[3/4] w-full flex-col items-center justify-center gap-1 px-2 py-6">
-                          <span className="text-xs font-semibold text-app-text">Choisir une photo</span>
-                          <span className="text-[10px] text-app-muted">JPG, PNG, WebP · max 5 Mo</span>
-                        </span>
-                      )}
-                    </label>
-                    {bodyPreviewUrl && (
-                      <button
-                        type="button"
-                        onClick={() => bodyInputRef.current?.click()}
-                        className="w-full rounded-xl border border-app-border bg-app-card py-2.5 text-sm font-semibold text-app-text hover:bg-app-border"
-                      >
-                        Remplacer la photo
-                      </button>
-                    )}
-                  </div>
-
-                  <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-app-border bg-app-card px-3 py-2.5 text-left text-sm leading-snug text-app-text">
-                    <input
-                      type="checkbox"
-                      checked={photoComplianceConfirmed}
-                      onChange={(e) => {
-                        setPhotoComplianceConfirmed(e.target.checked);
-                        if (e.target.checked) setPhotoStepError(null);
-                      }}
-                      className="mt-0.5 h-4 w-4 shrink-0 rounded border-app-border"
-                    />
-                    <span>{ONBOARDING_PHOTO_COMPLIANCE_LABEL}</span>
-                  </label>
-                </div>
-              )}
-
               {step === 8 && (
+                <div className="space-y-3">
+                  <label className={labelClassName} htmlFor="ob-sport-phrase">
+                    Ta phrase (optionnel)
+                  </label>
+                  <textarea
+                    id="ob-sport-phrase"
+                    rows={4}
+                    value={sportPhraseOptional}
+                    onChange={(e) => setSportPhraseOptional(e.target.value)}
+                    placeholder="Ex : Toujours partant(e) pour une session skate au coucher du soleil."
+                    className={`${inputClassName} min-h-[100px] resize-y`}
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void goNext()}
+                    className="text-sm font-medium text-app-muted underline underline-offset-2"
+                  >
+                    Passer
+                  </button>
+                </div>
+              )}
+
+              {step === 9 && (
                 <div className="space-y-4">
-                  <p className="text-sm leading-relaxed text-app-muted">
-                    Préférences de pratique (optionnel) : ajoute ce qui t’aide à te sentir à l’aise pendant l’activité.
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {PRACTICE_PREFERENCE_OPTIONS.map((opt) => {
-                      const active = practicePreferences.includes(opt.value);
-                      return (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          onClick={() => togglePracticePreference(opt.value)}
-                          className="rounded-xl border-2 px-3 py-2 text-xs font-medium sm:text-sm"
-                          style={{
-                            borderColor: active ? BRAND_BG : APP_BORDER,
-                            background: active ? BRAND_BG : APP_CARD,
-                            color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
-                          }}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <label className="flex cursor-pointer items-start gap-2 text-sm text-app-text">
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-app-border bg-app-bg/60 px-3 py-3 text-sm text-app-text">
                     <input
                       type="checkbox"
                       checked={confirm18}
                       onChange={(e) => setConfirm18(e.target.checked)}
-                      className="mt-0.5 h-4 w-4 shrink-0 rounded border-app-border"
+                      className="mt-0.5 h-5 w-5 shrink-0 rounded border-app-border"
                     />
-                    <span>Je confirme avoir 18 ans ou plus *</span>
+                    <span>J’ai 18 ans ou plus</span>
                   </label>
-                  <label className="flex cursor-pointer items-start gap-2 text-sm text-app-text">
+                  <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-app-border bg-app-bg/60 px-3 py-3 text-sm text-app-text">
                     <input
                       type="checkbox"
                       checked={acceptTerms}
                       onChange={(e) => setAcceptTerms(e.target.checked)}
-                      className="mt-0.5 h-4 w-4 shrink-0 rounded border-app-border"
+                      className="mt-0.5 h-5 w-5 shrink-0 rounded border-app-border"
                     />
-                    <span>
-                      J’accepte les Conditions d&apos;utilisation et la Politique de confidentialité *
-                    </span>
+                    <span>J’accepte les conditions d’utilisation et la politique de confidentialité</span>
                   </label>
                 </div>
               )}
 
-              {stepHint && step !== 6 && step !== 7 && (
+              {stepHint && step !== 6 && (
                 <p className="mt-3 text-sm text-red-600">{stepHint}</p>
               )}
               {finalStepBlockReason && (
@@ -2425,7 +2356,15 @@ export default function Onboarding() {
                     className="flex-1 rounded-xl py-3 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-70"
                     style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
                   >
-                    {step === 2 ? "Enregistrer ma localisation" : "Suivant"}
+                    {step === 2
+                      ? "Enregistrer ma localisation"
+                      : step === 3
+                        ? "Continuer"
+                        : step === 5
+                          ? "J’ai compris"
+                          : step === 8
+                            ? "Continuer"
+                            : "Suivant"}
                   </button>
                 ) : (
                   <button

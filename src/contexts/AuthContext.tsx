@@ -34,9 +34,10 @@ export type Profile = {
   profile_completed: boolean;
   /** Voir migration `008_profiles_photo_verification` — mis à jour via Veriff / équipe. */
   is_photo_verified?: boolean | null;
-  /** Validation produit des photos (voir migration `043_profile_photo_validation_statuses`). */
+  /** Détail par photo — migration `043_profile_photo_validation_statuses`. */
   portrait_photo_status?: string | null;
   body_photo_status?: string | null;
+  /** Globale — badge « vérifié » : `photo_status === 'approved'` (exposé par `feed_profiles`). */
   photo_status?: string | null;
   portrait_rejection_code?: string | null;
   body_rejection_code?: string | null;
@@ -147,7 +148,7 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
 
   if (error) {
     if (isPostgresUndefinedColumnError(error)) {
-      console.warn("[AuthContext] fetchProfile: 42703 — single retry with minimal columns");
+      console.warn("[AuthContext] fetchProfile: 42703 — retry with minimal columns");
       const min = await q(PROFILE_SELECT_MINIMAL);
       if (min.error || !min.data) {
         if (min.error) {
@@ -157,8 +158,10 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
       }
       return profileFromMinimalRow(min.data as unknown as { id: string; first_name?: string | null });
     }
-    console.warn("[AuthContext] fetchProfile:", error.message);
-    return null;
+    if (error) {
+      console.warn("[AuthContext] fetchProfile:", error.message);
+      return null;
+    }
   }
 
   if (!data) {
@@ -167,7 +170,7 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
     const retry = await q(PROFILE_SELECT_CORE);
     if (retry.error) {
       if (isPostgresUndefinedColumnError(retry.error)) {
-        console.warn("[AuthContext] fetchProfile retry: 42703 — single minimal select");
+        console.warn("[AuthContext] fetchProfile retry: 42703 — minimal select");
         const min = await q(PROFILE_SELECT_MINIMAL);
         if (min.error || !min.data) {
           if (min.error) console.warn("[AuthContext] fetchProfile: minimal after ensure failed", min.error.message);
@@ -177,9 +180,10 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
       }
       console.warn("[AuthContext] fetchProfile retry:", retry.error.message);
       return null;
+    } else if (retry.data) {
+      data = retry.data;
     }
-    if (!retry.data) return null;
-    data = retry.data;
+    if (!data) return null;
   }
 
   if (!isProfileRecord(data)) {

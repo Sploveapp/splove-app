@@ -13,6 +13,7 @@ import {
 } from "../constants/copy";
 import { VerifiedBadge } from "../components/VerifiedBadge";
 import { collectPhotoRejectionUserMessages, isPhotoVerified } from "../lib/profileVerification";
+import { bioPublicTextViolatesPolicy } from "../lib/contentModeration";
 import {
   APP_BG,
   APP_BORDER,
@@ -31,6 +32,8 @@ import { IconSignOut } from "../components/ui/Icon";
 
 const FEATURE_COMING_SOON_MESSAGE = "Fonction bientôt disponible";
 
+const SPORT_PHRASE_MAX_LEN = 120;
+
 const ACCESSIBILITY_SAVE_SUCCESS = "Préférences enregistrées.";
 
 const sectionHeadingButtonStyle: CSSProperties = {
@@ -46,11 +49,8 @@ const sectionHeadingButtonStyle: CSSProperties = {
   fontWeight: 600,
   color: APP_TEXT,
 };
-import {
-  MESSAGE_BUBBLE_THEME_IDS,
-  MESSAGE_BUBBLE_THEME_LABELS,
-  getOwnMessageBubbleClassName,
-} from "../lib/messageBubbleTheme";
+import { CHAT_BUBBLE_COLOR_ORDER, CHAT_BUBBLE_COLORS } from "../constants/chatBubbleColors";
+import { getOwnMessageBubbleClassName } from "../lib/messageBubbleTheme";
 
 export default function Profile() {
   const navigate = useNavigate();
@@ -68,6 +68,9 @@ export default function Profile() {
   const [locSaving, setLocSaving] = useState(false);
   const [locMessage, setLocMessage] = useState<string | null>(null);
   const [geoLoading, setGeoLoading] = useState(false);
+  const [phraseDraft, setPhraseDraft] = useState("");
+  const [phraseSaving, setPhraseSaving] = useState(false);
+  const [phraseMessage, setPhraseMessage] = useState<string | null>(null);
 
   const syncAccessibilityFromProfile = useCallback(() => {
     if (!profile) return;
@@ -79,6 +82,12 @@ export default function Profile() {
   useEffect(() => {
     syncAccessibilityFromProfile();
   }, [syncAccessibilityFromProfile]);
+
+  useEffect(() => {
+    if (!profile) return;
+    const pr = profile as Record<string, unknown>;
+    setPhraseDraft(typeof pr.sport_phrase === "string" ? pr.sport_phrase : "");
+  }, [profile]);
 
   useEffect(() => {
     if (!profile) return;
@@ -107,9 +116,42 @@ export default function Profile() {
     return () => window.clearTimeout(t);
   }, [accessibilityMessage]);
 
+  useEffect(() => {
+    if (phraseMessage !== "Phrase enregistrée.") return;
+    const t = window.setTimeout(() => setPhraseMessage(null), 2000);
+    return () => window.clearTimeout(t);
+  }, [phraseMessage]);
+
   async function handleLogout() {
     await supabase.auth.signOut();
     navigate("/auth", { replace: true });
+  }
+
+  async function handleSaveSportPhrase() {
+    if (!user?.id) return;
+    const t = phraseDraft.trim();
+    if (t.length > 0 && bioPublicTextViolatesPolicy(t)) {
+      setPhraseMessage("Ce texte n’est pas autorisé (liens, réseaux sociaux, etc.).");
+      return;
+    }
+    setPhraseSaving(true);
+    setPhraseMessage(null);
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          sport_phrase: t.length > 0 ? t.slice(0, SPORT_PHRASE_MAX_LEN) : null,
+        })
+        .eq("id", user.id);
+      if (error) {
+        setPhraseMessage(error.message || "Enregistrement impossible.");
+        return;
+      }
+      await refetchProfile();
+      setPhraseMessage("Phrase enregistrée.");
+    } finally {
+      setPhraseSaving(false);
+    }
   }
 
   async function handleSaveLocation() {
@@ -343,7 +385,15 @@ export default function Profile() {
               </span>
               {profile && isPhotoVerified(profile) ? (
                 <>
-                  <div style={{ marginBottom: "10px" }}>
+                  <div
+                    style={{
+                      marginBottom: "10px",
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      gap: "8px",
+                    }}
+                  >
                     <VerifiedBadge />
                   </div>
                   <p
@@ -448,6 +498,85 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
+              Phrase sport (optionnel)
+            </h2>
+            <p
+              style={{
+                margin: "0 0 12px 0",
+                fontSize: "13px",
+                fontWeight: 500,
+                color: APP_TEXT_MUTED,
+                lineHeight: 1.45,
+              }}
+            >
+              Une courte phrase sur ton énergie ou ton style — tu peux la laisser vide.
+            </p>
+            <textarea
+              value={phraseDraft}
+              onChange={(e) => {
+                setPhraseDraft(e.target.value.slice(0, SPORT_PHRASE_MAX_LEN));
+                setPhraseMessage(null);
+              }}
+              rows={3}
+              maxLength={SPORT_PHRASE_MAX_LEN}
+              placeholder="Ex. Trail le dimanche, j’aime le rythme et l’air large."
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "12px 14px",
+                borderRadius: "12px",
+                border: `1px solid ${APP_BORDER}`,
+                background: APP_BG,
+                color: APP_TEXT,
+                fontSize: "15px",
+                fontFamily: "inherit",
+                resize: "vertical",
+                minHeight: "88px",
+              }}
+            />
+            <p style={{ margin: "6px 0 12px 0", fontSize: "12px", color: APP_TEXT_MUTED }}>
+              {phraseDraft.length}/{SPORT_PHRASE_MAX_LEN}
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleSaveSportPhrase()}
+              disabled={phraseSaving}
+              style={{
+                width: "100%",
+                padding: "12px 16px",
+                borderRadius: "12px",
+                border: "none",
+                fontSize: "15px",
+                fontWeight: 600,
+                cursor: phraseSaving ? "wait" : "pointer",
+                background: phraseSaving ? CTA_DISABLED_BG : BRAND_BG,
+                color: TEXT_ON_BRAND,
+              }}
+            >
+              {phraseSaving ? "Enregistrement…" : "Enregistrer la phrase"}
+            </button>
+            {phraseMessage ? (
+              <p style={{ margin: "10px 0 0 0", fontSize: "14px", color: APP_TEXT_MUTED }}>{phraseMessage}</p>
+            ) : null}
+          </div>
+
+          <div
+            style={{
+              background: APP_CARD,
+              borderRadius: "20px",
+              padding: "24px",
+              boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+              marginBottom: "20px",
+            }}
+          >
+            <h2
+              style={{
+                margin: "0 0 8px 0",
+                fontSize: "16px",
+                fontWeight: 600,
+                color: APP_TEXT,
+              }}
+            >
               Couleur de tes messages
             </h2>
             <p
@@ -488,7 +617,7 @@ export default function Profile() {
               className="grid grid-cols-2 gap-3 sm:grid-cols-3"
               aria-hidden="true"
             >
-              {MESSAGE_BUBBLE_THEME_IDS.map((id) => (
+              {CHAT_BUBBLE_COLOR_ORDER.map((id) => (
                 <div
                   key={id}
                   className="flex flex-col items-stretch gap-2 rounded-xl border border-app-border/95 bg-app-card p-3 text-center"
@@ -497,7 +626,7 @@ export default function Profile() {
                     <div className={getOwnMessageBubbleClassName(id)}>Bonjour !</div>
                   </div>
                   <span className="text-center text-[12px] font-semibold text-app-text">
-                    {MESSAGE_BUBBLE_THEME_LABELS[id]}
+                    {CHAT_BUBBLE_COLORS[id].label}
                   </span>
                 </div>
               ))}

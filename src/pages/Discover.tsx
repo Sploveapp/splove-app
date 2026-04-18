@@ -74,10 +74,12 @@ type Profile = {
   sport_time?: string | null;
   /** Voir `profiles.is_photo_verified` (Veriff). */
   is_photo_verified?: boolean | null;
+  /** Badge « vérifié » : `photo_status === 'approved'` (MVP). */
   photo_status?: string | null;
   needs_adapted_activities?: boolean | null;
   profile_sports?: { sports: { label: string | null; slug?: string | null } | null }[];
   profile_completed?: boolean | null;
+  last_active_at?: string | null;
   latitude?: number | null;
   longitude?: number | null;
   lat?: number | null;
@@ -199,6 +201,42 @@ function stableIdTieBreak(id: string): number {
 const DISCOVER_FETCH_LIMIT = 80;
 const DISCOVER_DISPLAY_LIMIT = 10;
 
+/** Message utilisateur sûr (aucun détail technique backend). */
+const DISCOVER_FETCH_FAILED_MSG =
+  "Impossible de charger les profils. Vérifie ta connexion et réessaie.";
+
+function DiscoverProfileCardSkeleton() {
+  return (
+    <article
+      className="mb-7 flex max-h-[min(88vh,820px)] min-h-[min(520px,85svh)] flex-col overflow-hidden rounded-3xl bg-app-card shadow-lg ring-1 ring-app-border/90"
+      aria-hidden
+    >
+      <div className="relative min-h-[240px] w-full flex-[4] basis-0 overflow-hidden bg-app-border">
+        <div className="absolute inset-0 bg-gradient-to-br from-zinc-800/95 via-zinc-700/45 to-zinc-800/95 animate-pulse" />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 space-y-2.5 px-4 pb-5 pt-16 sm:px-5 sm:pb-6">
+          <div className="h-8 w-[62%] max-w-[14rem] rounded-md bg-white/14" />
+          <div className="h-3 w-[38%] max-w-[9rem] rounded-md bg-white/10" />
+          <div className="h-3 w-[78%] max-w-[17rem] rounded-md bg-white/10" />
+        </div>
+      </div>
+      <div className="flex min-h-[96px] flex-1 flex-col justify-end gap-3 border-t border-app-border/90 bg-app-card px-3 py-3 sm:px-4">
+        <div className="flex items-stretch gap-2 sm:gap-2.5">
+          <div className="flex w-[3.25rem] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl py-2">
+            <div className="h-5 w-5 rounded-full bg-app-border/90 animate-pulse" />
+            <div className="h-2 w-8 rounded bg-app-border/90 animate-pulse" />
+          </div>
+          <div className="min-h-[52px] min-w-0 flex-1 rounded-2xl bg-app-border/95 animate-pulse" />
+          <div className="flex w-[3.25rem] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-app-border bg-app-card py-2">
+            <div className="h-5 w-5 rounded-full bg-app-border/90 animate-pulse" />
+            <div className="h-2 w-7 rounded bg-app-border/90 animate-pulse" />
+          </div>
+        </div>
+        <div className="mx-auto h-2.5 w-24 rounded bg-app-border/85 animate-pulse" />
+      </div>
+    </article>
+  );
+}
+
 const SWIPE_COMMIT_PX = 72;
 const TAP_MAX_PX = 15;
 const SWIPE_DAMP = 0.55;
@@ -209,8 +247,10 @@ const SWIPE_DAMP = 0.55;
  */
 const FEED_PROFILE_IDS_SELECT = "id";
 
-/** Columns for Discover cards — pas de lat/lng des autres profils (distance via RPC SQL). */
-/** Colonnes uniquement présentes sur la `profiles` réelle (pas de compteurs / boost optionnels). */
+/**
+ * Colonnes Discover depuis `public.profiles` uniquement — pas de colonnes optionnelles absentes en prod.
+ * Badge « vérifié » : uniquement `photo_status === 'approved'`.
+ */
 const DISCOVER_PROFILES_DETAIL_SELECT =
   "id, first_name, birth_date, created_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, profile_sports(sports(label, slug))";
 /** IDs déjà likés — schéma `likes` : `liker_id` / `liked_id` uniquement. */
@@ -789,9 +829,7 @@ export default function Discover() {
         .order("created_at", { ascending: false })
         .limit(DISCOVER_FETCH_LIMIT);
 
-      if (BETA_MODE) {
-        feedIdsQ = feedIdsQ.eq("photo2_status", "approved");
-      }
+      /** Filtre bêta : aligné sur `photo_status` (disponible sur la vue), pas sur photo2 / photo_verification. */
 
       if (notInClause) {
         feedIdsQ = feedIdsQ.not("id", "in", notInClause);
@@ -804,7 +842,7 @@ export default function Discover() {
           code: feedRes.error.code,
           message: feedRes.error.message,
         });
-        setErrorMessage(feedRes.error.message || "Impossible de charger les profils.");
+        setErrorMessage(DISCOVER_FETCH_FAILED_MSG);
         return;
       }
 
@@ -828,7 +866,7 @@ export default function Discover() {
         return;
       }
 
-      const othersRes = await supabase
+      const detailRes = await supabase
         .from("profiles")
         .select(DISCOVER_PROFILES_DETAIL_SELECT)
         .in("id", feedIds)
@@ -839,16 +877,15 @@ export default function Discover() {
         .not("birth_date", "is", null)
         .order("created_at", { ascending: false, nullsFirst: false });
 
-      if (othersRes.error) {
+      if (detailRes.error) {
         console.error("[Discover feed] profiles detail query failed", {
-          code: othersRes.error.code,
-          message: othersRes.error.message,
+          code: detailRes.error.code,
+          message: detailRes.error.message,
         });
-        setErrorMessage(othersRes.error.message || "Impossible de charger les profils.");
+        setErrorMessage(DISCOVER_FETCH_FAILED_MSG);
         return;
       }
-
-      const rawData = othersRes.data;
+      const rawData: unknown = detailRes.data;
       let raw: Profile[] = Array.isArray(rawData)
         ? (rawData as unknown as Profile[])
         : rawData && typeof rawData === "object"
@@ -858,6 +895,9 @@ export default function Discover() {
         console.error("[Discover feed] unexpected profiles payload (expected array)", {
           type: typeof rawData,
         });
+      }
+      if (BETA_MODE) {
+        raw = raw.filter((p) => String(p.photo_status ?? "").toLowerCase().trim() === "approved");
       }
       console.log("[Discover detail] profils détaillés reçus", {
         count: raw.length,
@@ -1023,6 +1063,9 @@ export default function Discover() {
       }
 
       discoverFiltered.sort((a, b) => {
+        const va = isPhotoVerified(a) ? 1 : 0;
+        const vb = isPhotoVerified(b) ? 1 : 0;
+        if (va !== vb) return vb - va;
         const lb = safeTimeMs(b.created_at);
         const la = safeTimeMs(a.created_at);
         if (lb !== la) return lb - la;
@@ -1048,7 +1091,7 @@ export default function Discover() {
       setProfiles(slice);
     } catch (e) {
       console.error("[Discover] loadProfiles erreur inattendue:", e);
-      setErrorMessage(e instanceof Error ? e.message : "Chargement impossible. Réessayez.");
+      setErrorMessage(DISCOVER_FETCH_FAILED_MSG);
     } finally {
       setLoading(false);
       console.debug("[Discover debug] loadProfiles terminé", {
@@ -1248,14 +1291,41 @@ export default function Discover() {
           ) : null}
         </section>
 
-        {loading && (
-          <p className="text-center text-sm text-app-muted">Chargement des profils…</p>
+        {loading && !errorMessage && (
+          <div
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+            aria-label="Chargement des profils"
+            className="space-y-0"
+          >
+            {[0, 1, 2].map((i) => (
+              <DiscoverProfileCardSkeleton key={i} />
+            ))}
+          </div>
         )}
 
         {errorMessage && (
-          <p className="mb-4 rounded-xl border border-red-500/25 bg-red-950/40 px-3 py-2 text-sm text-red-100">
-            {errorMessage}
-          </p>
+          <div
+            role="alert"
+            className="mb-5 rounded-2xl border border-app-border bg-app-card px-5 py-6 text-center shadow-sm ring-1 ring-white/[0.04]"
+          >
+            <p className="text-base font-semibold leading-snug text-app-text">Découverte indisponible</p>
+            <p className="mx-auto mt-2 max-w-[22rem] text-sm leading-relaxed text-app-muted">
+              {errorMessage}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setErrorMessage("");
+                void loadProfiles();
+              }}
+              className="mx-auto mt-5 block w-full max-w-xs rounded-xl px-4 py-3 text-[15px] font-bold shadow-md transition hover:opacity-95 active:scale-[0.99]"
+              style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
+            >
+              Réessayer
+            </button>
+          </div>
         )}
 
         {likeFeedbackMode === "like" && (

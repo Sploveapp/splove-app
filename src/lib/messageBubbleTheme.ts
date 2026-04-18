@@ -2,30 +2,31 @@
  * Thème d’affichage des bulles **envoyées par l’utilisateur courant** dans le chat.
  * Les bulles reçues restent neutres (décidé dans le composant).
  *
- * Couleurs : voir `chatColors.ts`.
+ * Couleurs : registre unique `src/constants/chatBubbleColors.ts`.
  */
 
 import {
-  CHAT_BUBBLE_PALETTE_IDS,
-  CHAT_OUTGOING_BUBBLE_SURFACE,
-  DEFAULT_CHAT_BUBBLE_PALETTE_ID,
-  type ChatBubblePaletteId,
-} from "./chatColors";
+  CHAT_BUBBLE_COLORS,
+  CHAT_BUBBLE_COLOR_ORDER,
+  DEFAULT_CHAT_BUBBLE_COLOR_KEY,
+  getChatBubbleColorDef,
+  type ChatBubbleColorKey,
+} from "../constants/chatBubbleColors";
 
-/** Alias applicatif — identique à `ChatBubblePaletteId`. */
-export type MessageBubbleTheme = ChatBubblePaletteId;
+/** Alias applicatif — identique à `ChatBubbleColorKey`. */
+export type MessageBubbleTheme = ChatBubbleColorKey;
 
-export const DEFAULT_MESSAGE_BUBBLE_THEME: MessageBubbleTheme = DEFAULT_CHAT_BUBBLE_PALETTE_ID;
+export const DEFAULT_MESSAGE_BUBBLE_THEME: MessageBubbleTheme = DEFAULT_CHAT_BUBBLE_COLOR_KEY;
 
-export const MESSAGE_BUBBLE_THEME_IDS: readonly MessageBubbleTheme[] = CHAT_BUBBLE_PALETTE_IDS;
+export const MESSAGE_BUBBLE_THEME_IDS: readonly MessageBubbleTheme[] = CHAT_BUBBLE_COLOR_ORDER;
 
-export const MESSAGE_BUBBLE_THEME_LABELS: Record<MessageBubbleTheme, string> = {
-  red: "Rouge",
-  violet: "Violet",
-  green: "Vert",
-  yellow: "Jaune",
-  white: "Blanc",
-};
+export const MESSAGE_BUBBLE_THEME_LABELS: Record<MessageBubbleTheme, string> = CHAT_BUBBLE_COLOR_ORDER.reduce(
+  (acc, k) => {
+    acc[k] = CHAT_BUBBLE_COLORS[k].label;
+    return acc;
+  },
+  {} as Record<MessageBubbleTheme, string>,
+);
 
 /** Anciens identifiants stockés (localStorage) → nouvelle palette. */
 const LEGACY_MESSAGE_BUBBLE_THEME_MAP: Partial<Record<string, MessageBubbleTheme>> = {
@@ -63,7 +64,7 @@ export function coerceMessageBubbleTheme(value: unknown): MessageBubbleTheme {
 
 export function getOwnMessageBubbleClassName(theme: MessageBubbleTheme | undefined | null): string {
   const t = coerceMessageBubbleTheme(theme);
-  const surface = CHAT_OUTGOING_BUBBLE_SURFACE[t];
+  const surface = getChatBubbleColorDef(t).bubbleSurfaceClass;
   return `max-w-[85%] rounded-2xl border px-3.5 py-2.5 text-sm leading-snug shadow-sm ${surface}`;
 }
 

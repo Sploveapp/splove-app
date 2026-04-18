@@ -75,5 +75,7 @@ export type ProfileInLikesYou = {
   sport_phrase: string | null;
   sport_time: string | null;
   is_photo_verified?: boolean | null;
+  /** Badge « vérifié » (MVP) : `photo_status === 'approved'`. */
+  photo_status?: string | null;
   profile_sports?: { sports: { label: string; slug?: string } | null }[];
 };

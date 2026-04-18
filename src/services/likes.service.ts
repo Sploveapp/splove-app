@@ -11,7 +11,7 @@ export type CreateLikeRpcResult = {
 };
 
 const PROFILE_SELECT =
-  "id, first_name, city, main_photo_url, portrait_url, fullbody_url, sport_feeling, sport_phrase, sport_time, is_photo_verified, profile_sports(sports(label, slug))";
+  "id, first_name, city, main_photo_url, portrait_url, fullbody_url, sport_feeling, sport_phrase, sport_time, is_photo_verified, photo_status, profile_sports(sports(label, slug))";
 
 /**
  * Récupère les likes reçus par l'utilisateur avec les profils associés.

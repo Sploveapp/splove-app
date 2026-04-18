@@ -50,6 +50,7 @@ import { canUserSendChatTextMessage } from "../lib/chatFirstMessagePolicy";
 import { ReportModal } from "../components/ReportModal";
 import { VerifiedBadge } from "../components/VerifiedBadge";
 import { messageContainsDisallowedContent } from "../lib/chatMessagePolicy";
+import { CHAT_BUBBLE_COLOR_ORDER, getChatBubbleColorDef } from "../constants/chatBubbleColors";
 import {
   getOwnMessageBubbleClassName,
   loadConversationMessageBubbleThemeFromStorage,
@@ -64,36 +65,9 @@ const TYPING_PULSE_DEBOUNCE_MS = 450;
 const TYPING_IDLE_STOP_MS = 2500;
 const TYPING_PARTNER_VISIBLE_MS = 3500;
 const TYPING_SENTINEL_ISO = "1970-01-01T00:00:00.000Z";
-const CHAT_ACCENT_OPTIONS: readonly MessageBubbleTheme[] = ["red", "violet", "green", "white"];
+/** Registre unique `chatBubbleColors` — Profil (aperçu) et Chat. */
+const CHAT_ACCENT_OPTIONS = CHAT_BUBBLE_COLOR_ORDER;
 const CHAT_DEFAULT_ACCENT: MessageBubbleTheme = "violet";
-const CHAT_INPUT_FOCUS_CLASS_BY_ACCENT: Record<MessageBubbleTheme, string> = {
-  red: "focus:border-[#FF1E2D]/60 focus:ring-[#FF1E2D]/35",
-  violet: "focus:border-violet-400/70 focus:ring-violet-400/35",
-  green: "focus:border-emerald-400/70 focus:ring-emerald-400/35",
-  yellow: "focus:border-amber-300/70 focus:ring-amber-300/35",
-  white: "focus:border-zinc-200/70 focus:ring-zinc-200/30",
-};
-const CHAT_SEND_BUTTON_STYLE_BY_ACCENT: Record<MessageBubbleTheme, { bg: string; text: string }> = {
-  red: { bg: "#FF1E2D", text: "#FFFFFF" },
-  violet: { bg: "#7C3AED", text: "#FFFFFF" },
-  green: { bg: "#059669", text: "#FFFFFF" },
-  yellow: { bg: "#F59E0B", text: "#111827" },
-  white: { bg: "#F8FAFC", text: "#111827" },
-};
-const CHAT_ACCENT_DOT_CLASS_BY_THEME: Record<MessageBubbleTheme, string> = {
-  red: "bg-[#FF1E2D]",
-  violet: "bg-violet-500",
-  green: "bg-emerald-500",
-  yellow: "bg-amber-400",
-  white: "bg-white ring-1 ring-app-border",
-};
-const CHAT_ACCENT_LABEL_BY_THEME: Record<MessageBubbleTheme, string> = {
-  red: "Rouge",
-  violet: "Violet",
-  green: "Vert",
-  yellow: "Jaune",
-  white: "Blanc",
-};
 
 export type ActivityFeedbackSentiment = "positive" | "neutral" | "negative";
 
@@ -290,8 +264,9 @@ export default function Chat() {
     setChatStyleOpen(false);
   }, [conversationId]);
 
-  const chatSendButtonStyle = CHAT_SEND_BUTTON_STYLE_BY_ACCENT[chatAccentTheme];
-  const chatInputFocusClass = CHAT_INPUT_FOCUS_CLASS_BY_ACCENT[chatAccentTheme];
+  const chatAccentDef = getChatBubbleColorDef(chatAccentTheme);
+  const chatSendButtonStyle = chatAccentDef.sendButton;
+  const chatInputFocusClass = chatAccentDef.inputFocusClass;
 
   useEffect(() => {
     const t = window.setInterval(() => setNowTick(Date.now()), 30_000);
@@ -558,7 +533,7 @@ export default function Chat() {
         const { data: pairProfiles } = await supabase
           .from("profiles")
           .select(
-            "id, first_name, main_photo_url, portrait_url, avatar_url, is_photo_verified, gender, intent",
+            "id, first_name, main_photo_url, portrait_url, avatar_url, is_photo_verified, photo_status, gender, intent",
           )
           .in("id", [user.id, other]);
         if (!cancelled && pairProfiles && pairProfiles.length > 0) {
@@ -575,6 +550,7 @@ export default function Chat() {
                 portrait_url?: string | null;
                 avatar_url?: string | null;
                 is_photo_verified?: boolean | null;
+                photo_status?: string | null;
                 gender?: string | null;
                 intent?: unknown;
               }
@@ -1363,6 +1339,7 @@ export default function Chat() {
                 <div className="space-y-1">
                   {CHAT_ACCENT_OPTIONS.map((opt) => {
                     const active = chatAccentTheme === opt;
+                    const optDef = getChatBubbleColorDef(opt);
                     return (
                       <button
                         key={opt}
@@ -1381,8 +1358,8 @@ export default function Chat() {
                         }`}
                       >
                         <span className="flex items-center gap-2">
-                          <span className={`h-2.5 w-2.5 rounded-full ${CHAT_ACCENT_DOT_CLASS_BY_THEME[opt]}`} />
-                          {CHAT_ACCENT_LABEL_BY_THEME[opt]}
+                          <span className={`h-2.5 w-2.5 rounded-full ${optDef.dotClass}`} />
+                          {optDef.label}
                         </span>
                         {active ? <span className="text-[11px]">Actif</span> : null}
                       </button>

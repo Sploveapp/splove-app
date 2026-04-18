@@ -1,7 +1,6 @@
 /**
  * Discover MVP : pas de dépendance à des colonnes `profiles` optionnelles ou absentes en prod.
  * — Match sports + exclusion géo (rayon) si distance connue via RPC.
- * — Score fixe ; le tri se fait côté page sur `created_at` / distance.
  */
 
 import { getSharedSportLabelsForMatch } from "./sportMatchGroups";
@@ -13,6 +12,9 @@ export type DiscoverScoreProfileInput = {
   longitude?: number | null;
   lat?: number | null;
   lng?: number | null;
+  photo_status?: string | null;
+  is_photo_verified?: boolean | null;
+  profile_completed?: boolean | null;
 };
 
 function firstFiniteNumber(values: unknown[]): number | null {
@@ -176,14 +178,15 @@ export function buildDiscoverScore(
   };
 }
 
-/** MVP : plus de signal « fiabilité » sans colonnes dédiées — tri par `created_at` côté UI. */
-export function computeReliabilityScore(p: DiscoverScoreProfileInput): number {
-  void p;
+/** Réservé debug / futur — pas de signal « confiance » en MVP. */
+export function computeReliabilityScore(_p: DiscoverScoreProfileInput): number {
+  void _p;
   return 0;
 }
 
-export function getReliabilityUiHints(p: unknown): string[] {
-  void p;
+export function getReliabilityUiHints(_p: unknown): string[] {
+  void _p;
+  /** Éviter le doublon avec le badge « Profil vérifié » sur la carte — copy confiance réservée aux tooltips / fiche profil. */
   return [];
 }
 

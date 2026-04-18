@@ -1,19 +1,20 @@
 /**
- * Vérification d’identité / photos — aligné sur `profiles` :
- * - `is_photo_verified` : badge « Profil vérifié » (ex. Veriff).
- * - `photo_status` : validation produit des deux photos (pending | approved | rejected).
- * - `portrait_photo_status` / `body_photo_status` : détail par photo.
+ * Vérification photos — MVP : badge « Profil vérifié » = `photo_status === 'approved'`.
+ * Détail par photo / codes rejet : `portrait_rejection_code`, `body_rejection_code`, etc.
  */
 
+/**
+ * Badge « Profil vérifié » (Discover, cartes, profil) — uniquement `photo_status`.
+ */
 export function isPhotoVerified(profile: {
-  is_photo_verified?: boolean | null;
+  photo_status?: string | null;
 }): boolean {
-  return profile.is_photo_verified === true;
+  return isPhotoVerificationApproved(profile.photo_status);
 }
 
 /** Accès Discover : uniquement si la validation globale des photos est « approved ». */
 export function isPhotoVerificationApproved(
-  status: string | null | undefined
+  status: string | null | undefined,
 ): boolean {
   return (status ?? "").toLowerCase().trim() === "approved";
 }
@@ -40,7 +41,7 @@ export const PHOTO_REJECTION_CODE_MESSAGES: Record<string, string> = {
 };
 
 export function photoRejectionCodeMessage(
-  code: string | null | undefined
+  code: string | null | undefined,
 ): string | null {
   if (code == null || String(code).trim() === "") return null;
   const key = String(code).toLowerCase().trim();
@@ -62,7 +63,7 @@ export function collectPhotoRejectionUserMessages(profile: {
 
 /** Libellé court pour debug — pas pour l’UI principale Discover. */
 export function photoVerificationStatusLabel(
-  status: PhotoVerificationStatusField | null | undefined
+  status: PhotoVerificationStatusField | null | undefined,
 ): string {
   const s = (status ?? "pending").toLowerCase();
   if (s === "approved") return "approuvé";

@@ -111,3 +111,19 @@
 .chat-message-bubble {
   animation: chat-bubble-in 0.32s ease-out both;
 }
+
+/* Splash SPLove : rotation douce de l’orbite uniquement (cœur statique au-dessus dans le SVG). */
+@keyframes splash-orbit-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.splash-orbit-g {
+  transform-origin: 16px 16px;
+  transform-box: fill-box;
+  animation: splash-orbit-spin 18s linear infinite;
+}
