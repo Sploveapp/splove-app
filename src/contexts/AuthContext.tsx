@@ -18,7 +18,6 @@ import {
 import type { AppProfile } from "../lib/appProfile";
 import { isProfileRecord } from "../lib/appProfile";
 import { isAdultFromBirthIso } from "../lib/ageGate";
-import { isOnboardingComplete } from "../lib/profileCompleteness";
 import type { User, Session } from "@supabase/supabase-js";
 
 export type Profile = {
@@ -57,6 +56,8 @@ type AuthState = {
   session: Session | null;
   profile: Profile | null;
   isProfileComplete: boolean;
+  /** True after the first bootstrap (getSession + optional OAuth wait) — distinct from « no user ». */
+  isAuthInitialized: boolean;
   isLoading: boolean;
   error: string | null;
   /** Recharge le profil depuis Supabase ; n’efface pas le profil en cache si la lecture échoue. */
@@ -78,6 +79,35 @@ const GET_SESSION_SOFT_MS = 12_000;
 const GET_SESSION_HARD_EXTRA_MS = 20_000;
 /** Chargement profil (init + onAuthStateChange) — timeout ≠ session invalide. */
 const PROFILE_LOAD_RACE_MS = 12_000;
+/** Après redirect OAuth, `getSession()` peut être vide un court instant — on attend l’échange. */
+const OAUTH_CALLBACK_WAIT_MS = 12_000;
+const OAUTH_CALLBACK_POLL_MS = 80;
+
+function oauthCallbackLikely(): boolean {
+  if (typeof window === "undefined") return false;
+  const { hash, search } = window.location;
+  return /(?:^|[?#&])(?:code|access_token|refresh_token)=/.test(hash + search);
+}
+
+async function waitForOAuthSessionIfNeeded(
+  hadSession: boolean,
+): Promise<Awaited<ReturnType<typeof supabase.auth.getSession>> | null> {
+  if (hadSession || !oauthCallbackLikely()) return null;
+  console.log("[AuthContext] OAuth callback params detected — waiting for session exchange");
+  const deadline = Date.now() + OAUTH_CALLBACK_WAIT_MS;
+  while (Date.now() < deadline) {
+    const r = await supabase.auth.getSession();
+    if (r.data.session?.user) {
+      console.log("[AuthContext] OAuth wait: session available", {
+        userId: r.data.session.user.id.slice(0, 8) + "…",
+      });
+      return r;
+    }
+    await new Promise((res) => setTimeout(res, OAUTH_CALLBACK_POLL_MS));
+  }
+  console.warn("[AuthContext] OAuth wait: timeout (still no session)");
+  return null;
+}
 
 function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T | "timeout"> {
   return new Promise((resolve) => {
@@ -126,11 +156,17 @@ function profileRowToProfile(row: AppProfile): Profile {
   } as Profile;
 }
 
-function profileFromMinimalRow(raw: { id: string; first_name?: string | null }): Profile | null {
+function profileFromMinimalRow(raw: {
+  id: string;
+  first_name?: string | null;
+  birth_date?: string | null;
+  profile_completed?: boolean | null;
+}): Profile | null {
   const row = {
     id: raw.id,
     first_name: raw.first_name ?? null,
-    profile_completed: false,
+    birth_date: raw.birth_date ?? null,
+    profile_completed: !!raw.profile_completed,
   };
   if (!isProfileRecord(row)) return null;
   return profileRowToProfile(row as AppProfile);
@@ -198,8 +234,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [isAuthInitialized, setIsAuthInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** Permet à `INITIAL_SESSION` de ne pas doubler le chargement profil pendant `init()`. */
+  const initDoneRef = useRef(false);
 
   /** Incrémenté à chaque loadProfile — ignore les réponses obsolètes (courses onAuthStateChange). */
   const profileLoadGenRef = useRef(0);
@@ -299,6 +338,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const watchdog = window.setTimeout(() => {
       if (!mounted) return;
       console.warn("[AuthContext] init watchdog: fin du chargement forcée (délai max)");
+      initDoneRef.current = true;
+      setIsAuthInitialized(true);
       setIsLoading(false);
       setError((prev) => prev ?? "Le chargement de la session a pris trop de temps. Vérifiez la connexion puis réouvrez l’app.");
     }, AUTH_INIT_WATCHDOG_MS);
@@ -306,6 +347,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function init() {
       console.log("[AuthContext] init start");
       setError(null);
+      initDoneRef.current = false;
 
       try {
         const sessionResult = await resolveGetSession();
@@ -313,6 +355,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!mounted) return;
 
         if (sessionResult === "hard-timeout") {
+          console.warn("[AuthContext] redirect decision: hard-timeout → no user");
           setError("Connexion trop lente. Vérifiez le réseau puis réessayez.");
           setSession(null);
           setUser(null);
@@ -320,7 +363,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        const {
+        let {
           data: { session: initialSession },
           error: sessionError,
         } = sessionResult;
@@ -334,6 +377,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        console.log("[AuthContext] initial getSession", {
+          hasSession: !!initialSession?.user,
+          oauthLikely: oauthCallbackLikely(),
+        });
+
+        if (!initialSession?.user) {
+          const afterOAuth = await waitForOAuthSessionIfNeeded(false);
+          if (afterOAuth?.data?.session) {
+            initialSession = afterOAuth.data.session;
+            if (afterOAuth.error) {
+              console.error("[AuthContext] getSession after OAuth wait:", afterOAuth.error);
+            }
+          }
+        }
+
         setSession(initialSession);
         setUser(initialSession?.user ?? null);
 
@@ -341,30 +399,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const uid = initialSession.user.id;
           console.log("[AuthContext] session restored", { userId: uid.slice(0, 8) + "…" });
           const prof = await raceWithTimeout(loadProfile(uid), PROFILE_LOAD_RACE_MS);
+          console.log("[AuthContext] loadProfile (init) result", { timedOut: prof === "timeout" });
           if (prof === "timeout") {
             console.warn("[AuthContext] loadProfile (init) slow — in-flight load may still complete");
           }
         } else {
           setProfile(null);
-          console.log("[AuthContext] no session");
+          console.log("[AuthContext] no session after bootstrap");
         }
       } finally {
         window.clearTimeout(watchdog);
         if (mounted) {
+          initDoneRef.current = true;
+          setIsAuthInitialized(true);
           setIsLoading(false);
-          console.log("[AuthContext] auth ready");
+          console.log("[AuthContext] auth bootstrap finished (initDone=true, isAuthInitialized=true)");
         }
       }
     }
-
-    void init();
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, nextSession) => {
       if (!mounted) return;
 
+      console.log("[AuthContext] onAuthStateChange", {
+        event,
+        hasSession: !!nextSession?.user?.id,
+        initDone: initDoneRef.current,
+      });
+
       if (event === "INITIAL_SESSION") {
+        setSession(nextSession);
+        setUser(nextSession?.user ?? null);
+        setError(null);
+        if (nextSession?.user?.id) {
+          const uid = nextSession.user.id;
+          if (initDoneRef.current) {
+            console.log("[AuthContext] INITIAL_SESSION after bootstrap — syncing profile");
+            setIsLoading(true);
+            try {
+              const prof = await raceWithTimeout(loadProfile(uid), PROFILE_LOAD_RACE_MS);
+              console.log("[AuthContext] INITIAL_SESSION loadProfile", { timedOut: prof === "timeout" });
+              if (prof === "timeout") {
+                console.warn("[AuthContext] loadProfile (INITIAL_SESSION) slow — in-flight load may still complete");
+              }
+            } catch (e) {
+              console.error("[AuthContext] INITIAL_SESSION loadProfile:", e);
+            } finally {
+              if (mounted) setIsLoading(false);
+            }
+          } else {
+            console.log("[AuthContext] INITIAL_SESSION during bootstrap — init() owns profile load");
+          }
+        } else {
+          setProfile(null);
+        }
         return;
       }
 
@@ -384,13 +474,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           gate.userId === uid &&
           gate.hasProfile
         ) {
+          console.log("[AuthContext] SIGNED_IN duplicate gate — refetch profile only");
           void loadProfile(uid);
           return;
         }
 
+        console.log("[AuthContext] session event → load profile", { event, userId: uid.slice(0, 8) + "…" });
         setIsLoading(true);
         try {
           const prof = await raceWithTimeout(loadProfile(uid), PROFILE_LOAD_RACE_MS);
+          console.log("[AuthContext] loadProfile (onAuthStateChange) done", { timedOut: prof === "timeout" });
           if (prof === "timeout") {
             console.warn("[AuthContext] loadProfile (onAuthStateChange) slow — in-flight load may still complete");
           }
@@ -400,10 +493,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (mounted) setIsLoading(false);
         }
       } else {
+        console.log("[AuthContext] redirect decision: no session in auth event", { event });
         setProfile(null);
         if (mounted) setIsLoading(false);
       }
     });
+
+    void init();
 
     return () => {
       mounted = false;
@@ -412,15 +508,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [loadProfile]);
 
-  /** Validation onboarding globale + âge >= 18 ans. */
-  const isProfileComplete =
-    isOnboardingComplete(profile) && isAdultFromBirthIso(profile?.birth_date);
+  /**
+   * Accès app (Discover, etc.) : source de vérité BDD `profile_completed`
+   * (écrit à la fin d’onboarding) + âge ≥ 18 sur `birth_date`.
+   * Ne pas recalculer via `isOnboardingComplete` : trop fragile si une colonne
+   * manque au fetch ou après repli `PROFILE_SELECT_MINIMAL`.
+   */
+  const isProfileComplete = Boolean(profile?.profile_completed);
 
   const value: AuthState = {
     user,
     session,
     profile,
     isProfileComplete,
+    isAuthInitialized,
     isLoading,
     error,
     refetchProfile,

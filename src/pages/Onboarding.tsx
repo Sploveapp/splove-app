@@ -458,6 +458,7 @@ export default function Onboarding() {
     user,
     isProfileComplete,
     isLoading: authLoading,
+    isAuthInitialized,
     refetchProfile,
     commitProfileRow,
     syncAuthSession,
@@ -509,6 +510,7 @@ export default function Onboarding() {
   const [optionalProfileWarning, setOptionalProfileWarning] = useState<string | null>(null);
   const [hydratingDraft, setHydratingDraft] = useState(false);
   const hydratedDraftRef = useRef(false);
+  
 
   function logDetailedError(
     step: string,
@@ -724,7 +726,7 @@ export default function Onboarding() {
   }, [step, loadingSports, sportOptions.length, selectedSportIds, sportsLoadError, error]);
 
   useEffect(() => {
-    if (!user?.id || authLoading || hydratedDraftRef.current) return;
+    if (!user?.id || authLoading || isProfileComplete || hydratedDraftRef.current) return;
     const userId = user.id;
     let cancelled = false;
     async function hydrateDraft() {
@@ -833,21 +835,24 @@ export default function Onboarding() {
   }, [authLoading, user?.id]);
 
   useEffect(() => {
-    if (authLoading) return;
+    if (!isAuthInitialized || authLoading) return;
     if (user?.id) return;
     if (onboardingSubmitInFlightRef.current) return;
     console.log("[Onboarding] redirect to auth (resolved auth, no user)");
     navigate("/auth", { replace: true });
-  }, [user?.id, authLoading, navigate]);
+  }, [user?.id, authLoading, isAuthInitialized, navigate]);
 
+  /** Profil déjà complet (retour URL / session) → Discover. Pas pendant le submit final (évite course avec l’écran succès). */
   useEffect(() => {
     if (postOnboarding) return;
-    if (authLoading) return;
+    if (!isAuthInitialized || authLoading) return;
     if (!user?.id) return;
+    if (loading) return;
+    if (onboardingSubmitInFlightRef.current) return;
     if (isProfileComplete) {
       navigate("/discover", { replace: true });
     }
-  }, [postOnboarding, isProfileComplete, authLoading, navigate, user?.id]);
+  }, [postOnboarding, isProfileComplete, authLoading, isAuthInitialized, loading, navigate, user?.id]);
 
   const featuredSports = useMemo(
     () => getFeaturedSportsFromList(sportOptions),
@@ -1655,7 +1660,7 @@ export default function Onboarding() {
         return;
       }
 
-      commitProfileRow(upsertRow);
+      
 
       const validSportIds = selectedSportIds.filter(
         (id) =>
@@ -1709,10 +1714,10 @@ export default function Onboarding() {
       }
 
       console.log("[Onboarding submit] start: refetchProfile");
-      void refetchProfile();
-      console.log("[Onboarding submit] result: refetchProfile triggered");
+      await refetchProfile();
+      console.log("[Onboarding submit] result: refetchProfile done");
 
-      const gateOk = isOnboardingComplete(upsertRow) || completionFlag;
+      const gateOk = Boolean(upsertRow.profile_completed) || completionFlag;
       if (!gateOk) {
         console.error("[Onboarding submit] verdict: upsert OK + select OK but gating KO");
         console.error("[Onboarding submit] gating incomplet après upsert", {
@@ -1735,6 +1740,9 @@ export default function Onboarding() {
         navigate("/auth", { replace: true });
         return;
       }
+
+      commitProfileRow(upsertRow);
+
       if (moderationBanner) {
         await new Promise((r) => window.setTimeout(r, 1400));
       }
