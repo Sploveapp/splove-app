@@ -11,10 +11,10 @@ type Props = {
  * Sinon redirige vers /onboarding (si connecté mais profil incomplet) ou /auth (si non connecté).
  */
 export function ProtectedRoute({ children }: Props) {
-  const { user, isProfileComplete, isLoading } = useAuth();
+  const { user, isProfileComplete, isLoading, isAuthInitialized } = useAuth();
   const location = useLocation();
 
-  if (isLoading) {
+  if (!isAuthInitialized || isLoading) {
     return <SplashScreen />;
   }
 

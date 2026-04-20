@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { passwordRecoveryRedirectUrl } from "../lib/authRedirect";
 import { GlobalHeader } from "../components/GlobalHeader";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 
@@ -14,9 +15,8 @@ export default function ForgotPassword() {
     setMessage(null);
     setLoading(true);
     try {
-      const redirectTo = `${window.location.origin}${import.meta.env.BASE_URL}#/reset-password`;
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo,
+        redirectTo: passwordRecoveryRedirectUrl(),
       });
       if (error) throw error;
       setMessage({

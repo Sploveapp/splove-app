@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Navigate, Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { oauthRedirectUrl } from "../lib/authRedirect";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { useAuth } from "../contexts/AuthContext";
 import { APP_BG, APP_BORDER, APP_CARD, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
@@ -22,12 +23,8 @@ function authErrorToUserMessage(err: unknown): string {
   return "Connexion impossible. Réessaie dans un instant.";
 }
 
-function oauthRedirectUrl(): string {
-  return `${window.location.origin}/#/auth`;
-}
-
 export default function Auth() {
-  const { user, isProfileComplete, isLoading } = useAuth();
+  const { user, isProfileComplete, isLoading, isAuthInitialized } = useAuth();
   const [introSplash, setIntroSplash] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -39,12 +36,12 @@ export default function Auth() {
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || !isAuthInitialized) return;
     const t = window.setTimeout(() => setIntroSplash(false), 1000);
     return () => window.clearTimeout(t);
-  }, [isLoading]);
+  }, [isLoading, isAuthInitialized]);
 
-  if (isLoading || introSplash) {
+  if (!isAuthInitialized || isLoading || introSplash) {
     return <SplashScreen />;
   }
 
