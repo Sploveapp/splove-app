@@ -17,6 +17,7 @@ import {
   ERROR_GENERIC,
 } from "../constants/copy";
 import { insertBlock } from "../services/blocks.service";
+import { normalizeCreateLikeRpcResult, rpcPayloadIndicatesLikeSuccess } from "../services/likes.service";
 
 export default function LikesYou() {
   const { user, profile, isAuthInitialized } = useAuth();
@@ -118,51 +119,26 @@ export default function LikesYou() {
   onLikeBack={async (profileId) => {
     if (!currentUserId) return;
 
-    const { error: likeError } = await supabase
-      .from("likes")
-      .upsert(
-        {
-          liker_id: currentUserId,
-          liked_id: profileId,
-        },
-        {
-          onConflict: "liker_id,liked_id",
-          ignoreDuplicates: true,
-        }
-      );
-
-    if (likeError) {
-      alert("Erreur like back : " + likeError.message);
+    /** Même RPC que Discover : like + match réciproque idempotent (`ON CONFLICT` sur matches). */
+    let data: unknown;
+    let rpcError: { message?: string } | null;
+    try {
+      const res = await supabase.rpc("create_like_and_get_result", { p_liked_id: profileId });
+      data = res.data;
+      rpcError = res.error;
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Erreur réseau");
       return;
     }
 
-    const { data: reverseLike, error: reverseError } = await supabase
-      .from("likes")
-      .select("id")
-      .eq("liker_id", profileId)
-      .eq("liked_id", currentUserId)
-      .maybeSingle();
-
-    if (reverseError) {
-      alert("Erreur vérification match : " + reverseError.message);
+    if (rpcError && (data === null || data === undefined)) {
+      alert("Erreur like : " + rpcError.message);
       return;
     }
 
-    if (reverseLike) {
-      const [userA, userB] = [currentUserId, profileId].sort();
-      const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
-
-      const { error: matchError } = await supabase.from("matches").insert({
-        user_a: userA,
-        user_b: userB,
-        status: "active",
-        expires_at: expiresAt,
-      });
-
-      if (matchError) {
-        alert("Erreur création match : " + matchError.message);
-        return;
-      }
+    const parsed = normalizeCreateLikeRpcResult(data);
+    if (!rpcPayloadIndicatesLikeSuccess(parsed) && !rpcError) {
+      console.warn("[LikesYou] create_like_and_get_result: réponse inattendue", data);
     }
 
     setList((prev: typeof list) =>

@@ -209,7 +209,9 @@ export default function SplovePlus() {
           <PremiumSuggestionsSection
             items={suggestions}
             ctaLabel="Voir le profil"
-            onCardCta={() => navigate("/discover")}
+            onCardCta={(profileId) => {
+              navigate("/discover", { state: { openProfileId: profileId } });
+            }}
           />
         </div>
       </main>
