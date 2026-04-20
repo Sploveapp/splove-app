@@ -10,8 +10,11 @@ export const PROFILE_SELECT_CORE = PROFILE_COLUMNS_CORE;
 
 export const PROFILE_SELECT = `${PROFILE_COLUMNS_CORE}, location_source`;
 
-/** Dernier recours AuthContext si 42703 sur le core (aucune colonne optionnelle / métier). */
-export const PROFILE_SELECT_MINIMAL = "id, first_name";
+/**
+ * Dernier recours si 42703 sur le core — inclut les champs de garde pour ne pas
+ * écraser `profile_completed` / âge et renvoyer l’utilisateur vers onboarding.
+ */
+export const PROFILE_SELECT_MINIMAL = "id, first_name, birth_date, profile_completed";
 
 /** Retour upsert onboarding : aligné sur les colonnes lues (avec `location_source` si présent en base). */
 export const PROFILE_UPSERT_ONBOARDING_SELECT_CORE = PROFILE_COLUMNS_CORE;

@@ -27,6 +27,6 @@ export function isProfileRecord(value: unknown): value is AppProfile {
   if (!isPlainObject(value)) return false;
   if (typeof value.id !== "string" || value.id.length === 0) return false;
   const pc = value.profile_completed;
-  if (typeof pc !== "boolean") return false;
+  if (pc != null && typeof pc !== "boolean") return false;
   return true;
 }

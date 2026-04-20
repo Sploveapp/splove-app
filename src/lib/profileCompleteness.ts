@@ -3,8 +3,9 @@ import { isAdultFromBirthIso } from "./ageGate";
 /**
  * Vérifications optionnelles côté client (ex. formulaires).
  *
- * **Gating session / navigation** : voir `AuthContext` (`isProfileComplete`) — `profile_completed`
- * et âge ≥ 18 via `birth_date` (`isAdultFromBirthIso` dans `ageGate.ts`).
+ * **Gating session / navigation** : `AuthContext` utilise `profile_completed` (BDD) + âge ≥ 18
+ * (`isAdultFromBirthIso`). `isOnboardingComplete` sert aux formulaires / validation locale,
+ * pas au route guard.
  */
 export type ProfileCompletenessInput = {
   first_name?: string | null;

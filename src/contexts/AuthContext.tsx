@@ -17,7 +17,7 @@ import {
 } from "../lib/profileSelect";
 import type { AppProfile } from "../lib/appProfile";
 import { isProfileRecord } from "../lib/appProfile";
-import { isAdultFromBirthIso } from "../lib/ageGate";
+
 import type { User, Session } from "@supabase/supabase-js";
 
 export type Profile = {

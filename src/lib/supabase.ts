@@ -8,7 +8,17 @@ if (!hasSupabaseEnv) {
   console.error('[SPLove env] Missing Supabase env vars (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY). Check Docker/Render env config.')
 }
 
-export const supabase = createClient(env.supabaseUrl ?? fallbackUrl, env.supabaseAnonKey ?? fallbackAnonKey)
+export const supabase = createClient(
+  env.supabaseUrl ?? fallbackUrl,
+  env.supabaseAnonKey ?? fallbackAnonKey,
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  }
+)
 
 /**
  * Table Postgres des messages de chat (match / conversation).

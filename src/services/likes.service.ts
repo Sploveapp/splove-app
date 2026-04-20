@@ -13,6 +13,58 @@ export type CreateLikeRpcResult = {
 const PROFILE_SELECT =
   "id, first_name, city, main_photo_url, portrait_url, fullbody_url, sport_feeling, sport_phrase, sport_time, is_photo_verified, photo_status, profile_sports(sports(label, slug))";
 
+type IncomingLikeRow = {
+  id: string;
+  liker_id: string;
+  liked_id: string;
+  created_at: string;
+};
+
+/** Likes reçus : `liked_id = moi` (schéma actuel) ou `to_user = moi` (legacy from_user/to_user). */
+async function fetchIncomingLikeRows(currentUserId: string): Promise<{
+  rows: IncomingLikeRow[];
+  error: { message?: string; code?: string } | null;
+}> {
+  const modern = await supabase
+    .from("likes")
+    .select("id, liker_id, liked_id, created_at")
+    .eq("liked_id", currentUserId)
+    .order("created_at", { ascending: false });
+
+  if (!modern.error && modern.data) {
+    return { rows: modern.data as IncomingLikeRow[], error: null };
+  }
+
+  const msg = modern.error?.message ?? "";
+  const retryLegacy =
+    /liked_id|liker_id|column|does not exist|42703/i.test(msg) || modern.error?.code === "PGRST204";
+
+  if (!retryLegacy || !modern.error) {
+    return { rows: [], error: modern.error };
+  }
+
+  console.warn("[likes] fetchIncomingLikeRows: retry with from_user/to_user (legacy schema)");
+  const legacy = await supabase
+    .from("likes")
+    .select("id, from_user, to_user, created_at")
+    .eq("to_user", currentUserId)
+    .order("created_at", { ascending: false });
+
+  if (legacy.error || !legacy.data) {
+    return { rows: [], error: legacy.error ?? modern.error };
+  }
+
+  const rows = (legacy.data as { id: string; from_user: string; to_user: string; created_at: string }[]).map(
+    (r) => ({
+      id: r.id,
+      liker_id: r.from_user,
+      liked_id: r.to_user,
+      created_at: r.created_at,
+    }),
+  );
+  return { rows, error: null };
+}
+
 /**
  * Récupère les likes reçus par l'utilisateur avec les profils associés.
  */
@@ -20,11 +72,14 @@ export async function getLikesReceived(
   currentUserId: string
 ): Promise<LikeReceived[]> {
   const blocked = await fetchBlockedRelatedUserIds();
-  const { data: likesData, error: likesError } = await supabase
-    .from("likes")
-    .select("id, liker_id, liked_id, created_at")
-    .eq("liked_id", currentUserId)
-    .order("created_at", { ascending: false });
+  const { rows: likesData, error: likesError } = await fetchIncomingLikeRows(currentUserId);
+
+  console.log("[likes] getLikesReceived query", {
+    liked_id: currentUserId,
+    rowCount: likesData?.length ?? 0,
+    error: likesError?.message ?? null,
+    code: likesError?.code ?? null,
+  });
 
   if (likesError) {
     console.error("getLikesReceived", likesError);
@@ -34,6 +89,10 @@ export async function getLikesReceived(
   if (!likesData?.length) return [];
 
   const visible = likesData.filter((l) => !blocked.has(l.liker_id));
+  console.log("[likes] getLikesReceived after block filter", {
+    before: likesData.length,
+    after: visible.length,
+  });
   if (!visible.length) return [];
 
   const fromIds = [...new Set(visible.map((l) => l.liker_id))];
@@ -44,7 +103,7 @@ export async function getLikesReceived(
 
   if (profilesError) {
     console.error("getLikesReceived profiles", profilesError);
-    return likesData.map((l) => ({
+    return visible.map((l) => ({
       ...l,
       profile: undefined,
     })) as LikeReceived[];
