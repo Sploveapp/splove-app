@@ -1,4 +1,8 @@
 import { supabase } from "../lib/supabase";
+import {
+  filterLikeRowsByViewerPreference,
+  logPreferenceCompatibilityPipeline,
+} from "../lib/matchingPreferences";
 import type { LikeReceived, ProfileInLikesYou } from "../types/premium.types";
 import { fetchBlockedRelatedUserIds } from "./blocks.service";
 
@@ -11,7 +15,34 @@ export type CreateLikeRpcResult = {
 };
 
 const PROFILE_SELECT =
-  "id, first_name, city, main_photo_url, portrait_url, fullbody_url, sport_feeling, sport_phrase, sport_time, is_photo_verified, photo_status, profile_sports(sports(label, slug))";
+  "id, first_name, city, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, sport_time, is_photo_verified, photo_status, profile_sports(sports(label, slug))";
+
+/** Préférences viewer — alignées Discover / `useAuth().profile` (prioritaires sur la ligne DB si fournies). */
+export type ViewerPreferenceFields = {
+  gender: string | null | undefined;
+  looking_for: string | null | undefined;
+};
+
+/** Même source que Discover (`loadProfiles` lit `profiles` pour le viewer) ; repli Auth si ligne absente. */
+function mergeViewerPreferences(
+  fromDb: { gender?: string | null; looking_for?: string | null } | null,
+  fromAuth: ViewerPreferenceFields | null | undefined,
+): { gender: string | null; looking_for: string | null } {
+  const gAuth = fromAuth?.gender != null && String(fromAuth.gender).trim() !== "" ? String(fromAuth.gender).trim() : null;
+  const lAuth =
+    fromAuth?.looking_for != null && String(fromAuth.looking_for).trim() !== ""
+      ? String(fromAuth.looking_for).trim()
+      : null;
+  const gDb = fromDb?.gender != null && String(fromDb.gender).trim() !== "" ? String(fromDb.gender).trim() : null;
+  const lDb =
+    fromDb?.looking_for != null && String(fromDb.looking_for).trim() !== ""
+      ? String(fromDb.looking_for).trim()
+      : null;
+  return {
+    gender: gDb ?? gAuth,
+    looking_for: lDb ?? lAuth,
+  };
+}
 
 type IncomingLikeRow = {
   id: string;
@@ -66,15 +97,19 @@ async function fetchIncomingLikeRows(currentUserId: string): Promise<{
 }
 
 /**
- * Récupère les likes reçus par l'utilisateur avec les profils associés.
+ * Récupère les likes reçus avec profils ; **liste finale = uniquement** via
+ * `filterLikeRowsByViewerPreference` → `isPreferenceCompatible` (même pipeline que Discover / SPLove+).
+ *
+ * @param viewerFromAuth — préférences depuis `AuthContext.profile` (même source effective que l’UI).
  */
 export async function getLikesReceived(
-  currentUserId: string
+  currentUserId: string,
+  viewerFromAuth?: ViewerPreferenceFields | null,
 ): Promise<LikeReceived[]> {
   const blocked = await fetchBlockedRelatedUserIds();
   const { rows: likesData, error: likesError } = await fetchIncomingLikeRows(currentUserId);
 
-  console.log("[likes] getLikesReceived query", {
+  console.log("[likesYou] step: incoming likes query", {
     liked_id: currentUserId,
     rowCount: likesData?.length ?? 0,
     error: likesError?.message ?? null,
@@ -89,11 +124,35 @@ export async function getLikesReceived(
   if (!likesData?.length) return [];
 
   const visible = likesData.filter((l) => !blocked.has(l.liker_id));
-  console.log("[likes] getLikesReceived after block filter", {
+  console.log("[likesYou] step: after block filter", {
     before: likesData.length,
     after: visible.length,
   });
   if (!visible.length) return [];
+
+  const { data: meRow, error: meErr } = await supabase
+    .from("profiles")
+    .select("gender, looking_for")
+    .eq("id", currentUserId)
+    .maybeSingle();
+
+  if (meErr) {
+    console.warn("[likesYou] viewer row from profiles:", meErr.message);
+  }
+
+  const meForCompat = mergeViewerPreferences(
+    meRow as { gender?: string | null; looking_for?: string | null } | null,
+    viewerFromAuth ?? null,
+  );
+
+  console.log("[likesYou] viewer preferences (DB + Auth merge)", {
+    fromAuth: viewerFromAuth ?? null,
+    fromDb: {
+      gender: (meRow as { gender?: string | null } | null)?.gender ?? null,
+      looking_for: (meRow as { looking_for?: string | null } | null)?.looking_for ?? null,
+    },
+    effective: meForCompat,
+  });
 
   const fromIds = [...new Set(visible.map((l) => l.liker_id))];
   const { data: profilesData, error: profilesError } = await supabase
@@ -102,20 +161,29 @@ export async function getLikesReceived(
     .in("id", fromIds);
 
   if (profilesError) {
-    console.error("getLikesReceived profiles", profilesError);
-    return visible.map((l) => ({
-      ...l,
-      profile: undefined,
-    })) as LikeReceived[];
+    console.error("[likesYou] profiles select failed — returning empty (no raw likes)", profilesError);
+    return [];
   }
 
   const profileMap = new Map<string | undefined, ProfileInLikesYou>();
   ((profilesData as unknown as ProfileInLikesYou[]) || []).forEach((p) => profileMap.set(p.id, p));
 
-  return visible.map((l) => ({
+  const mapped = visible.map((l) => ({
     ...l,
     profile: profileMap.get(l.liker_id),
   })) as LikeReceived[];
+
+  const beforeCompat = mapped.length;
+  const filtered = filterLikeRowsByViewerPreference(meForCompat, mapped);
+  logPreferenceCompatibilityPipeline(
+    "LikesYou",
+    meForCompat,
+    beforeCompat,
+    filtered.length,
+    filtered.map((r) => r.profile?.first_name?.trim() ?? "").filter(Boolean),
+  );
+
+  return filtered;
 }
 
 function extractLikeRpcRow(data: unknown): Record<string, unknown> | null {

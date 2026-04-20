@@ -71,6 +71,9 @@ export type ProfileInLikesYou = {
   main_photo_url: string | null;
   portrait_url?: string | null;
   fullbody_url?: string | null;
+  /** Aligné Discover / `isPreferenceCompatible`. */
+  gender?: string | null;
+  looking_for?: string | null;
   sport_feeling: string | null;
   sport_phrase: string | null;
   sport_time: string | null;

@@ -19,10 +19,24 @@ import {
 import { insertBlock } from "../services/blocks.service";
 
 export default function LikesYou() {
-  const { user } = useAuth();
-  const currentUserId = user?.id ?? "";
-  const { hasPlus, isLoading: premiumLoading } = usePremium(currentUserId);
-  const { list, setList, loading, error } = useLikesReceived(currentUserId);
+  const { user, profile, isAuthInitialized } = useAuth();
+  const currentUserId = isAuthInitialized && user?.id ? user.id : null;
+  const { hasPlus, isLoading: premiumLoading } = usePremium(user?.id ?? "");
+  const { list, setList, loading, error } = useLikesReceived(
+    currentUserId,
+    profile?.gender ?? null,
+    profile?.looking_for ?? null,
+  );
+
+  /** Seule source pour le map : le state du hook (déjà filtré côté service). */
+  const likesForRender = list;
+
+  console.log(
+    "[LikesYou FINAL RENDER]",
+    likesForRender.length,
+    likesForRender.map((x) => x.profile?.first_name ?? null),
+  );
+
   const [showPaywall, setShowPaywall] = useState(false);
   const [reportProfileId, setReportProfileId] = useState<string | null>(null);
   const [reportPhotoTarget, setReportPhotoTarget] = useState<{
@@ -32,7 +46,7 @@ export default function LikesYou() {
   } | null>(null);
 
   function openPhotoReport(profileId: string) {
-    const item = list.find((l) => l.profile?.id === profileId);
+    const item = likesForRender.find((l) => l.profile?.id === profileId);
     const p = item?.profile;
     if (!p) return;
     setReportPhotoTarget({
@@ -83,12 +97,12 @@ export default function LikesYou() {
           <p style={{ color: "#dc2626", fontSize: "14px" }}>{error || ERROR_GENERIC}</p>
         )}
 
-        {!premiumLoading && !loading && list.length === 0 && (
+        {!premiumLoading && !loading && likesForRender.length === 0 && (
           <p style={{ color: "#64748b", fontSize: "15px" }}>{LIKES_YOU_EMPTY}</p>
         )}
 
-        {!premiumLoading && !loading && list.length > 0 && !hasPlus &&
-          list.map((like) => (
+        {!premiumLoading && !loading && likesForRender.length > 0 && !hasPlus &&
+          likesForRender.map((like) => (
             <BlurredProfileCard
               key={like.id}
               like={like}
@@ -96,8 +110,8 @@ export default function LikesYou() {
             />
           ))}
 
-        {!premiumLoading && !loading && list.length > 0 && hasPlus &&
-          list.map((like) => (
+        {!premiumLoading && !loading && likesForRender.length > 0 && hasPlus &&
+          likesForRender.map((like) => (
             <LikesYouProfileCard
   key={like.id}
   like={like}

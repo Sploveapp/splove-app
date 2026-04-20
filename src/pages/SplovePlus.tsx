@@ -11,7 +11,10 @@ import {
   PremiumSuggestionsSection,
   type PremiumSuggestion,
 } from "../components/PremiumSuggestionsSection";
-import { isPreferenceCompatible } from "../lib/matchingPreferences";
+import {
+  filterCandidatesByPreferenceCompatibility,
+  logPreferenceCompatibilityPipeline,
+} from "../lib/matchingPreferences";
 import { BETA_MODE } from "../constants/beta";
 
 type ProfileRow = {
@@ -89,13 +92,20 @@ export default function SplovePlus() {
       };
 
       let raw = (suggestionsRes.data as ProfileRow[] | null) ?? [];
-      raw = raw.filter((row) =>
-        isPreferenceCompatible(meForCompat, {
-          gender: row.gender,
-          looking_for: row.looking_for,
-        }),
+      const beforeCompat = raw.length;
+      raw = filterCandidatesByPreferenceCompatibility(meForCompat, raw);
+      logPreferenceCompatibilityPipeline(
+        "SplovePlus",
+        meForCompat,
+        beforeCompat,
+        raw.length,
+        raw.map((r) => r.first_name?.trim() ?? "").filter(Boolean),
       );
       raw = raw.slice(0, 3);
+      console.log("[SplovePlus] rendered names (after compat + slice)", {
+        count: raw.length,
+        names: raw.map((r) => r.first_name?.trim() ?? "").filter(Boolean),
+      });
 
       const rows = raw.map((row, index) => ({
         id: row.id,
