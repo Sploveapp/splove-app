@@ -1,8 +1,11 @@
 import type { LikeReceived } from "../types/premium.types";
 import {
   BLOCK_PROFILE_LINK_LABEL,
+  LIKES_YOU_CONTINUE_EXCHANGE,
   LIKES_YOU_LIKE,
+  LIKES_YOU_OPEN_CONVERSATION,
   LIKES_YOU_PASS,
+  LIKES_YOU_VIEW_PROFILE,
   REPORT_LINK_LABEL,
 } from "../constants/copy";
 import { VerifiedBadge } from "./VerifiedBadge";
@@ -18,6 +21,7 @@ import {
 import {
   IconHeartFilled,
   IconHeartOutline,
+  IconChatBubble,
   IconPass,
   IconProfileAvatarPlaceholder,
 } from "./ui/Icon";
@@ -34,6 +38,8 @@ type Props = {
   like: LikeReceived;
   onLikeBack?: (profileId: string) => void;
   onPass?: (profileId: string) => void;
+  onOpenConversation?: (profileId: string) => void;
+  onViewProfile?: (profileId: string) => void;
   onReport?: (profileId: string) => void;
   onReportPhoto?: (profileId: string) => void;
   /** Retrait silencieux du flux (sans indication à l’autre personne). */
@@ -44,6 +50,8 @@ export function LikesYouProfileCard({
   like,
   onLikeBack,
   onPass,
+  onOpenConversation,
+  onViewProfile,
   onReport,
   onReportPhoto,
   onBlock,
@@ -65,6 +73,8 @@ export function LikesYouProfileCard({
     firstCommonSport: sports[0] ?? null,
   });
   const photo = profile.main_photo_url?.trim() ?? "";
+  const hasExistingRelation = Boolean(like.is_match || like.conversation_id || like.match_id);
+  const conversationLabel = like.conversation_id ? LIKES_YOU_CONTINUE_EXCHANGE : LIKES_YOU_OPEN_CONVERSATION;
 
   return (
     <div
@@ -167,7 +177,7 @@ export function LikesYouProfileCard({
           {guided}
         </p>
         <div style={{ display: "flex", gap: "12px" }}>
-          {onPass && (
+          {!hasExistingRelation && onPass && (
             <button
               type="button"
               onClick={() => onPass(profile.id)}
@@ -191,7 +201,7 @@ export function LikesYouProfileCard({
               {LIKES_YOU_PASS}
             </button>
           )}
-          {onLikeBack && (
+          {!hasExistingRelation && onLikeBack && (
             <button
               type="button"
               onClick={() => onLikeBack(profile.id)}
@@ -242,6 +252,49 @@ export function LikesYouProfileCard({
                 />
               </span>
               {LIKES_YOU_LIKE}
+            </button>
+          )}
+          {hasExistingRelation && onOpenConversation && (
+            <button
+              type="button"
+              onClick={() => onOpenConversation(profile.id)}
+              style={{
+                flex: 1,
+                padding: "14px",
+                borderRadius: "14px",
+                border: "none",
+                background: BRAND_BG,
+                color: TEXT_ON_BRAND,
+                cursor: "pointer",
+                fontSize: "15px",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+              }}
+            >
+              <IconChatBubble size={19} />
+              {conversationLabel}
+            </button>
+          )}
+          {hasExistingRelation && onViewProfile && (
+            <button
+              type="button"
+              onClick={() => onViewProfile(profile.id)}
+              style={{
+                flex: 1,
+                padding: "14px",
+                borderRadius: "14px",
+                border: `1px solid ${APP_BORDER}`,
+                background: "transparent",
+                cursor: "pointer",
+                fontSize: "15px",
+                fontWeight: 600,
+                color: APP_TEXT_MUTED,
+              }}
+            >
+              {LIKES_YOU_VIEW_PROFILE}
             </button>
           )}
         </div>

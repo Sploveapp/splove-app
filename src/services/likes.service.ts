@@ -51,6 +51,13 @@ type IncomingLikeRow = {
   created_at: string;
 };
 
+type MatchRelationRow = {
+  id: string;
+  user_a: string;
+  user_b: string;
+  conversation_id?: string | null;
+};
+
 /** Likes reçus : `liked_id = moi` (schéma actuel) ou `to_user = moi` (legacy from_user/to_user). */
 async function fetchIncomingLikeRows(currentUserId: string): Promise<{
   rows: IncomingLikeRow[];
@@ -155,6 +162,73 @@ export async function getLikesReceived(
   });
 
   const fromIds = [...new Set(visible.map((l) => l.liker_id))];
+  const relationByLikerId = new Map<string, { is_match: boolean; match_id: string | null; conversation_id: string | null }>();
+
+  if (fromIds.length > 0) {
+    let matchRows: MatchRelationRow[] = [];
+    const relationWithConversationA = await supabase
+      .from("matches")
+      .select("id, user_a, user_b, conversation_id")
+      .eq("user_a", currentUserId)
+      .in("user_b", fromIds);
+    const relationWithConversationB = await supabase
+      .from("matches")
+      .select("id, user_a, user_b, conversation_id")
+      .eq("user_b", currentUserId)
+      .in("user_a", fromIds);
+
+    if (relationWithConversationA.error || relationWithConversationB.error) {
+      const relationFallbackA = await supabase
+        .from("matches")
+        .select("id, user_a, user_b")
+        .eq("user_a", currentUserId)
+        .in("user_b", fromIds);
+      const relationFallbackB = await supabase
+        .from("matches")
+        .select("id, user_a, user_b")
+        .eq("user_b", currentUserId)
+        .in("user_a", fromIds);
+      if (!relationFallbackA.error && !relationFallbackB.error) {
+        matchRows = [
+          ...((relationFallbackA.data ?? []) as MatchRelationRow[]),
+          ...((relationFallbackB.data ?? []) as MatchRelationRow[]),
+        ];
+      }
+    } else {
+      matchRows = [
+        ...((relationWithConversationA.data ?? []) as MatchRelationRow[]),
+        ...((relationWithConversationB.data ?? []) as MatchRelationRow[]),
+      ];
+    }
+
+    const matchIdsWithoutConversation = matchRows
+      .filter((m) => !m.conversation_id)
+      .map((m) => m.id);
+    const conversationIdByMatchId = new Map<string, string>();
+    if (matchIdsWithoutConversation.length > 0) {
+      const convRes = await supabase
+        .from("conversations")
+        .select("id, match_id")
+        .in("match_id", matchIdsWithoutConversation);
+      for (const raw of convRes.data ?? []) {
+        const row = raw as { id: string; match_id: string };
+        if (row.id && row.match_id && !conversationIdByMatchId.has(row.match_id)) {
+          conversationIdByMatchId.set(row.match_id, row.id);
+        }
+      }
+    }
+
+    for (const m of matchRows) {
+      const likerId = m.user_a === currentUserId ? m.user_b : m.user_a;
+      if (!likerId) continue;
+      relationByLikerId.set(likerId, {
+        is_match: true,
+        match_id: m.id,
+        conversation_id: m.conversation_id ?? conversationIdByMatchId.get(m.id) ?? null,
+      });
+    }
+  }
+
   const { data: profilesData, error: profilesError } = await supabase
     .from("profiles")
     .select(PROFILE_SELECT)
@@ -170,6 +244,9 @@ export async function getLikesReceived(
 
   const mapped = visible.map((l) => ({
     ...l,
+    is_match: relationByLikerId.get(l.liker_id)?.is_match ?? false,
+    match_id: relationByLikerId.get(l.liker_id)?.match_id ?? null,
+    conversation_id: relationByLikerId.get(l.liker_id)?.conversation_id ?? null,
     profile: profileMap.get(l.liker_id),
   })) as LikeReceived[];
 

@@ -61,6 +61,9 @@ export type LikeReceived = {
   liker_id: string;
   liked_id: string;
   created_at: string;
+  is_match?: boolean;
+  match_id?: string | null;
+  conversation_id?: string | null;
   profile?: ProfileInLikesYou;
 };
 

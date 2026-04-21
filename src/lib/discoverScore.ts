@@ -7,6 +7,17 @@ import { getSharedSportLabelsForMatch } from "./sportMatchGroups";
 
 export type DiscoverScoreProfileInput = {
   created_at?: string | null;
+  updated_at?: string | null;
+  last_active_at?: string | null;
+  first_name?: string | null;
+  birth_date?: string | null;
+  gender?: string | null;
+  sport_phrase?: string | null;
+  has_shared_place?: boolean | null;
+  main_photo_url?: string | null;
+  portrait_url?: string | null;
+  fullbody_url?: string | null;
+  avatar_url?: string | null;
   profile_sports?: unknown[] | null;
   latitude?: number | null;
   longitude?: number | null;
@@ -93,6 +104,7 @@ export type DiscoverScoreContext = {
     search_radius_km?: number | null;
   } | null;
   distanceKmOverride?: number | null;
+  hasSharedPlace?: boolean;
 };
 
 export type DiscoverScoreResult = {
@@ -115,7 +127,56 @@ export function getSharedSportsCount(
   ).length;
 }
 
-const MVP_DISCOVER_SCORE = 1;
+const W_SHARED_SPORTS = 0.4;
+const W_DISTANCE = 0.25;
+const W_FRESHNESS = 0.15;
+const W_QUALITY = 0.1;
+const W_SHARED_PLACE = 0.1;
+
+function safeTimeMs(iso: string | null | undefined): number {
+  if (typeof iso !== "string" || !iso.trim()) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function normalizedFreshnessScore(profile: DiscoverScoreProfileInput): number {
+  const now = Date.now();
+  const activityMs =
+    safeTimeMs(profile.last_active_at) || safeTimeMs(profile.updated_at) || safeTimeMs(profile.created_at);
+  if (!activityMs) return 0.2;
+  const days = Math.max(0, (now - activityMs) / (24 * 60 * 60 * 1000));
+  if (days <= 1) return 1;
+  if (days <= 3) return 0.85;
+  if (days <= 7) return 0.7;
+  if (days <= 14) return 0.55;
+  if (days <= 30) return 0.35;
+  return 0.15;
+}
+
+function normalizedQualityScore(profile: DiscoverScoreProfileInput): number {
+  let score = 0;
+  const hasDisplayPhoto = [profile.main_photo_url, profile.portrait_url, profile.fullbody_url, profile.avatar_url]
+    .some((url) => typeof url === "string" && url.trim().length > 0);
+  const photoApproved = String(profile.photo_status ?? "").trim().toLowerCase() === "approved";
+  if (hasDisplayPhoto) score += 0.35;
+  if (photoApproved || profile.is_photo_verified === true) score += 0.35;
+  if (profile.profile_completed === true) score += 0.15;
+  if (profile.first_name?.trim() && profile.gender && profile.birth_date) score += 0.1;
+  if (profile.sport_phrase?.trim()) score += 0.05;
+  return Math.max(0, Math.min(1, score));
+}
+
+function normalizedDistanceScore(distanceKm: number | null, radiusKm: number | null): number {
+  if (distanceKm == null || !Number.isFinite(distanceKm)) return 0.5;
+  if (radiusKm != null && radiusKm > 0) {
+    return Math.max(0, Math.min(1, 1 - distanceKm / radiusKm));
+  }
+  if (distanceKm <= 5) return 1;
+  if (distanceKm <= 15) return 0.8;
+  if (distanceKm <= 30) return 0.6;
+  if (distanceKm <= 50) return 0.45;
+  return 0.3;
+}
 
 export function buildDiscoverScore(
   profile: DiscoverScoreProfileInput,
@@ -169,8 +230,23 @@ export function buildDiscoverScore(
     reasons.push(`À ${Math.round(distancePart.distanceKm)} km`);
   }
 
+  const sharedSportsNormalized = Math.min(sharedSportsCount, 3) / 3;
+  const distanceNormalized = normalizedDistanceScore(distancePart.distanceKm, radius);
+  const freshnessNormalized = normalizedFreshnessScore(profile);
+  const qualityNormalized = normalizedQualityScore(profile);
+  const sharedPlaceNormalized = context.hasSharedPlace === true || profile.has_shared_place === true ? 1 : 0;
+  const weighted =
+    sharedSportsNormalized * W_SHARED_SPORTS +
+    distanceNormalized * W_DISTANCE +
+    freshnessNormalized * W_FRESHNESS +
+    qualityNormalized * W_QUALITY +
+    sharedPlaceNormalized * W_SHARED_PLACE;
+  const weightedScore = Math.round(weighted * 1000);
+  if (sharedSportsCount >= 2) reasons.push("Affinité sport forte");
+  if (sharedPlaceNormalized > 0) reasons.push("Lieu commun");
+
   return {
-    score: MVP_DISCOVER_SCORE,
+    score: weightedScore,
     distanceKm: distancePart.distanceKm,
     sharedSportsCount,
     reasons: reasons.slice(0, 4),
@@ -180,8 +256,7 @@ export function buildDiscoverScore(
 
 /** Réservé debug / futur — pas de signal « confiance » en MVP. */
 export function computeReliabilityScore(_p: DiscoverScoreProfileInput): number {
-  void _p;
-  return 0;
+  return normalizedQualityScore(_p);
 }
 
 export function getReliabilityUiHints(_p: unknown): string[] {
@@ -199,15 +274,18 @@ export type DiscoverScoreBreakdown = {
 };
 
 export function computeDiscoverMatchScoreBreakdown(
-  _profile: DiscoverScoreProfileInput,
+  profile: DiscoverScoreProfileInput,
   commonSportsCount: number,
 ): DiscoverScoreBreakdown {
-  const common = Math.max(0, Math.floor(Number.isFinite(commonSportsCount) ? commonSportsCount : 0));
+  const common = Math.max(0, Math.min(3, Math.floor(Number.isFinite(commonSportsCount) ? commonSportsCount : 0)));
+  const commonWeighted = (common / 3) * W_SHARED_SPORTS * 1000;
+  const freshnessWeighted = normalizedFreshnessScore(profile) * W_FRESHNESS * 1000;
+  const qualityWeighted = normalizedQualityScore(profile) * W_QUALITY * 1000;
   return {
-    total: MVP_DISCOVER_SCORE,
-    common: common * 10,
-    completeness: 0,
-    lastActive: 0,
-    newness: 0,
+    total: Math.round(commonWeighted + freshnessWeighted + qualityWeighted),
+    common: Math.round(commonWeighted),
+    completeness: Math.round(qualityWeighted),
+    lastActive: Math.round(freshnessWeighted),
+    newness: Math.round(freshnessWeighted),
   };
 }

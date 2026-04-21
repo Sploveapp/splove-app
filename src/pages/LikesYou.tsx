@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { usePremium } from "../hooks/usePremium";
 import { useLikesReceived } from "../hooks/useLikesReceived";
@@ -17,10 +18,15 @@ import {
   ERROR_GENERIC,
 } from "../constants/copy";
 import { insertBlock } from "../services/blocks.service";
-import { normalizeCreateLikeRpcResult, rpcPayloadIndicatesLikeSuccess } from "../services/likes.service";
+import {
+  fetchConversationIdForUserPair,
+  normalizeCreateLikeRpcResult,
+  rpcPayloadIndicatesLikeSuccess,
+} from "../services/likes.service";
 
 export default function LikesYou() {
   const { user, profile, isAuthInitialized } = useAuth();
+  const navigate = useNavigate();
   const currentUserId = isAuthInitialized && user?.id ? user.id : null;
   const { hasPlus, isLoading: premiumLoading } = usePremium(user?.id ?? "");
   const { list, setList, loading, error } = useLikesReceived(
@@ -66,6 +72,31 @@ export default function LikesYou() {
       return;
     }
     setList((prev) => prev.filter((item) => item.profile?.id !== profileId));
+  }
+
+  async function handleOpenConversation(profileId: string) {
+    if (!currentUserId) return;
+    const item = likesForRender.find((l) => l.profile?.id === profileId);
+    if (!item) return;
+
+    const knownConversationId = item.conversation_id ?? null;
+    if (knownConversationId) {
+      navigate(`/chat/${knownConversationId}`);
+      return;
+    }
+
+    const resolvedConversationId = await fetchConversationIdForUserPair(currentUserId, profileId);
+    if (resolvedConversationId) {
+      setList((prev) =>
+        prev.map((entry) =>
+          entry.profile?.id === profileId ? { ...entry, conversation_id: resolvedConversationId } : entry,
+        ),
+      );
+      navigate(`/chat/${resolvedConversationId}`);
+      return;
+    }
+
+    navigate("/messages");
   }
 
   return (
@@ -149,6 +180,12 @@ export default function LikesYou() {
     setList((prev: typeof list) =>
       prev.filter((item) => item.profile?.id !== profileId)
     );
+  }}
+  onOpenConversation={(profileId) => {
+    void handleOpenConversation(profileId);
+  }}
+  onViewProfile={(profileId) => {
+    navigate("/discover", { state: { openProfileId: profileId } });
   }}
   onReport={(profileId) => setReportProfileId(profileId)}
   onReportPhoto={(profileId) => openPhotoReport(profileId)}

@@ -65,6 +65,9 @@ export const LIKES_YOU_BLUR_MESSAGE = "Débloquez avec SPLove+ pour voir ce prof
 export const LIKES_YOU_BLUR_CTA = "Voir qui m'a liké";
 export const LIKES_YOU_PASS = "Pass";
 export const LIKES_YOU_LIKE = "Like";
+export const LIKES_YOU_OPEN_CONVERSATION = "Voir la conversation";
+export const LIKES_YOU_CONTINUE_EXCHANGE = "Continuer l'échange";
+export const LIKES_YOU_VIEW_PROFILE = "Voir le profil";
 
 // ——— 5. Filtres avancés ———
 export const FILTERS_TITLE = "Filtres";

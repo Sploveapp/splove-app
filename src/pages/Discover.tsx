@@ -30,8 +30,7 @@ import {
 } from "../components/ui/Icon";
 import { BETA_MODE } from "../constants/beta";
 import {
-  filterCandidatesByPreferenceCompatibility,
-  logPreferenceCompatibilityPipeline,
+  type PreferenceCompatFields,
 } from "../lib/matchingPreferences";
 import { parseProfileIntent } from "../lib/profileIntent";
 import { fetchBlockExclusionDetail, isBlockedWith } from "../services/blocks.service";
@@ -53,6 +52,7 @@ import {
   computeReliabilityScore,
   getReliabilityUiHints,
 } from "../lib/discoverScore";
+import { applyDiscoverHardExclusions, rankDiscoverCandidates } from "../lib/discoverRanking";
 import { buildDiscoverLocationLines, formatViewerRadiusLabel } from "../utils/geolocation";
 import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
 
@@ -63,6 +63,7 @@ type Profile = {
   city?: string | null;
   birth_date?: string | null;
   created_at?: string | null;
+  updated_at?: string | null;
   /** Canonical display URL when present; feed may omit this column. */
   main_photo_url?: string | null;
   /** Fallbacks when main_photo_url is absent (see repo migrations). */
@@ -196,14 +197,6 @@ function safeTimeMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
-function stableIdTieBreak(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i += 1) {
-    h = (h * 31 + id.charCodeAt(i)) % 1000;
-  }
-  return h;
-}
-
 const DISCOVER_FETCH_LIMIT = 80;
 const DISCOVER_DISPLAY_LIMIT = 10;
 
@@ -258,7 +251,7 @@ const FEED_PROFILE_IDS_SELECT = "id";
  * Badge « vérifié » : uniquement `photo_status === 'approved'`.
  */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, profile_sports(sports(label, slug))";
+  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, profile_sports(sports(label, slug))";
 /** IDs déjà likés — schéma `likes` : `liker_id` / `liked_id` uniquement. */
 async function fetchOutgoingLikedUserIds(userId: string): Promise<Set<string>> {
   const out = new Set<string>();
@@ -274,6 +267,23 @@ async function fetchOutgoingLikedUserIds(userId: string): Promise<Set<string>> {
   for (const row of data ?? []) {
     const id = (row as { liked_id?: string | null }).liked_id;
     if (typeof id === "string" && id.length > 0) out.add(id);
+  }
+  return out;
+}
+
+async function fetchMatchedUserIds(userId: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  const { data, error } = await supabase
+    .from("matches")
+    .select("user_a, user_b")
+    .or(`user_a.eq.${userId},user_b.eq.${userId}`);
+  if (error) {
+    console.warn("[Discover feed] matches exclusion:", error.message);
+    return out;
+  }
+  for (const row of (data ?? []) as { user_a?: string | null; user_b?: string | null }[]) {
+    const other = row.user_a === userId ? row.user_b : row.user_b === userId ? row.user_a : null;
+    if (other && other !== userId) out.add(other);
   }
   return out;
 }
@@ -843,8 +853,9 @@ export default function Discover() {
         if (error) console.warn("[Discover] touch_profile_last_active:", error.message);
       });
 
-      const [likedIds, meRes, blockDetail] = await Promise.all([
+      const [likedIds, matchedIds, meRes, blockDetail] = await Promise.all([
         fetchOutgoingLikedUserIds(currentUserId),
+        fetchMatchedUserIds(currentUserId),
         supabase
         .from("profiles")
         .select(
@@ -1033,11 +1044,6 @@ export default function Discover() {
         }
       }
 
-      const meForCompat = {
-        gender: meProfile.gender ?? null,
-        looking_for: meProfile.looking_for ?? null,
-      };
-
       const feedIdSet = new Set(feedIds);
       raw = raw.filter((p) => {
         if (!p?.id || !isValidProfileId(p.id)) return false;
@@ -1049,6 +1055,9 @@ export default function Discover() {
       }
       if (blockExclude.size > 0) {
         raw = raw.filter((p) => !blockExclude.has(p.id));
+      }
+      if (matchedIds.size > 0) {
+        raw = raw.filter((p) => !matchedIds.has(p.id));
       }
 
       /** Filtre défensif : même intention (normalisée) que l’utilisateur. */
@@ -1068,80 +1077,44 @@ export default function Discover() {
         }
       }
       console.log("[Discover feed] profiles after intent filter:", stage.length);
-
-      const beforePref = stage.length;
-      stage = filterCandidatesByPreferenceCompatibility(meForCompat, stage);
-      logPreferenceCompatibilityPipeline(
-        "Discover",
-        meForCompat,
-        beforePref,
-        stage.length,
-        stage.map((p) => p.first_name?.trim() ?? "").filter(Boolean),
-      );
-
-      if (import.meta.env.DEV) {
-        console.debug("[Discover debug] candidats avant filtre sport", {
-          ids: stage.map((p) => p.id),
-          sportsParProfil: stage.map((p) => ({
-            id: p.id,
-            matchKeys: [...collectSportMatchKeysFromProfile(p)],
-            profile_sports: p.profile_sports,
-          })),
+      let sharedPlaceById = new Map<string, boolean>();
+      if (stage.length > 0) {
+        const { data: sharedRows, error: sharedErr } = await supabase.rpc("discover_shared_place_flags", {
+          p_viewer_id: currentUserId,
+          p_candidate_ids: stage.map((p) => p.id),
         });
+        if (sharedErr) {
+          console.warn("[Discover feed] discover_shared_place_flags:", sharedErr.message);
+        } else {
+          for (const row of (sharedRows ?? []) as { profile_id?: string; has_shared_place?: boolean }[]) {
+            const pid = typeof row.profile_id === "string" ? row.profile_id : "";
+            if (pid) sharedPlaceById.set(pid, row.has_shared_place === true);
+          }
+        }
       }
 
-      stage = stage.filter((p) => {
-        const n = getSharedSportsFromProfile(sportsSet, p).length;
-        if (import.meta.env.DEV && n === 0) {
-          console.debug("[Discover debug] exclusion aucun sport commun (clés)", {
-            id: p.id,
-            first_name: p.first_name,
-            candidateKeys: [...collectSportMatchKeysFromProfile(p)],
-            viewerKeys: [...sportsSet],
-          });
-        }
-        return n > 0;
+      const hardFiltered = applyDiscoverHardExclusions(
+        stage.map((p) => ({ ...p, has_shared_place: sharedPlaceById.get(p.id) === true })),
+        {
+          currentUserId,
+          viewer: {
+            gender: meProfile.gender ?? null,
+            looking_for: meProfile.looking_for ?? null,
+          } as PreferenceCompatFields,
+          viewerSportMatchKeys: sportsSet,
+          excludedIds: new Set([...likedIds, ...blockExclude]),
+          matchedIds,
+        },
+      );
+      const ranked = rankDiscoverCandidates(hardFiltered, {
+        mySportMatchKeys: sportsSet,
+        myProfile: meProfile,
+        distanceById: distById,
       });
-      console.log("[Discover feed] profiles after shared sports filter:", stage.length);
-      console.log("[Discover] rendered names (compat + sports)", {
-        count: stage.length,
-        names: stage.map((p) => p.first_name?.trim() ?? "").filter(Boolean),
-      });
-
-      raw = stage;
-
-      const enriched: ProfileWithAffinity[] = raw.map((p) => {
-        let common = 0;
-        try {
-          common = commonSportsCount(sportsSet, p);
-        } catch (e) {
-          console.error("[Discover feed] commonSportsCount failed", { id: p?.id, err: e });
-        }
-        const discover = buildDiscoverScore(p, {
-          mySportMatchKeys: sportsSet,
-          myProfile: meProfile,
-          distanceKmOverride: distById.has(p.id) ? distById.get(p.id) ?? null : undefined,
-        });
-        if (import.meta.env.DEV && discover.excluded) {
-          console.debug("[Discover debug] exclusion score Discover", {
-            id: p.id,
-            first_name: p.first_name,
-            exclusionReason: discover.exclusionReason,
-            sharedSportsCount: discover.sharedSportsCount,
-            distanceKm: discover.distanceKm,
-          });
-        }
-        return {
-          ...p,
-          commonSportsCount: discover.sharedSportsCount || (Number.isFinite(common) ? common : 0),
-          discoverScore: discover.score,
-          distanceKm: discover.distanceKm,
-          discover_reasons: discover.reasons,
-          discover_excluded: discover.excluded,
-          reliabilityScore: computeReliabilityScore(p),
-        };
-      });
-      const discoverFiltered = enriched.filter((p) => !p.discover_excluded && p.commonSportsCount > 0);
+      const discoverFiltered: ProfileWithAffinity[] = ranked.map((p) => ({
+        ...p,
+        reliabilityScore: computeReliabilityScore(p),
+      }));
 
       if (import.meta.env.DEV && discoverFiltered.length > 0) {
         for (const p of discoverFiltered.slice(0, 12)) {
@@ -1161,57 +1134,11 @@ export default function Discover() {
         }
       }
 
-      discoverFiltered.sort((a, b) => {
-        const va = isPhotoVerified(a) ? 1 : 0;
-        const vb = isPhotoVerified(b) ? 1 : 0;
-        if (va !== vb) return vb - va;
-        const lb = safeTimeMs(b.created_at);
-        const la = safeTimeMs(a.created_at);
-        if (lb !== la) return lb - la;
-        const aDist = typeof a.distanceKm === "number" && Number.isFinite(a.distanceKm) ? a.distanceKm : null;
-        const bDist = typeof b.distanceKm === "number" && Number.isFinite(b.distanceKm) ? b.distanceKm : null;
-        if (aDist != null && bDist != null && aDist !== bDist) {
-          return aDist - bDist;
-        }
-        if (aDist == null && bDist != null) return 1;
-        if (aDist != null && bDist == null) return -1;
-        const stableA = stableIdTieBreak(a.id);
-        const stableB = stableIdTieBreak(b.id);
-        if (stableA !== stableB) {
-          return stableB - stableA;
-        }
-        return a.id.localeCompare(b.id, "fr");
-      });
-
       const safe = discoverFiltered.filter((p) => p?.id && isValidProfileId(p.id));
       const slice = safe.slice(0, DISCOVER_DISPLAY_LIMIT);
       resultCount = slice.length;
       console.log("[Discover feed] final profiles count:", resultCount);
-
-      let profilesForFeed: ProfileWithAffinity[] = slice;
-      if (slice.length > 0) {
-        const { data: sharedRows, error: sharedErr } = await supabase.rpc("discover_shared_place_flags", {
-          p_viewer_id: currentUserId,
-          p_candidate_ids: slice.map((p) => p.id),
-        });
-        if (sharedErr) {
-          console.warn("[Discover feed] discover_shared_place_flags:", sharedErr.message);
-        } else {
-          const flags = new Map<string, boolean>();
-          for (const row of (sharedRows ?? []) as {
-            profile_id?: string;
-            has_shared_place?: boolean;
-          }[]) {
-            const pid = typeof row?.profile_id === "string" ? row.profile_id : "";
-            if (pid) flags.set(pid, row.has_shared_place === true);
-          }
-          profilesForFeed = slice.map((p) => ({
-            ...p,
-            has_shared_place: flags.get(p.id) === true,
-          }));
-        }
-      }
-      setProfiles(profilesForFeed);
+      setProfiles(slice);
     } catch (e) {
       console.error("[Discover] loadProfiles erreur inattendue:", e);
       setErrorMessage(DISCOVER_FETCH_FAILED_MSG);
