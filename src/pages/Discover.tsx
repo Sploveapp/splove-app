@@ -7,7 +7,7 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { ReportModal } from "../components/ReportModal";
@@ -29,7 +29,10 @@ import {
   IconProfileAvatarPlaceholder,
 } from "../components/ui/Icon";
 import { BETA_MODE } from "../constants/beta";
-import { isPreferenceCompatible } from "../lib/matchingPreferences";
+import {
+  filterCandidatesByPreferenceCompatibility,
+  logPreferenceCompatibilityPipeline,
+} from "../lib/matchingPreferences";
 import { parseProfileIntent } from "../lib/profileIntent";
 import { fetchBlockExclusionDetail, isBlockedWith } from "../services/blocks.service";
 import { VerifiedBadge } from "../components/VerifiedBadge";
@@ -51,6 +54,7 @@ import {
   getReliabilityUiHints,
 } from "../lib/discoverScore";
 import { buildDiscoverLocationLines, formatViewerRadiusLabel } from "../utils/geolocation";
+import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
 
 type Profile = {
   id: string;
@@ -117,6 +121,8 @@ type ProfileWithAffinity = Profile & {
   discover_excluded: boolean;
   /** Tri principal Discover — ne pas afficher. */
   reliabilityScore: number;
+  /** Au moins un place_ref commun avec le viewer — renseigné par `discover_shared_place_flags` ; jamais de nom dans l’UI Discover. */
+  has_shared_place?: boolean;
 };
 
 type LikeRpcParsed = { is_match: boolean; conversation_id: string | null };
@@ -521,7 +527,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
               </span>
             ) : null}
           </div>
-          {sportsShown.length > 0 ? (
+          {sportsShown.length > 0 || hasSharedPlace(profile) ? (
             <div className="mt-2.5 flex flex-wrap gap-1.5">
               {sportsShown.map((name) => (
                 <span
@@ -531,6 +537,11 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
                   {name}
                 </span>
               ))}
+              {hasSharedPlace(profile) ? (
+                <span className="rounded-full bg-white/12 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/95 shadow-sm ring-1 ring-amber-200/35 backdrop-blur-[2px]">
+                  📍 Lieu commun
+                </span>
+              ) : null}
             </div>
           ) : null}
           {discoverReasonsDisplay.length > 0 ? (
@@ -626,6 +637,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
 
 export default function Discover() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, isLoading: authLoading, profile } = useAuth();
   const currentUserId = user?.id ?? "";
   const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
@@ -687,6 +699,93 @@ export default function Discover() {
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [discoverMenuProfileId]);
+
+  /** SPLove+ / navigation externe : ouvrir la même modale « fiche » que le tap sur une carte Discover. */
+  useEffect(() => {
+    const openProfileId = (location.state as { openProfileId?: string } | null)?.openProfileId;
+    if (!openProfileId || !isValidProfileId(openProfileId) || !currentUserId || !profile?.id) {
+      return;
+    }
+
+    navigate(".", { replace: true, state: {} });
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [meRes, candRes, distRes] = await Promise.all([
+          supabase
+            .from("profiles")
+            .select(
+              "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, profile_sports(sports(label, slug))",
+            )
+            .eq("id", currentUserId)
+            .maybeSingle(),
+          supabase.from("profiles").select(DISCOVER_PROFILES_DETAIL_SELECT).eq("id", openProfileId).maybeSingle(),
+          supabase.rpc("profile_distances_from_viewer", { p_candidate_ids: [openProfileId] }),
+        ]);
+        if (cancelled) return;
+
+        const meProfile = (meRes.data as unknown as Profile) ?? { profile_sports: [] };
+        const p = candRes.data as Profile | null;
+        if (!p || candRes.error) {
+          console.warn("[Discover] openProfileFromNavigation: profil introuvable", openProfileId, candRes.error?.message);
+          return;
+        }
+
+        const sportsSet = collectSportMatchKeysFromProfile(meProfile);
+        let distanceKm: number | null = null;
+        for (const row of (distRes.data ?? []) as { profile_id?: string; distance_km?: number | null }[]) {
+          if (row.profile_id === openProfileId) {
+            distanceKm = row.distance_km ?? null;
+            break;
+          }
+        }
+
+        const discover = buildDiscoverScore(p, {
+          mySportMatchKeys: sportsSet,
+          myProfile: meProfile,
+          distanceKmOverride: distanceKm ?? undefined,
+        });
+        let common = 0;
+        try {
+          common = commonSportsCount(sportsSet, p);
+        } catch {
+          /* ignore */
+        }
+
+        let enriched: ProfileWithAffinity = {
+          ...p,
+          commonSportsCount: discover.sharedSportsCount || (Number.isFinite(common) ? common : 0),
+          discoverScore: discover.score,
+          distanceKm: discover.distanceKm,
+          discover_reasons: discover.reasons,
+          discover_excluded: discover.excluded,
+          reliabilityScore: computeReliabilityScore(p),
+        };
+
+        const { data: sharedRows } = await supabase.rpc("discover_shared_place_flags", {
+          p_viewer_id: currentUserId,
+          p_candidate_ids: [openProfileId],
+        });
+        if (cancelled) return;
+
+        const flags = (sharedRows ?? []) as { profile_id?: string; has_shared_place?: boolean }[];
+        const has_shared_place = flags.some(
+          (r) => r.profile_id === openProfileId && r.has_shared_place === true,
+        );
+        enriched = { ...enriched, has_shared_place };
+
+        setDiscoverMenuProfileId(null);
+        setPreviewProfile(enriched);
+      } catch (e) {
+        console.error("[Discover] openProfileFromNavigation", e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location.state, currentUserId, profile?.id, navigate]);
 
   useEffect(() => {
     if (authLoading) {
@@ -970,19 +1069,15 @@ export default function Discover() {
       }
       console.log("[Discover feed] profiles after intent filter:", stage.length);
 
-      stage = stage.filter((p) => {
-        const ok = isPreferenceCompatible(meForCompat, p);
-        if (import.meta.env.DEV && !ok) {
-          console.debug("[Discover debug] exclusion genre/meet_pref", {
-            id: p.id,
-            first_name: p.first_name,
-            me: meForCompat,
-            them: { gender: p.gender, looking_for: p.looking_for },
-          });
-        }
-        return ok;
-      });
-      console.log("[Discover feed] profiles after preference filter:", stage.length);
+      const beforePref = stage.length;
+      stage = filterCandidatesByPreferenceCompatibility(meForCompat, stage);
+      logPreferenceCompatibilityPipeline(
+        "Discover",
+        meForCompat,
+        beforePref,
+        stage.length,
+        stage.map((p) => p.first_name?.trim() ?? "").filter(Boolean),
+      );
 
       if (import.meta.env.DEV) {
         console.debug("[Discover debug] candidats avant filtre sport", {
@@ -1008,6 +1103,10 @@ export default function Discover() {
         return n > 0;
       });
       console.log("[Discover feed] profiles after shared sports filter:", stage.length);
+      console.log("[Discover] rendered names (compat + sports)", {
+        count: stage.length,
+        names: stage.map((p) => p.first_name?.trim() ?? "").filter(Boolean),
+      });
 
       raw = stage;
 
@@ -1088,7 +1187,31 @@ export default function Discover() {
       const slice = safe.slice(0, DISCOVER_DISPLAY_LIMIT);
       resultCount = slice.length;
       console.log("[Discover feed] final profiles count:", resultCount);
-      setProfiles(slice);
+
+      let profilesForFeed: ProfileWithAffinity[] = slice;
+      if (slice.length > 0) {
+        const { data: sharedRows, error: sharedErr } = await supabase.rpc("discover_shared_place_flags", {
+          p_viewer_id: currentUserId,
+          p_candidate_ids: slice.map((p) => p.id),
+        });
+        if (sharedErr) {
+          console.warn("[Discover feed] discover_shared_place_flags:", sharedErr.message);
+        } else {
+          const flags = new Map<string, boolean>();
+          for (const row of (sharedRows ?? []) as {
+            profile_id?: string;
+            has_shared_place?: boolean;
+          }[]) {
+            const pid = typeof row?.profile_id === "string" ? row.profile_id : "";
+            if (pid) flags.set(pid, row.has_shared_place === true);
+          }
+          profilesForFeed = slice.map((p) => ({
+            ...p,
+            has_shared_place: flags.get(p.id) === true,
+          }));
+        }
+      }
+      setProfiles(profilesForFeed);
     } catch (e) {
       console.error("[Discover] loadProfiles erreur inattendue:", e);
       setErrorMessage(DISCOVER_FETCH_FAILED_MSG);
@@ -1562,6 +1685,11 @@ export default function Discover() {
                       {intentPreview ? (
                         <span className="rounded-full bg-app-border/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-app-text ring-1 ring-app-border">
                           {intentPreview}
+                        </span>
+                      ) : null}
+                      {hasSharedPlace(profile) ? (
+                        <span className="rounded-full bg-app-card px-2 py-0.5 text-[10px] font-semibold tracking-wide text-app-text ring-1 ring-amber-200/60">
+                          📍 Lieu commun
                         </span>
                       ) : null}
                     </div>
