@@ -95,8 +95,8 @@ export function rankDiscoverCandidates<T extends RankedProfileBase>(
     .sort((a, b) => {
       if (b.discoverScore !== a.discoverScore) return b.discoverScore - a.discoverScore;
       if (b.commonSportsCount !== a.commonSportsCount) return b.commonSportsCount - a.commonSportsCount;
-      const aShared = getSharedSportLabelsForMatch(context.mySportMatchKeys, a).length;
-      const bShared = getSharedSportLabelsForMatch(context.mySportMatchKeys, b).length;
+      const aShared = getSharedSportLabelsForMatch(context.mySportMatchKeys, a as any).length;
+const bShared = getSharedSportLabelsForMatch(context.mySportMatchKeys, b as any).length;
       if (bShared !== aShared) return bShared - aShared;
       return a.id.localeCompare(b.id, "fr");
     });
