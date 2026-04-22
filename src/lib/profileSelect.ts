@@ -196,7 +196,7 @@ export async function selectProfilesFirstMatch(
         usedSelectSample: select.slice(0, 120) + (select.length > 120 ? "…" : ""),
         keys: Object.keys(data as object).length,
       });
-      return { data: data as Record<string, unknown>, usedSelect: select, lastError: null };
+      return { data: data as unknown as Record<string, unknown>, usedSelect: select, lastError: null };
     }
   }
   return { data: null, usedSelect: null, lastError: null };

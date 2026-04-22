@@ -74,7 +74,7 @@ export function rankDiscoverCandidates<T extends RankedProfileBase>(
   discover_excluded: boolean;
 })[] {
   const scored = candidates.map((candidate) => {
-    const discover = buildDiscoverScore(candidate, {
+    const discover = buildDiscoverScore(candidate as any, {
       mySportMatchKeys: context.mySportMatchKeys,
       myProfile: context.myProfile,
       distanceKmOverride: context.distanceById?.get(candidate.id),
