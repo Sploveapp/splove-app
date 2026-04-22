@@ -2,7 +2,7 @@ import { APP_BG } from "../constants/theme";
 import SploveLoader from "./SploveLoader";
 
 /**
- * Écran de démarrage léger : logo cœur SPLove, orbite animée uniquement.
+ * Écran de démarrage léger : branding SPLove statique.
  * Afficher tant que `AuthContext` ou une route équivalente est en chargement initial.
  */
 export function SplashScreen() {
@@ -14,9 +14,7 @@ export function SplashScreen() {
       aria-live="polite"
       aria-label="Chargement de SPLove"
     >
-      <div className="relative flex h-[104px] w-[104px] items-center justify-center">
-      <SploveLoader size={140} />
-      </div>
+      <SploveLoader />
     </div>
   );
 }
