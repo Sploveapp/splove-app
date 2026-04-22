@@ -149,9 +149,11 @@ async function resolveGetSession(): Promise<GetSessionResult | "hard-timeout"> {
 }
 
 function profileRowToProfile(row: AppProfile): Profile {
+  const onboardingCompleted = (row as { onboarding_completed?: unknown }).onboarding_completed === true;
+  const canonicalProfileCompleted = row.profile_completed === true || onboardingCompleted;
   return {
     ...row,
-    profile_completed: !!row.profile_completed,
+    profile_completed: canonicalProfileCompleted,
     is_photo_verified: !!(row as { is_photo_verified?: boolean | null }).is_photo_verified,
   } as Profile;
 }
@@ -227,7 +229,27 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
     return null;
   }
 
-  return profileRowToProfile(data);
+  const normalized = profileRowToProfile(data);
+  const onboardingCompleted = (data as { onboarding_completed?: unknown }).onboarding_completed === true;
+  if (normalized.profile_completed && !data.profile_completed && onboardingCompleted) {
+    // TEMP DEBUG: legacy rows may have onboarding_completed=true but profile_completed=false.
+    console.debug("[AuthContext] backfill profile_completed from onboarding_completed", {
+      userId: userId.slice(0, 8) + "…",
+      profile_completed: data.profile_completed,
+      onboarding_completed: onboardingCompleted,
+    });
+    void supabase
+      .from("profiles")
+      .update({ profile_completed: true, updated_at: new Date().toISOString() })
+      .eq("id", userId)
+      .then(({ error: backfillError }) => {
+        if (backfillError) {
+          console.warn("[AuthContext] backfill profile_completed failed:", backfillError.message);
+        }
+      });
+  }
+
+  return normalized;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -270,6 +292,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (gen !== profileLoadGenRef.current) {
         return;
       }
+      // TEMP DEBUG: trace auth/profile gating inputs before redirects.
+      console.debug("[AuthContext] profile loaded", {
+        userId: userId.slice(0, 8) + "…",
+        hasProfile: Boolean(p),
+        profile_completed: p?.profile_completed ?? null,
+        onboarding_completed: (p as { onboarding_completed?: unknown } | null)?.onboarding_completed ?? null,
+      });
       setProfile(p);
     } catch (e) {
       console.warn("[AuthContext] profile load error", e);

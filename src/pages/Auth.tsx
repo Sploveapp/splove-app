@@ -41,6 +41,17 @@ export default function Auth() {
     return () => window.clearTimeout(t);
   }, [isLoading, isAuthInitialized]);
 
+  useEffect(() => {
+    if (!isAuthInitialized || isLoading) return;
+    // TEMP DEBUG: final redirect decision inputs on /auth.
+    console.debug("[Auth page] post-auth state", {
+      hasUser: Boolean(user?.id),
+      userId: user?.id ? user.id.slice(0, 8) + "…" : null,
+      isProfileComplete,
+      introSplash,
+    });
+  }, [isAuthInitialized, isLoading, user?.id, isProfileComplete, introSplash]);
+
   if (!isAuthInitialized || isLoading || introSplash) {
     return <SplashScreen />;
   }

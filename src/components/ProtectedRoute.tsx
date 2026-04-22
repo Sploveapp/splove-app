@@ -19,10 +19,23 @@ export function ProtectedRoute({ children }: Props) {
   }
 
   if (!user) {
+    // TEMP DEBUG: auth resolved but no user.
+    console.debug("[ProtectedRoute] redirect -> /auth", {
+      path: location.pathname,
+      isAuthInitialized,
+      isLoading,
+      hasUser: false,
+    });
     return <Navigate to="/auth" state={{ from: location }} replace />;
   }
 
   if (!isProfileComplete) {
+    // TEMP DEBUG: user present but profile not complete.
+    console.debug("[ProtectedRoute] redirect -> /onboarding", {
+      path: location.pathname,
+      userId: user.id.slice(0, 8) + "…",
+      isProfileComplete,
+    });
     return <Navigate to="/onboarding" state={{ from: location }} replace />;
   }
 
