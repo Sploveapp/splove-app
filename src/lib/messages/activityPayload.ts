@@ -9,6 +9,7 @@ export type ActivityProposalPayloadStatus =
   | "pending"
   | "accepted"
   | "declined"
+  | "reschedule_requested"
   | "countered"
   | "cancelled"
   | "expired";
@@ -39,6 +40,9 @@ export type ActivityProposalPayloadV1 = {
 function normStatus(raw: string | null | undefined): string {
   const s = (raw ?? "pending").toLowerCase();
   if (s === "proposed") return "pending";
+  if (s === "countered" || s === "alternative_requested" || s === "replaced") {
+    return "reschedule_requested";
+  }
   return s;
 }
 
@@ -144,7 +148,12 @@ export function buildInitialActivityProposalPayload(input: {
   };
 }
 
-export type ActivityProposalAction = "accepted" | "declined" | "countered" | "cancelled";
+export type ActivityProposalAction =
+  | "accepted"
+  | "declined"
+  | "reschedule_requested"
+  | "countered"
+  | "cancelled";
 
 /**
  * Fragment JSON à fusionner dans `messages.payload` (jsonb || patch).
@@ -161,7 +170,7 @@ export function buildUpdatedActivityProposalPayload(
     responded_by: responderId,
     responded_at: now,
   };
-  if (action === "countered") {
+  if (action === "countered" || action === "reschedule_requested") {
     base.counter_proposal =
       options?.counterProposal && Object.keys(options.counterProposal).length > 0
         ? options.counterProposal
@@ -175,6 +184,7 @@ export function isActivityProposalClosed(status: string | null | undefined): boo
   return (
     s === "accepted" ||
     s === "declined" ||
+    s === "reschedule_requested" ||
     s === "countered" ||
     s === "cancelled" ||
     s === "expired" ||

@@ -195,7 +195,7 @@ export async function createCounterProposal(
   /** Pas de `p_scheduled_at` côté RPC sur les BDD alignées 051/052 — la date est portée par le message / métadonnées. */
   const { data, error } = await client.rpc("respond_to_activity_proposal", {
     p_proposal_id: args.replaceProposalId,
-    p_action: "countered",
+    p_action: "reschedule_requested",
     p_time_slot: args.timeSlot,
     p_location: args.location,
     p_note: args.note,
@@ -218,7 +218,7 @@ export async function createCounterProposal(
   await patchActivityProposalSourcePayload(client, {
     conversationId: args.conversationId,
     activityProposalId: args.replaceProposalId,
-    patch: buildUpdatedActivityProposalPayload("countered", args.currentUserId, {
+    patch: buildUpdatedActivityProposalPayload("reschedule_requested", args.currentUserId, {
       counterProposal: {
         sport: args.sport,
         time: args.timeSlot,
@@ -262,6 +262,9 @@ export async function createCounterProposal(
 
   return { data: row };
 }
+
+/** Alias métier explicite anti-ghosting: "reschedule requested". */
+export const requestProposalReschedule = createCounterProposal;
 
 /** Première proposition (pas de remplacement) : RPC create + message court + sync metadata. */
 export async function createPendingActivityProposal(

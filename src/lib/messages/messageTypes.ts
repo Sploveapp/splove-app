@@ -15,6 +15,7 @@ export type ActivityProposalStatus =
   | "pending"
   | "accepted"
   | "declined"
+  | "reschedule_requested"
   | "countered"
   | "cancelled"
   | "expired";
@@ -36,6 +37,7 @@ export type ActivityProposalRowLike = {
   id: string;
   conversation_id: string;
   proposer_id: string;
+  match_id?: string | null;
   sport: string;
   place?: string | null;
   time_slot: string;
@@ -48,4 +50,8 @@ export type ActivityProposalRowLike = {
   supersedes_proposal_id?: string | null;
   responded_by?: string | null;
   responded_at?: string | null;
+  expires_at?: string | null;
+  reminder_6h_sent?: boolean | null;
+  reminder_18h_sent?: boolean | null;
+  expired_notified?: boolean | null;
 };

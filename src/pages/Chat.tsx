@@ -7,9 +7,9 @@ import { insertBlock, isBlockedWith } from "../services/blocks.service";
 import { isPhotoVerified } from "../lib/profileVerification";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { IconSend } from "../components/ui/Icon";
-import { ActivityProposalCard } from "../components/ActivityProposalCard";
+import { ProposalCard } from "../components/ProposalCard";
 import { ActivityResponseBubble } from "../components/chat/ActivityResponseBubble";
-import { ActivityProposalComposer } from "../components/ActivityProposalComposer";
+import { ProposalComposerModal } from "../components/ProposalComposerModal";
 import { ChatEmojiPicker } from "../components/ChatEmojiPicker";
 import { ChatPostMatchPanel } from "../components/ChatPostMatchPanel";
 import type { ActivityPayload } from "../lib/chatActivity";
@@ -22,23 +22,19 @@ import {
 import { isPendingProposalStatus, normalizeActivityProposalStatus } from "../lib/messages/activityProposal";
 import { buildActivityProposalRowForRender } from "../lib/messages/activityMessageParser";
 import {
-  acceptActivityProposal,
-  cancelActivityProposal as cancelActivityProposalMutation,
-  createCounterProposal,
-  createPendingActivityProposal,
-  declineActivityProposal,
-} from "../lib/messages/activityProposalMutations";
+  acceptConversationProposal,
+  createConversationProposal,
+  declineConversationProposal,
+  getLatestProposalForConversation,
+  listConversationProposals,
+  requestConversationProposalReschedule,
+} from "../services/activityProposals.service";
 import {
   assertProposalActionAllowed,
   buildProposalRulesContext,
   getAvailableProposalActions,
 } from "../lib/messages/activityProposalRules";
 import { ensureConversationWindow } from "../lib/ensureConversationWindow";
-import {
-  ACTIVITY_PROPOSALS_SELECT,
-  ACTIVITY_PROPOSALS_SELECT_MINIMAL,
-  isMissingColumnError,
-} from "../lib/activityProposalsQuery";
 import {
   BLOCK_PROFILE_CONFIRM,
   BLOCK_PROFILE_LINK_LABEL,
@@ -86,25 +82,27 @@ type ChatLocationState = {
   matchedByUserId?: string | null;
 };
 
-type ProposalStatus = "pending" | "accepted" | "declined" | "cancelled";
+type ProposalStatus = "pending" | "accepted" | "declined" | "expired" | "reschedule_requested" | "cancelled";
 
 type ProposalRow = {
   id: string;
   conversation_id: string;
   proposer_id: string;
+  match_id: string;
   sport: string;
-  place?: string | null;
   time_slot: string;
   location: string | null;
-  counter_of?: string | null;
   note: string | null;
-  created_at: string | null;
+  created_at: string;
+  updated_at: string;
   status?: ProposalStatus | string | null;
-  scheduled_at?: string | null;
-  boost_awarded?: boolean | null;
-  supersedes_proposal_id?: string | null;
+  expires_at?: string | null;
   responded_by?: string | null;
   responded_at?: string | null;
+  reminder_6h_sent?: boolean | null;
+  reminder_18h_sent?: boolean | null;
+  expired_notified?: boolean | null;
+  supersedes_proposal_id?: string | null;
 };
 
 type TextMessageRow = {
@@ -130,16 +128,6 @@ function parseCreatedMs(iso: string | null | undefined): number {
 }
 
 function formatProposalWhenLine(p: ProposalRow): string {
-  if (p.scheduled_at) {
-    try {
-      const d = new Date(p.scheduled_at);
-      if (!Number.isNaN(d.getTime())) {
-        return d.toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" });
-      }
-    } catch {
-      /* ignore */
-    }
-  }
   return p.time_slot?.trim() || "Date à confirmer";
 }
 
@@ -149,7 +137,7 @@ function normalizeProposalStatus(p: ProposalRow): string {
 
 function isCounterProposedModalStatus(status: string | null | undefined): boolean {
   const s = (status ?? "").toLowerCase();
-  return s === "counter_proposed" || s === "countered" || s === "replaced";
+  return s === "counter_proposed" || s === "countered" || s === "replaced" || s === "reschedule_requested";
 }
 
 function genericProposalError() {
@@ -162,6 +150,7 @@ function proposalStatusLabelFr(p: ProposalRow): string {
   if (s === "declined") return "Refusée";
   if (s === "expired") return "Expirée";
   if (s === "cancelled") return "Annulée";
+  if (s === "reschedule_requested") return "Replanification demandée";
   if (s === "alternative_requested") return "Autre activité demandée";
   if (s === "replaced" || s === "countered") return "Contre-proposition envoyée";
   if (s === "pending" || s === "proposed") return "En attente de réponse";
@@ -175,6 +164,7 @@ function proposalFrozenStateLineFr(p: ProposalRow): string {
   if (s === "declined") return "Pas dispo pour cette activité";
   if (s === "expired") return "Proposition expirée";
   if (s === "cancelled") return "Proposition annulée";
+  if (s === "reschedule_requested") return "Replanification demandée";
   if (s === "countered" || s === "replaced") return "Contre-proposition envoyée";
   return proposalStatusLabelFr(p);
 }
@@ -191,6 +181,7 @@ export default function Chat() {
   const [partnerName, setPartnerName] = useState<string | null>(navState?.partnerFirstName?.trim() || null);
   const [partnerPhoto, setPartnerPhoto] = useState<string | null>(navState?.partnerMainPhotoUrl?.trim() || null);
   const [proposals, setProposals] = useState<ProposalRow[]>([]);
+  const [latestProposalTop, setLatestProposalTop] = useState<ProposalRow | null>(null);
   const [windowExpiresAt, setWindowExpiresAt] = useState<number | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [proposalDetail, setProposalDetail] = useState<ProposalRow | null>(null);
@@ -214,6 +205,7 @@ export default function Chat() {
   const blockPartnerInFlightRef = useRef(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [partnerPhotoVerified, setPartnerPhotoVerified] = useState(false);
+  const [chatMatchId, setChatMatchId] = useState<string | null>(null);
   const [chatAccentTheme, setChatAccentTheme] = useState<MessageBubbleTheme>(CHAT_DEFAULT_ACCENT);
   const [chatOptionsOpen, setChatOptionsOpen] = useState(false);
   const [chatStyleOpen, setChatStyleOpen] = useState(false);
@@ -305,47 +297,15 @@ export default function Chat() {
 
   const reloadProposals = useCallback(async (cid: string) => {
     console.log("[Chat] reloadProposals: start", { conversationId: cid });
-    let data: unknown = null;
-    let error = null as { message?: string; code?: string } | null;
-    let usedSelect = ACTIVITY_PROPOSALS_SELECT;
-
-    const first = await supabase
-      .from("activity_proposals")
-      .select(ACTIVITY_PROPOSALS_SELECT)
-      .eq("conversation_id", cid)
-      .order("created_at", { ascending: true });
-
-    if (first.error && isMissingColumnError(first.error)) {
-      usedSelect = ACTIVITY_PROPOSALS_SELECT_MINIMAL;
-      const second = await supabase
-        .from("activity_proposals")
-        .select(ACTIVITY_PROPOSALS_SELECT_MINIMAL)
-        .eq("conversation_id", cid)
-        .order("created_at", { ascending: true });
-      data = second.data;
-      error = second.error;
-    } else {
-      data = first.data;
-      error = first.error;
-    }
-
-    if (error) {
-      console.error("[Chat] reloadProposals: select error", {
-        conversationId: cid,
-        message: error.message,
-        code: error.code,
-      });
-      return;
-    }
-    const rows = (data as ProposalRow[]) ?? [];
-    console.log("[Chat] activity_proposals select (no match_id):", usedSelect);
-    console.log("[Chat] activity_proposals first row keys:", rows[0] ? Object.keys(rows[0] as object) : []);
+    const rows = await listConversationProposals(cid);
+    const latest = await getLatestProposalForConversation(cid);
     console.log("[Chat] reloadProposals: response", {
       conversationId: cid,
       rowCount: rows.length,
       proposalIds: rows.map((r) => r.id),
     });
     setProposals(rows);
+    setLatestProposalTop(latest as ProposalRow | null);
     if (user?.id && rows.length > 0) {
       const ids = rows.map((r) => r.id);
       const { data: od, error: oe } = await supabase
@@ -481,6 +441,7 @@ export default function Chat() {
         }
 
         const mid = conv.match_id as string;
+        setChatMatchId(mid);
 
         const { data: mRow, error: mErr } = await supabase
           .from("matches")
@@ -827,10 +788,7 @@ export default function Chat() {
     () => sortedProposalsDesc.some((p) => normalizeProposalStatus(p) === "accepted"),
     [sortedProposalsDesc],
   );
-  const latestAcceptedProposal = useMemo(
-    () => sortedProposalsDesc.find((p) => normalizeProposalStatus(p) === "accepted") ?? null,
-    [sortedProposalsDesc],
-  );
+  const latestProposal = latestProposalTop ?? sortedProposalsDesc[0] ?? null;
   const productState = getProductState({ hasProposal: hasPendingProposal });
 
   useEffect(() => {
@@ -886,16 +844,13 @@ export default function Chat() {
       if (
         st === "declined" ||
         st === "expired" ||
+        st === "reschedule_requested" ||
         st === "replaced" ||
         st === "countered" ||
         st === "cancelled"
       )
         continue;
-      const sched = p.scheduled_at
-        ? new Date(p.scheduled_at).getTime()
-        : p.created_at
-          ? new Date(p.created_at).getTime() + CHAT_WINDOW_HOURS_MS
-          : 0;
+      const sched = p.created_at ? new Date(p.created_at).getTime() + CHAT_WINDOW_HOURS_MS : 0;
       if (sched <= 0 || now < sched + ACTIVITY_FEEDBACK_DELAY_MS) continue;
       return p;
     }
@@ -959,7 +914,7 @@ export default function Chat() {
   }, [chatMessages, proposals, proposalsById, conversationId, sortedProposalsDesc]);
 
   async function sendActivity(payload: ActivityPayload, replaceProposalId: string | null = null) {
-    if (!user?.id || !conversationId) throw new Error("Non connecté");
+    if (!user?.id || !conversationId || !chatMatchId) throw new Error("Non connecté");
     if (pairBlocked) throw new Error("Échange impossible avec ce profil.");
     if (proposalActionInFlightId !== null) throw new Error("Une action est déjà en cours.");
 
@@ -1002,28 +957,26 @@ export default function Chat() {
     setProposalActionInFlightId(lockId);
     try {
       if (replaceProposalId) {
-        const res = await createCounterProposal(supabase, {
-          replaceProposalId,
+        await requestConversationProposalReschedule({
+          proposalId: replaceProposalId,
           conversationId,
-          currentUserId: user.id,
+          proposerId: user.id,
+          matchId: chatMatchId,
           sport: payload.sport,
           timeSlot: timeLabel,
           location: loc,
           note: payload.message.trim() || null,
-          scheduledAt: scheduledAtIso,
         });
-        if ("error" in res) throw new Error(res.error.message || genericProposalError());
       } else {
-        const res = await createPendingActivityProposal(supabase, {
+        await createConversationProposal({
           conversationId,
-          currentUserId: user.id,
+          proposerId: user.id,
+          matchId: chatMatchId,
           sport: payload.sport,
           timeSlot: timeLabel,
           location: loc,
           note: payload.message.trim() || null,
-          scheduledAt: scheduledAtIso,
         });
-        if ("error" in res) throw new Error(res.error.message || genericProposalError());
       }
 
       await reloadProposals(conversationId);
@@ -1141,66 +1094,17 @@ export default function Chat() {
 
     setProposalActionInFlightId(proposalId);
     try {
-      const res =
-        status === "accepted"
-          ? await acceptActivityProposal(supabase, {
-              proposalId,
-              conversationId,
-              currentUserId: user.id,
-            })
-          : await declineActivityProposal(supabase, {
-              proposalId,
-              conversationId,
-              currentUserId: user.id,
-            });
-      if ("error" in res) {
-        setMessagePolicyError(res.error.message);
-        await reloadProposals(conversationId);
-        return;
+      if (status === "accepted") {
+        await acceptConversationProposal(proposalId);
+      } else {
+        await declineConversationProposal(proposalId);
       }
       setProposalDetail(null);
       setMessagePolicyError(null);
       await reloadProposals(conversationId);
       await reloadChatMessages(conversationId);
-    } finally {
-      setProposalActionInFlightId(null);
-    }
-  }
-
-  async function cancelProposal(proposalId: string) {
-    if (!user?.id || !conversationId) return;
-    if (proposalActionInFlightId !== null) return;
-
-    const p = proposals.find((x) => x.id === proposalId);
-    if (!p) {
-      setMessagePolicyError("Proposition introuvable.");
-      return;
-    }
-    const ctx = buildProposalRulesContext({
-      proposal: p,
-      currentUserId: user.id,
-      conversationReady: Boolean(conversationId && user.id),
-      pairBlocked,
-    });
-    const gate = assertProposalActionAllowed("cancel", ctx);
-    if (!gate.ok) {
-      if (import.meta.env.DEV) console.debug("[Chat] cancelProposal blocked", gate.reason);
-      setMessagePolicyError(gate.reason);
-      return;
-    }
-
-    setProposalActionInFlightId(proposalId);
-    try {
-      const res = await cancelActivityProposalMutation(supabase, { proposalId });
-      if ("error" in res) {
-        setMessagePolicyError(res.error.message);
-        await reloadProposals(conversationId);
-        return;
-      }
-      setProposalDetail(null);
-      setMessagePolicyError(null);
-      await reloadProposals(conversationId);
-      await reloadChatMessages(conversationId);
+    } catch (e) {
+      setMessagePolicyError(e instanceof Error ? e.message : genericProposalError());
     } finally {
       setProposalActionInFlightId(null);
     }
@@ -1512,23 +1416,41 @@ export default function Chat() {
           </div>
         ) : null}
 
-        {latestAcceptedProposal ? (
-          <div className="sticky top-0 z-10 mb-3 rounded-2xl border border-app-border/80 bg-app-card/95 px-3 py-2.5 shadow-sm backdrop-blur-sm">
-            <p className="text-[13px] font-semibold leading-snug text-app-text">
-              📅 Rencontre planifiée — {formatProposalWhenLine(latestAcceptedProposal)}
-            </p>
-            <div className="mt-1 flex items-center justify-between gap-2">
-              <p className="truncate text-[12px] text-app-muted">📍 {latestAcceptedProposal.location?.trim() || "—"}</p>
-              <button
-                type="button"
-                onClick={() => setProposalDetail(latestAcceptedProposal)}
-                className="shrink-0 rounded-lg border border-app-border bg-app-bg px-2.5 py-1 text-[12px] font-semibold text-app-text transition hover:bg-app-border"
-              >
-                Voir
-              </button>
-            </div>
+        {latestProposal ? (
+          <div className="mb-3">
+            <ProposalCard
+              proposal={latestProposal}
+              currentUserId={user?.id}
+              conversationReady={Boolean(conversationId && user?.id)}
+              pairBlocked={pairBlocked}
+              mine={latestProposal.proposer_id === user?.id}
+              proposalActionLocked={proposalActionBusy}
+              onOpenDetail={() => setProposalDetail(latestProposal)}
+              onAccept={() => void respondToProposal(latestProposal.id, "accepted")}
+              onDecline={() => void respondToProposal(latestProposal.id, "declined")}
+              onCounter={() => {
+                setCounterReplaceProposalId(latestProposal.id);
+                setCounterPrefill({
+                  sport: latestProposal.sport?.trim() || "",
+                  place: latestProposal.location?.trim() || "",
+                });
+                setModalOpen(true);
+              }}
+              onCancel={() => {}}
+            />
           </div>
-        ) : null}
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              if (!pairBlocked) setModalOpen(true);
+            }}
+            disabled={pairBlocked}
+            className="mb-3 w-full rounded-xl border border-app-border bg-app-card py-3 text-sm font-semibold text-app-text shadow-sm transition hover:bg-app-border disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Proposer une activité
+          </button>
+        )}
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4">
           {chatTimeline.length === 0 ? (
@@ -1560,31 +1482,7 @@ export default function Chat() {
                     </div>
                   );
                 }
-                const p = item.proposal;
-                const mine = p.proposer_id === user?.id;
-                return (
-                  <ActivityProposalCard
-                    key={item.sortKey}
-                    proposal={p}
-                    currentUserId={user?.id}
-                    conversationReady={Boolean(conversationId && user?.id)}
-                    pairBlocked={pairBlocked}
-                    mine={mine}
-                    proposalActionLocked={proposalActionBusy}
-                    onOpenDetail={() => setProposalDetail(p)}
-                    onAccept={() => void respondToProposal(p.id, "accepted")}
-                    onDecline={() => void respondToProposal(p.id, "declined")}
-                    onCounter={() => {
-                      setCounterReplaceProposalId(p.id);
-                      setCounterPrefill({
-                        sport: p.sport?.trim() || "",
-                        place: p.place?.trim() || p.location?.trim() || "",
-                      });
-                      setModalOpen(true);
-                    }}
-                    onCancel={() => void cancelProposal(p.id)}
-                  />
-                );
+                return null;
               })}
             </div>
           )}
@@ -1753,24 +1651,6 @@ export default function Chat() {
                   <p className="font-semibold text-app-muted">🔁 Contre-proposition envoyée</p>
                 </div>
               ) : null}
-              {user?.id && proposalDetailActions?.cancel ? (
-                <div className="space-y-2">
-                  <p className="rounded-xl border border-app-border/80 bg-app-bg/80 px-3 py-2.5 text-[13px] leading-snug text-app-muted">
-                    En attente de réponse de votre partenaire.
-                  </p>
-                  <button
-                    type="button"
-                    disabled={proposalActionBusy || pairBlocked}
-                    onClick={() => {
-                      console.log("[Chat] cancel proposal clicked", proposalDetail.id);
-                      void cancelProposal(proposalDetail.id);
-                    }}
-                    className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border disabled:opacity-50"
-                  >
-                    Annuler
-                  </button>
-                </div>
-              ) : null}
               {user?.id &&
               (proposalDetailActions?.accept || proposalDetailActions?.decline || proposalDetailActions?.counter) ? (
                 <div className="space-y-2">
@@ -1810,7 +1690,7 @@ export default function Chat() {
                         setCounterReplaceProposalId(proposalDetail.id);
                         setCounterPrefill({
                           sport: proposalDetail.sport?.trim() || "",
-                          place: proposalDetail.place?.trim() || proposalDetail.location?.trim() || "",
+                          place: proposalDetail.location?.trim() || "",
                         });
                         setProposalDetail(null);
                         setModalOpen(true);
@@ -1824,7 +1704,6 @@ export default function Chat() {
               ) : null}
               {user?.id &&
               proposalDetailActions &&
-              !proposalDetailActions.cancel &&
               !proposalDetailActions.accept &&
               !proposalDetailActions.decline &&
               !proposalDetailActions.counter &&
@@ -1849,7 +1728,7 @@ export default function Chat() {
         </div>
       ) : null}
 
-      <ActivityProposalComposer
+      <ProposalComposerModal
         open={modalOpen}
         onClose={() => {
           setCounterReplaceProposalId(null);
@@ -1878,7 +1757,6 @@ export default function Chat() {
         }
         initialSport={counterPrefill?.sport}
         initialPlace={counterPrefill?.place}
-        initialScheduledAt={counterReplaceProposalId ? (proposals.find((x) => x.id === counterReplaceProposalId)?.scheduled_at ?? undefined) : undefined}
         onSubmit={async (p) => {
           await sendActivity(p, counterReplaceProposalId);
           setCounterReplaceProposalId(null);

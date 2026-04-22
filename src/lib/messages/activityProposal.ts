@@ -12,6 +12,8 @@ import { buildProposalRulesContext, getAvailableProposalActions } from "./activi
 export function normalizeActivityProposalStatus(raw: string | null | undefined): string {
   const s = (raw ?? "pending").toLowerCase();
   if (s === "proposed") return "pending";
+  if (s === "countered") return "reschedule_requested";
+  if (s === "alternative_requested" || s === "replaced") return "reschedule_requested";
   return s;
 }
 
@@ -22,6 +24,7 @@ export function isTerminalProposalStatus(status: string): boolean {
     s === "declined" ||
     s === "cancelled" ||
     s === "expired" ||
+    s === "reschedule_requested" ||
     s === "countered" ||
     s === "replaced"
   );
@@ -135,7 +138,9 @@ export function statusBadgeLabelFr(status: string): { text: string; tone: "succe
   const s = normalizeActivityProposalStatus(status);
   if (s === "accepted") return { text: "Créneau confirmé", tone: "success" };
   if (s === "declined") return { text: "Créneau refusé", tone: "danger" };
-  if (s === "countered" || s === "replaced") return { text: "Contre-proposition envoyée", tone: "warning" };
+  if (s === "reschedule_requested" || s === "countered" || s === "replaced") {
+    return { text: "Replanification demandée", tone: "warning" };
+  }
   if (s === "cancelled") return { text: "Proposition annulée", tone: "muted" };
   if (s === "expired") return { text: "Proposition expirée", tone: "muted" };
   return null;
