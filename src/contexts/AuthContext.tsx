@@ -11,9 +11,8 @@ import { flushSync } from "react-dom";
 import { supabase } from "../lib/supabase";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import {
-  PROFILE_SELECT_CORE,
-  PROFILE_SELECT_MINIMAL,
-  isPostgresUndefinedColumnError,
+  PROFILE_LOAD_TIERS_FOR_AUTH,
+  selectProfilesFirstMatch,
 } from "../lib/profileSelect";
 import type { AppProfile } from "../lib/appProfile";
 import { isProfileRecord } from "../lib/appProfile";
@@ -158,81 +157,46 @@ function profileRowToProfile(row: AppProfile): Profile {
   } as Profile;
 }
 
-function profileFromMinimalRow(raw: {
-  id: string;
-  first_name?: string | null;
-  birth_date?: string | null;
-  profile_completed?: boolean | null;
-}): Profile | null {
-  const row = {
-    id: raw.id,
-    first_name: raw.first_name ?? null,
-    birth_date: raw.birth_date ?? null,
-    profile_completed: !!raw.profile_completed,
-  };
-  if (!isProfileRecord(row)) return null;
-  return profileRowToProfile(row as AppProfile);
-}
-
 /**
- * Une seule source de colonnes : `PROFILE_SELECT_CORE` (pas `location_source`, pas colonnes absentes en prod).
- * Si 42703 (colonne inconnue) : **un seul** retry avec `PROFILE_SELECT_MINIMAL`, puis stop.
+ * Lecture `profiles` en cascade (tiers) : schéma Render partiel → pas de 400 bloquant,
+ * la décision auth repose sur un noyau présent dans les paliers bas (flags + id).
  */
 async function fetchProfile(userId: string): Promise<Profile | null> {
-  const q = (cols: string) =>
-    supabase.from("profiles").select(cols).eq("id", userId).maybeSingle();
+  const runTiers = () =>
+    selectProfilesFirstMatch(supabase, userId, PROFILE_LOAD_TIERS_FOR_AUTH, "[AuthContext] fetchProfile");
 
-  let { data, error } = await q(PROFILE_SELECT_CORE);
+  let { data, usedSelect, lastError } = await runTiers();
 
-  if (error) {
-    if (isPostgresUndefinedColumnError(error)) {
-      console.warn("[AuthContext] fetchProfile: 42703 — retry with minimal columns");
-      const min = await q(PROFILE_SELECT_MINIMAL);
-      if (min.error || !min.data) {
-        if (min.error) {
-          console.warn("[AuthContext] fetchProfile: minimal select failed", min.error.message);
-        }
-        return null;
-      }
-      return profileFromMinimalRow(min.data as unknown as { id: string; first_name?: string | null });
-    }
-    if (error) {
-      console.warn("[AuthContext] fetchProfile:", error.message);
-      return null;
+  if (!data) {
+    const created = await ensureProfileRowForAuthUserId(userId);
+    if (created) {
+      const again = await runTiers();
+      data = again.data;
+      usedSelect = again.usedSelect;
+      lastError = again.lastError;
     }
   }
 
   if (!data) {
-    const created = await ensureProfileRowForAuthUserId(userId);
-    if (!created) return null;
-    const retry = await q(PROFILE_SELECT_CORE);
-    if (retry.error) {
-      if (isPostgresUndefinedColumnError(retry.error)) {
-        console.warn("[AuthContext] fetchProfile retry: 42703 — minimal select");
-        const min = await q(PROFILE_SELECT_MINIMAL);
-        if (min.error || !min.data) {
-          if (min.error) console.warn("[AuthContext] fetchProfile: minimal after ensure failed", min.error.message);
-          return null;
-        }
-        return profileFromMinimalRow(min.data as unknown as { id: string; first_name?: string | null });
-      }
-      console.warn("[AuthContext] fetchProfile retry:", retry.error.message);
-      return null;
-    } else if (retry.data) {
-      data = retry.data;
-    }
-    if (!data) return null;
+    console.warn("[AuthContext] fetchProfile: no row after cascade", {
+      lastError: lastError?.message ?? null,
+      code: lastError?.code ?? null,
+    });
+    return null;
   }
+
+  console.debug("[AuthContext] fetchProfile tier used", {
+    usedSelectSample: usedSelect ? usedSelect.slice(0, 100) + (usedSelect.length > 100 ? "…" : "") : null,
+  });
 
   if (!isProfileRecord(data)) {
     console.warn("[AuthContext] fetchProfile: unexpected profile row shape");
     return null;
   }
 
-  const normalized = profileRowToProfile(data);
+  const normalized = profileRowToProfile(data as AppProfile);
   const onboardingCompleted = (data as { onboarding_completed?: unknown }).onboarding_completed === true;
-  if (normalized.profile_completed && !data.profile_completed && onboardingCompleted) {
-    // TEMP DEBUG: legacy rows may have onboarding_completed=true but profile_completed=false.
+  if (normalized.profile_completed && data.profile_completed !== true && onboardingCompleted) {
     console.debug("[AuthContext] backfill profile_completed from onboarding_completed", {
       userId: userId.slice(0, 8) + "…",
       profile_completed: data.profile_completed,
@@ -541,7 +505,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * Accès app (Discover, etc.) : source de vérité BDD `profile_completed`
    * (écrit à la fin d’onboarding) + âge ≥ 18 sur `birth_date`.
    * Ne pas recalculer via `isOnboardingComplete` : trop fragile si une colonne
-   * manque au fetch ou après repli `PROFILE_SELECT_MINIMAL`.
+   * manque au fetch (ou schéma partiel) — repli côté cascade `PROFILE_LOAD_TIERS_FOR_AUTH`.
    */
   const isProfileComplete = Boolean(profile?.profile_completed);
 

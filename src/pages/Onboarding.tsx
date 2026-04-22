@@ -13,9 +13,11 @@ import {
 import { isAdultFromBirthIso } from "../lib/ageGate";
 import { isOnboardingComplete } from "../lib/profileCompleteness";
 import {
+  ONBOARDING_PROFILE_HYDRATE_TIERS,
   PROFILE_UPSERT_ONBOARDING_SELECT,
   PROFILE_UPSERT_ONBOARDING_SELECT_CORE,
   isUndefinedColumnError,
+  selectProfilesFirstMatch,
 } from "../lib/profileSelect";
 import { isProfileRecord } from "../lib/appProfile";
 import { reverseGeocodeCity } from "../lib/geocoding";
@@ -732,43 +734,17 @@ export default function Onboarding() {
     async function hydrateDraft() {
       setHydratingDraft(true);
       try {
-        let profileSelect =
-          "first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, practice_preferences";
-        let { data: p, error: profileErr } = await supabase
-          .from("profiles")
-          .select(profileSelect)
-          .eq("id", userId)
-          .maybeSingle();
-        if (profileErr && isUndefinedColumnError(profileErr, "practice_preferences")) {
-          console.warn("[Onboarding draft] hydrate fallback without practice_preferences");
-          profileSelect =
-            "first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase";
-          ({ data: p, error: profileErr } = await supabase
-            .from("profiles")
-            .select(profileSelect)
-            .eq("id", userId)
-            .maybeSingle());
-        }
-        if (profileErr) {
-          const missingColumns = getMissingOptionalProfileColumns(profileErr);
-          if (missingColumns.length > 0) {
-            console.warn("[Onboarding draft] hydrate select optional columns missing, retrying", {
-              missingColumns,
-              code: profileErr.code,
-              message: profileErr.message,
-            });
-            profileSelect = stripOptionalColumnsFromSelect(profileSelect);
-            ({ data: p, error: profileErr } = await supabase
-              .from("profiles")
-              .select(profileSelect)
-              .eq("id", userId)
-              .maybeSingle());
-          }
-        }
-        if (profileErr) {
-          console.warn("[Onboarding draft] hydrate profile failed", profileErr);
+        const { data: p, usedSelect } = await selectProfilesFirstMatch(
+          supabase,
+          userId,
+          ONBOARDING_PROFILE_HYDRATE_TIERS,
+          "[Onboarding draft] hydrate",
+        );
+        if (!p) {
+          console.warn("[Onboarding draft] hydrate: no data from any tier (schema/empty profile)");
           return;
         }
+        console.debug("[Onboarding draft] hydrate OK", { usedSelectSample: usedSelect?.slice(0, 90) });
         if (cancelled || !p || typeof p !== "object") return;
         const row = p as Record<string, unknown>;
         setFirstName(String(row.first_name ?? ""));
@@ -825,7 +801,7 @@ export default function Onboarding() {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, authLoading]);
+  }, [user?.id, authLoading, isProfileComplete]);
 
   useEffect(() => {
     console.log("[Onboarding] authLoading / user", {
