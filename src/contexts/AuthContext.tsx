@@ -507,7 +507,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * Ne pas recalculer via `isOnboardingComplete` : trop fragile si une colonne
    * manque au fetch (ou schéma partiel) — repli côté cascade `PROFILE_LOAD_TIERS_FOR_AUTH`.
    */
-  const isProfileComplete = Boolean(profile?.profile_completed);
+  const isProfileComplete =
+  profile?.profile_completed === true ||
+  profile?.onboarding_completed === true;
 
   const value: AuthState = {
     user,
