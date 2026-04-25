@@ -112,20 +112,6 @@
   animation: chat-bubble-in 0.32s ease-out both;
 }
 
-@keyframes spinOrbit {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.orbit {
-  transform-origin: center;
-  animation: spinOrbit 4s linear infinite;
-}
-
 .splove-splash {
   position: fixed;
   inset: 0;
@@ -147,21 +133,29 @@
   box-sizing: border-box;
 }
 
-.splove-splash__image {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  object-position: center;
-  user-select: none;
-  -webkit-user-drag: none;
-}
-
 @media (max-width: 640px) {
   .splove-splash__inner {
     width: 94vw;
     height: 72vh;
     padding: 12px;
   }
+}
+
+/* Profil — créneau sportif (inputs dark, autofill) */
+.splove-availability-inputs input,
+.splove-availability-inputs input:focus {
+  -webkit-text-fill-color: #ffffff;
+  caret-color: #ffffff;
+}
+.splove-availability-inputs input::placeholder {
+  color: rgba(161, 161, 170, 0.95);
+  opacity: 1;
+}
+.splove-availability-inputs input:-webkit-autofill,
+.splove-availability-inputs input:-webkit-autofill:hover,
+.splove-availability-inputs input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #ffffff;
+  box-shadow: 0 0 0 1000px #0f0f14 inset;
+  transition: background-color 9999s ease-out 0s;
 }
 
