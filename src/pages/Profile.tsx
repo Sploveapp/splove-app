@@ -2,13 +2,8 @@ import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import {
-  ACCESSIBILITY_PREF_ADAPTED_LABEL,
   ACCESSIBILITY_PREF_BOTH_REQUIRED,
-  ACCESSIBILITY_PREF_STANDARD_LABEL,
-  ACCESSIBILITY_SECTION_INTRO,
-  ACCESSIBILITY_SELF_LABEL,
   VERIFY_OWN_NOT_VERIFIED,
-  VERIFY_OWN_PENDING,
   VERIFY_OWN_VERIFIED,
 } from "../constants/copy";
 import { VerifiedBadge } from "../components/VerifiedBadge";
@@ -30,11 +25,11 @@ import { reverseGeocodeCity } from "../lib/geocoding";
 import { updateProfileLocation } from "../lib/profileLocation";
 import { IconSignOut } from "../components/ui/Icon";
 
-const FEATURE_COMING_SOON_MESSAGE = "Fonction bientôt disponible";
+const FEATURE_COMING_SOON_MESSAGE = "Fonction bientot disponible";
 
 const SPORT_PHRASE_MAX_LEN = 120;
 
-const ACCESSIBILITY_SAVE_SUCCESS = "Préférences enregistrées.";
+const ACCESSIBILITY_SAVE_SUCCESS = "Preferences enregistrees.";
 
 const sectionHeadingButtonStyle: CSSProperties = {
   margin: "0 0 12px 0",
@@ -51,8 +46,11 @@ const sectionHeadingButtonStyle: CSSProperties = {
 };
 import { CHAT_BUBBLE_COLOR_ORDER, CHAT_BUBBLE_COLORS } from "../constants/chatBubbleColors";
 import { getOwnMessageBubbleClassName } from "../lib/messageBubbleTheme";
+import { useTranslation } from "../i18n/useTranslation";
+import LanguageSwitcher from "../components/LanguageSwitcher";
 
 export default function Profile() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { user, profile, refetchProfile } = useAuth();
   const mainPhoto = profile?.main_photo_url?.trim() || null;
@@ -133,9 +131,9 @@ export default function Profile() {
 
   async function handleSaveSportPhrase() {
     if (!user?.id) return;
-    const t = phraseDraft.trim();
-    if (t.length > 0 && bioPublicTextViolatesPolicy(t)) {
-      setPhraseMessage("Ce texte n’est pas autorisé (liens, réseaux sociaux, etc.).");
+    const phraseText = phraseDraft.trim();
+    if (phraseText.length > 0 && bioPublicTextViolatesPolicy(phraseText)) {
+      setPhraseMessage("Ce texte n'est pas autorise (liens, reseaux sociaux, etc.).");
       return;
     }
     setPhraseSaving(true);
@@ -144,15 +142,15 @@ export default function Profile() {
       const { error } = await supabase
         .from("profiles")
         .update({
-          sport_phrase: t.length > 0 ? t.slice(0, SPORT_PHRASE_MAX_LEN) : null,
+          sport_phrase: phraseText.length > 0 ? phraseText.slice(0, SPORT_PHRASE_MAX_LEN) : null,
         })
         .eq("id", user.id);
       if (error) {
-        setPhraseMessage(error.message || "Enregistrement impossible.");
+        setPhraseMessage(error.message || t("action_impossible"));
         return;
       }
       await refetchProfile();
-      setPhraseMessage("Phrase enregistrée.");
+      setPhraseMessage("Phrase enregistree.");
     } finally {
       setPhraseSaving(false);
     }
@@ -179,11 +177,11 @@ export default function Profile() {
         location_source: "manual",
       });
       if (error) {
-        setLocMessage(error.message || "Enregistrement impossible.");
+        setLocMessage(error.message || t("action_impossible"));
         return;
       }
       await refetchProfile();
-      setLocMessage("Localisation enregistrée.");
+      setLocMessage("Localisation enregistree.");
     } finally {
       setLocSaving(false);
     }
@@ -196,7 +194,7 @@ export default function Profile() {
     try {
       const c = await getCurrentPositionCoords();
       if (!c) {
-        setLocMessage("Position indisponible. Vérifie les autorisations ou saisis ta ville.");
+        setLocMessage("Position indisponible. Verifie les autorisations ou saisis ta ville.");
         return;
       }
       const radiusParsed = locRadius === "" ? null : Number(locRadius);
@@ -213,11 +211,11 @@ export default function Profile() {
         location_source: "device",
       });
       if (error) {
-        setLocMessage(error.message || "Enregistrement impossible.");
+        setLocMessage(error.message || t("action_impossible"));
         return;
       }
       await refetchProfile();
-      setLocMessage("Position enregistrée.");
+      setLocMessage("Position enregistree.");
     } finally {
       setGeoLoading(false);
     }
@@ -239,7 +237,7 @@ export default function Profile() {
         })
         .eq("id", user.id);
       if (error) {
-        setAccessibilityMessage(error.message || "Enregistrement impossible.");
+        setAccessibilityMessage(error.message || t("action_impossible"));
         return;
       }
       await refetchProfile();
@@ -260,14 +258,14 @@ export default function Profile() {
         .eq("id", user.id);
       if (error) {
         console.error("[Profile] active mode save error:", error);
-        setActiveModeMessage(error.message || "Enregistrement impossible.");
+        setActiveModeMessage(error.message || t("action_impossible"));
         return;
       }
       await refetchProfile();
-      setActiveModeMessage("Mode rencontre active enregistré.");
+      setActiveModeMessage("Mode rencontre active enregistre.");
     } catch (err) {
       console.error("[Profile] active mode save failed:", err);
-      setActiveModeMessage("Enregistrement impossible.");
+      setActiveModeMessage(t("action_impossible"));
     } finally {
       setActiveModeSaving(false);
     }
@@ -299,7 +297,7 @@ export default function Profile() {
             letterSpacing: "0.06em",
           }}
         >
-          Mon profil
+          {t("profile_title")}
         </h1>
 
         <button
@@ -319,7 +317,7 @@ export default function Profile() {
             textAlign: "left",
           }}
         >
-          Mes rencontres
+          {t("my_meetups")}
         </button>
 
         <button
@@ -339,7 +337,7 @@ export default function Profile() {
             textAlign: "left",
           }}
         >
-          Modifier mon profil
+          {t("edit_profile")}
         </button>
 
         {user && (
@@ -359,13 +357,13 @@ export default function Profile() {
               onClick={() => setComingSoonOpen(true)}
               aria-haspopup="dialog"
             >
-              Photo principale
+              {t("photos.primary")}
             </button>
             {mainPhoto && !imageError ? (
               <button
                 type="button"
                 onClick={() => setComingSoonOpen(true)}
-                aria-label={`${FEATURE_COMING_SOON_MESSAGE}. Photo principale.`}
+                aria-label={`${FEATURE_COMING_SOON_MESSAGE}. ${t("photos.primary")}.`}
                 style={{
                   marginBottom: "16px",
                   padding: 0,
@@ -429,7 +427,7 @@ export default function Profile() {
                   color: APP_TEXT,
                 }}
               >
-                Vérification du profil
+                {t("profile_verification.title")}
               </span>
               {profile && isPhotoVerified(profile) ? (
                 <>
@@ -506,7 +504,7 @@ export default function Profile() {
                             lineHeight: 1.5,
                           }}
                         >
-                          {VERIFY_OWN_PENDING}
+                          {t("profile_verification.pending")}
                         </p>
                       );
                     }
@@ -546,7 +544,7 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Phrase sport (optionnel)
+              {t("sport_phrase.title")}
             </h2>
             <p
               style={{
@@ -557,7 +555,7 @@ export default function Profile() {
                 lineHeight: 1.45,
               }}
             >
-              Une courte phrase sur ton énergie ou ton style — tu peux la laisser vide.
+              {t("sport_phrase.description")}
             </p>
             <textarea
               value={phraseDraft}
@@ -567,7 +565,7 @@ export default function Profile() {
               }}
               rows={3}
               maxLength={SPORT_PHRASE_MAX_LEN}
-              placeholder="Ex. Trail le dimanche, j’aime le rythme et l’air large."
+              placeholder={t("sport_phrase.placeholder")}
               style={{
                 width: "100%",
                 boxSizing: "border-box",
@@ -601,7 +599,7 @@ export default function Profile() {
                 color: TEXT_ON_BRAND,
               }}
             >
-              {phraseSaving ? "Enregistrement…" : "Enregistrer la phrase"}
+              {phraseSaving ? t("loading") : t("sport_phrase.save")}
             </button>
             {phraseMessage ? (
               <p style={{ margin: "10px 0 0 0", fontSize: "14px", color: APP_TEXT_MUTED }}>{phraseMessage}</p>
@@ -625,7 +623,7 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Couleur de tes messages
+              {t("profile_message_color_title")}
             </h2>
             <p
               style={{
@@ -636,17 +634,16 @@ export default function Profile() {
                 lineHeight: 1.45,
               }}
             >
-              Le style des bulles se choisit{" "}
-              <strong style={{ color: APP_TEXT, fontWeight: 600 }}>dans chaque conversation</strong>{" "}
-              : menu <span aria-hidden="true">⋮</span> en haut à droite, puis « Style de discussion ». Ce
-              n’est pas un réglage global du profil.
+              {t("profile_message_color_desc_prefix")}{" "}
+              <strong style={{ color: APP_TEXT, fontWeight: 600 }}>{t("profile_message_color_desc_strong")}</strong>{" "}
+              {t("profile_message_color_desc_suffix")}
             </p>
             <p style={{ margin: "0 0 14px 0", fontSize: "13px", fontWeight: 500, color: APP_TEXT_MUTED }}>
               <Link
                 to="/messages"
                 style={{ color: BRAND_BG, fontWeight: 600, textDecoration: "underline" }}
               >
-                Ouvrir Mes messages
+                {t("profile_open_messages")}
               </Link>
             </p>
             <p
@@ -659,7 +656,7 @@ export default function Profile() {
                 textTransform: "uppercase",
               }}
             >
-              Aperçu des styles (non appliqué ici)
+              {t("profile_message_style_preview")}
             </p>
             <div
               className="grid grid-cols-2 gap-3 sm:grid-cols-3"
@@ -671,10 +668,10 @@ export default function Profile() {
                   className="flex flex-col items-stretch gap-2 rounded-xl border border-app-border/95 bg-app-card p-3 text-center"
                 >
                   <div className="flex w-full min-w-0 justify-end">
-                    <div className={getOwnMessageBubbleClassName(id)}>Bonjour !</div>
+                    <div className={getOwnMessageBubbleClassName(id)}>{t("profile_message_preview_text")}</div>
                   </div>
                   <span className="text-center text-[12px] font-semibold text-app-text">
-                    {CHAT_BUBBLE_COLORS[id].label}
+                    {t(CHAT_BUBBLE_COLORS[id].label)}
                   </span>
                 </div>
               ))}
@@ -698,7 +695,7 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Tes rencontres
+              {t("profile_meetings_title")}
             </h2>
             <p
               style={{
@@ -709,7 +706,7 @@ export default function Profile() {
                 lineHeight: 1.45,
               }}
             >
-              {ACCESSIBILITY_SECTION_INTRO}
+              {t("meetups.preferences_description")}
             </p>
             <label
               style={{
@@ -732,7 +729,7 @@ export default function Profile() {
                 }}
                 style={{ marginTop: "3px", width: "16px", height: "16px", flexShrink: 0 }}
               />
-              <span>{ACCESSIBILITY_SELF_LABEL}</span>
+              <span>{t("meetups.mobility_adapted")}</span>
             </label>
             <p
               style={{
@@ -744,7 +741,7 @@ export default function Profile() {
                 color: APP_TEXT_MUTED,
               }}
             >
-              Qui t’intéresse ?
+              {t("profile_who_interests")}
             </p>
             <label
               style={{
@@ -767,7 +764,7 @@ export default function Profile() {
                 }}
                 style={{ marginTop: "3px", width: "16px", height: "16px", flexShrink: 0 }}
               />
-              <span>{ACCESSIBILITY_PREF_STANDARD_LABEL}</span>
+              <span>{t("meetups.interested_classic_profiles")}</span>
             </label>
             <label
               style={{
@@ -790,7 +787,7 @@ export default function Profile() {
                 }}
                 style={{ marginTop: "3px", width: "16px", height: "16px", flexShrink: 0 }}
               />
-              <span>{ACCESSIBILITY_PREF_ADAPTED_LABEL}</span>
+              <span>{t("meetups.interested_adapted_profiles")}</span>
             </label>
             {accessibilityMessage && accessibilityMessage !== ACCESSIBILITY_SAVE_SUCCESS ? (
               <p
@@ -823,10 +820,10 @@ export default function Profile() {
               }}
             >
               {accessibilitySaving
-                ? "Enregistrement…"
+                ? t("loading")
                 : accessibilityMessage === ACCESSIBILITY_SAVE_SUCCESS
-                  ? "✓ Enregistré"
-                  : "Enregistrer ces préférences"}
+                  ? t("saved_check")
+                  : t("save_preferences")}
             </button>
           </div>
 
@@ -847,7 +844,7 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Mode rencontre active
+              {t("profile_active_mode_title")}
             </h2>
             <label
               style={{
@@ -869,7 +866,7 @@ export default function Profile() {
                 }}
                 style={{ width: "16px", height: "16px" }}
               />
-              <span>Mode rencontre active</span>
+              <span>{t("profile_active_mode_title")}</span>
             </label>
             <button
               type="button"
@@ -887,7 +884,7 @@ export default function Profile() {
                 cursor: activeModeSaving ? "wait" : "pointer",
               }}
             >
-              {activeModeSaving ? "Enregistrement…" : "Enregistrer ce mode"}
+              {activeModeSaving ? t("loading") : t("save_this_mode")}
             </button>
             {activeModeMessage ? (
               <p style={{ margin: "10px 0 0 0", fontSize: "13px", color: APP_TEXT_MUTED }}>
@@ -913,7 +910,7 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Localisation
+              {t("location")}
             </h2>
             <p
               style={{
@@ -924,7 +921,7 @@ export default function Profile() {
                 lineHeight: 1.45,
               }}
             >
-              Utilisée pour te montrer des profils à proximité sur Discover. Approximatif, sans carte.
+              {t("location_profile_hint")}
             </p>
             <label
               style={{
@@ -935,7 +932,7 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Ville
+              {t("city")}
             </label>
             <input
               type="text"
@@ -944,7 +941,7 @@ export default function Profile() {
                 setLocCity(e.target.value);
                 setLocMessage(null);
               }}
-              placeholder="ex. Lyon"
+              placeholder={t("city_example")}
               autoComplete="address-level2"
               style={{
                 width: "100%",
@@ -967,7 +964,7 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Rayon de recherche (km)
+              {t("search_radius_km")}
             </label>
             <select
               value={locRadius}
@@ -987,11 +984,11 @@ export default function Profile() {
                 boxSizing: "border-box",
               }}
             >
-              <option value="">Pas de limite de distance</option>
-              <option value="10">10 km</option>
-              <option value="25">25 km</option>
-              <option value="50">50 km</option>
-              <option value="100">100 km</option>
+              <option value="">{t("no_distance_limit")}</option>
+              <option value="10">{t("distance_10_km")}</option>
+              <option value="25">{t("distance_25_km")}</option>
+              <option value="50">{t("distance_50_km")}</option>
+              <option value="100">{t("distance_100_km")}</option>
             </select>
             <button
               type="button"
@@ -1010,7 +1007,7 @@ export default function Profile() {
                 cursor: geoLoading ? "wait" : "pointer",
               }}
             >
-              {geoLoading ? "Localisation…" : "Utiliser ma position actuelle"}
+              {geoLoading ? t("loading") : t("use_current_location")}
             </button>
             <button
               type="button"
@@ -1028,7 +1025,7 @@ export default function Profile() {
                 cursor: locSaving ? "wait" : "pointer",
               }}
             >
-              {locSaving ? "Enregistrement…" : "Enregistrer la localisation"}
+              {locSaving ? t("loading") : t("save_location")}
             </button>
             {locMessage ? (
               <p
@@ -1062,7 +1059,7 @@ export default function Profile() {
                 color: APP_TEXT,
               }}
             >
-              Sécurité
+              {t("security")}
             </h2>
             <p
               style={{
@@ -1073,7 +1070,7 @@ export default function Profile() {
                 lineHeight: 1.45,
               }}
             >
-              Sur un profil ou dans un chat, le menu ⋯ te permet d’agir.
+              {t("security_intro")}
             </p>
             <ul
               style={{
@@ -1085,8 +1082,8 @@ export default function Profile() {
                 lineHeight: 1.55,
               }}
             >
-              <li style={{ marginBottom: "6px" }}>Signaler un comportement</li>
-              <li>Ne plus voir quelqu’un</li>
+              <li style={{ marginBottom: "6px" }}>{t("report_behavior")}</li>
+              <li>{t("hide_user")}</li>
             </ul>
             <button
               type="button"
@@ -1104,7 +1101,7 @@ export default function Profile() {
                 cursor: "pointer",
               }}
             >
-              Gérer mon compte
+              {t("manage_account")}
             </button>
           </div>
 
@@ -1128,8 +1125,22 @@ export default function Profile() {
             }}
           >
             <IconSignOut size={18} color="currentColor" />
-            Se déconnecter
+            {t("logout")}
           </button>
+          <div
+            style={{
+              marginTop: "12px",
+              background: APP_CARD,
+              borderRadius: "14px",
+              padding: "14px",
+              border: `1px solid ${APP_BORDER}`,
+            }}
+          >
+            <p style={{ margin: "0 0 10px 0", fontSize: "13px", fontWeight: 600, color: APP_TEXT_MUTED }}>
+              {t("language")}
+            </p>
+            <LanguageSwitcher />
+          </div>
           </>
         )}
       </main>
@@ -1183,7 +1194,7 @@ export default function Profile() {
                 lineHeight: 1.5,
               }}
             >
-              Cette partie du profil arrive très bientôt. Merci de votre patience.
+              {t("profile_coming_soon_desc")}
             </p>
             <button
               type="button"
@@ -1200,7 +1211,7 @@ export default function Profile() {
                 cursor: "pointer",
               }}
             >
-              D’accord
+              {t("ok")}
             </button>
           </div>
         </div>

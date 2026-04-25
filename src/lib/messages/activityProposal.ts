@@ -135,15 +135,18 @@ export function proposalPayloadFromRow(row: ActivityProposalRowLike): ActivityPr
   };
 }
 
-export function statusBadgeLabelFr(status: string): { text: string; tone: "success" | "danger" | "warning" | "muted" } | null {
+export function statusBadgeLabel(
+  status: string,
+  tr: (key: string) => string,
+): { text: string; tone: "success" | "danger" | "warning" | "muted" } | null {
   const s = normalizeActivityProposalStatus(status);
-  if (s === "accepted") return { text: "Créneau confirmé", tone: "success" };
-  if (s === "declined") return { text: "Créneau refusé", tone: "danger" };
+  if (s === "accepted") return { text: tr("activity_badge_slot_confirmed"), tone: "success" };
+  if (s === "declined") return { text: tr("activity_badge_slot_refused"), tone: "danger" };
   if (s === "reschedule_requested" || s === "countered" || s === "replaced") {
-    return { text: "Replanification demandée", tone: "warning" };
+    return { text: tr("activity_badge_reschedule"), tone: "warning" };
   }
-  if (s === "cancelled") return { text: "Proposition annulée", tone: "muted" };
-  if (s === "expired") return { text: "Proposition expirée", tone: "muted" };
+  if (s === "cancelled") return { text: tr("activity_badge_cancelled"), tone: "muted" };
+  if (s === "expired") return { text: tr("activity_badge_expired"), tone: "muted" };
   return null;
 }
 

@@ -47,6 +47,7 @@ import {
   createCounterProposal,
   declineActivityProposal,
 } from "../lib/messages/activityProposalMutations";
+import { useTranslation } from "../i18n/useTranslation";
 
 /** Colonnes demandées au select — aucune colonne inventée ; pas de `match_id` sur `activity_proposals`. */
 type ProposalRow = {
@@ -94,12 +95,12 @@ function whenLabel(p: ProposalRow): string {
   }
   const ts = (p.time_slot ?? "").trim();
   if (ts) return ts;
-  return "Date à confirmer";
+  return "date_to_confirm";
 }
 
 function placeLabel(p: ProposalRow): string {
   const raw = ((p.place ?? p.location) ?? "").trim();
-  if (!raw || raw === "À définir") return "Lieu à définir";
+  if (!raw || raw === "À définir") return "place_to_define";
   return raw;
 }
 
@@ -122,12 +123,12 @@ function isExpiredSection(p: ProposalRow, now: number): boolean {
 
 function statusBadgeLabel(status: string | null | undefined): string {
   const s = normalizeActivityProposalStatus(status);
-  if (s === "pending") return "En attente";
-  if (s === "accepted") return "Confirmée";
-  if (s === "declined") return "Refusée";
-  if (s === "countered") return "Contre-proposition";
-  if (s === "cancelled") return "Annulée";
-  return "En attente";
+  if (s === "pending") return "status_pending";
+  if (s === "accepted") return "status_confirmed";
+  if (s === "declined") return "status_declined";
+  if (s === "countered") return "status_counter_proposal";
+  if (s === "cancelled") return "status_cancelled";
+  return "status_pending";
 }
 
 function statusBadgeTone(
@@ -160,6 +161,7 @@ function parseCreatedMs(iso: string | null | undefined): number {
 }
 
 export default function MesRencontres() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { user } = useAuth();
   const uid = user?.id ?? "";
@@ -233,7 +235,7 @@ export default function MesRencontres() {
 
     if (error) {
       console.error("[MesRencontres] load proposals", error);
-      setLoadError(error.message?.trim() || "Impossible de charger la liste.");
+      setLoadError(error.message?.trim() || t("loading_list_failed"));
       setRows([]);
       setProfilesById({});
       setOtherByConv({});
@@ -465,7 +467,7 @@ export default function MesRencontres() {
     if (!uid || !counterProposal) return;
     const d = new Date(`${counterDate}T${counterTime}:00`);
     if (Number.isNaN(d.getTime())) {
-      setPageError("Date ou heure invalide.");
+      setPageError(t("invalid_date_or_time"));
       return;
     }
     const timeLabel = formatMeetingAgendaLabel(d);
@@ -477,9 +479,9 @@ export default function MesRencontres() {
       replaceProposalId: counterProposal.id,
       conversationId: counterProposal.conversation_id,
       currentUserId: uid,
-      sport: (counterProposal.sport ?? "").trim() || "Activité",
+      sport: (counterProposal.sport ?? "").trim() || t("activity"),
       timeSlot: timeLabel,
-      location: loc === "Lieu à définir" ? "À définir" : loc,
+      location: loc === "place_to_define" ? "À définir" : loc,
       note: null,
       scheduledAt,
     });
@@ -521,24 +523,24 @@ export default function MesRencontres() {
         <div className="sticky top-0 z-30 border-b border-zinc-200/90 bg-[#F4F6F8]/95 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-sm">
           <header>
             <h1 className="text-[22px] font-semibold leading-tight tracking-tight text-zinc-900">
-              Mes rencontres
+              {t("my_meetups")}
             </h1>
             <p className="mt-1.5 text-[14px] leading-relaxed text-zinc-500">
-              Retrouve ici tes activités proposées, à confirmer ou déjà prévues.
+              {t("meetups_subtitle")}
             </p>
           </header>
 
           <div
             className="mt-4 flex rounded-xl border border-zinc-200 bg-white p-1 shadow-sm"
             role="tablist"
-            aria-label="Filtre des rencontres"
+            aria-label={t("meetups_filter")}
           >
             {(
               [
-                { id: "to_confirm" as const, label: "À confirmer" },
-                { id: "confirmed" as const, label: "Confirmées" },
-                { id: "expired" as const, label: "Expirées" },
-                { id: "cancelled" as const, label: "Annulées" },
+                { id: "to_confirm" as const, label: t("to_confirm") },
+                { id: "confirmed" as const, label: t("confirmed") },
+                { id: "expired" as const, label: t("expired") },
+                { id: "cancelled" as const, label: t("cancelled") },
               ] as const
             ).map((t) => (
               <button
@@ -574,23 +576,23 @@ export default function MesRencontres() {
           ) : null}
 
           {loading ? (
-            <p className="py-12 text-center text-[15px] text-zinc-500">Chargement…</p>
+            <p className="py-12 text-center text-[15px] text-zinc-500">{t("loading")}</p>
           ) : (
             <div className="flex flex-col gap-3">
               {tab === "to_confirm" && toConfirmList.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center shadow-sm">
-                  <p className="text-[15px] font-medium text-zinc-700">Rien en attente pour le moment.</p>
+                  <p className="text-[15px] font-medium text-zinc-700">{t("nothing_pending_now")}</p>
                   <p className="mt-2 text-[14px] leading-relaxed text-zinc-500">
-                    Les propositions à traiter apparaîtront ici.
+                    {t("pending_will_appear_here")}
                   </p>
                 </div>
               ) : null}
 
               {tab === "confirmed" && confirmedList.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center shadow-sm">
-                  <p className="text-[15px] font-medium text-zinc-700">Aucune rencontre à venir.</p>
+                  <p className="text-[15px] font-medium text-zinc-700">{t("no_upcoming_meetups")}</p>
                   <p className="mt-2 text-[14px] leading-relaxed text-zinc-500">
-                    Les créneaux confirmés s’affichent dans cet onglet.
+                    {t("confirmed_slots_here")}
                   </p>
                 </div>
               ) : null}
@@ -598,7 +600,7 @@ export default function MesRencontres() {
               {tab === "expired" && expiredList.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center shadow-sm">
                   <p className="text-[14px] leading-relaxed text-zinc-500">
-                    Aucune rencontre expirée pour l’instant.
+                    {t("no_expired_meetups")}
                   </p>
                 </div>
               ) : null}
@@ -606,7 +608,7 @@ export default function MesRencontres() {
               {tab === "cancelled" && cancelledList.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center shadow-sm">
                   <p className="text-[14px] leading-relaxed text-zinc-500">
-                    Aucune rencontre annulée pour l’instant.
+                    {t("no_cancelled_meetups")}
                   </p>
                 </div>
               ) : null}
@@ -615,12 +617,12 @@ export default function MesRencontres() {
                 <MeetingCard
                   key={p.id}
                   tab={tabToCard[tab]}
-                  sport={(p.sport ?? "").trim() || "Activité"}
-                  placeLabel={placeLabel(p)}
+                  sport={(p.sport ?? "").trim() || t("activity")}
+                  placeLabel={placeLabel(p) === "place_to_define" ? t("place_to_define") : placeLabel(p)}
                   whenLabel={whenLabel(p)}
                   partnerFirstName={partnerName(p)}
                   partnerPhotoUrl={partnerPhoto(p)}
-                  statusLabel={statusBadgeLabel(p.status)}
+                  statusLabel={t(statusBadgeLabel(p.status))}
                   badgeTone={statusBadgeTone(p.status)}
                   busy={actionBusyId === p.id}
                   onConfirm={tab === "to_confirm" && needsMyResponse(uid, p) ? () => void handleConfirm(p) : undefined}
@@ -647,14 +649,14 @@ export default function MesRencontres() {
         >
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl">
             <h2 id="counter-modal-title" className="text-lg font-semibold text-zinc-900">
-              Autre créneau
+              {t("propose_other")}
             </h2>
             <p className="mt-1 text-[13px] text-zinc-500">
-              Indique une date et une heure pour ta contre-proposition.
+              {t("counter_proposal_hint")}
             </p>
             <div className="mt-4 flex flex-col gap-3">
               <label className="text-[13px] font-medium text-zinc-700">
-                Date
+                {t("date")}
                 <input
                   type="date"
                   value={counterDate}
@@ -663,7 +665,7 @@ export default function MesRencontres() {
                 />
               </label>
               <label className="text-[13px] font-medium text-zinc-700">
-                Heure
+                {t("time")}
                 <input
                   type="time"
                   value={counterTime}
@@ -681,7 +683,7 @@ export default function MesRencontres() {
                 }}
                 className="flex-1 rounded-xl border border-zinc-200 bg-white py-2.5 text-[15px] font-semibold text-zinc-700"
               >
-                Annuler
+                {t("cancel")}
               </button>
               <button
                 type="button"
@@ -690,7 +692,7 @@ export default function MesRencontres() {
                 className="flex-1 rounded-xl py-2.5 text-[15px] font-semibold text-white disabled:opacity-50"
                 style={{ backgroundColor: "#18181B" }}
               >
-                Envoyer
+                {t("send")}
               </button>
             </div>
           </div>

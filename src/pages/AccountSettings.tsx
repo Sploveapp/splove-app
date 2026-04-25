@@ -12,10 +12,12 @@ import {
   CTA_DISABLED_BG,
   TEXT_ON_BRAND,
 } from "../constants/theme";
+import { useTranslation } from "../i18n/useTranslation";
 
 const CONFIRM_WORD = "SUPPRIMER";
 
 export default function AccountSettings() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { user, refetchProfile } = useAuth();
   const [pauseLoading, setPauseLoading] = useState(false);
@@ -36,11 +38,11 @@ export default function AccountSettings() {
     try {
       const { error } = await supabase.from("profiles").update({ is_paused: true }).eq("id", user.id);
       if (error) {
-        setActionMessage(error.message || "Action impossible.");
+        setActionMessage(error.message || t("action_impossible"));
         return;
       }
       await refetchProfile();
-      setActionMessage("Compte mis en pause.");
+      setActionMessage(t("account_paused"));
     } finally {
       setPauseLoading(false);
     }
@@ -53,11 +55,11 @@ export default function AccountSettings() {
     try {
       const { error } = await supabase.from("profiles").update({ is_active: false }).eq("id", user.id);
       if (error) {
-        setActionMessage(error.message || "Action impossible.");
+        setActionMessage(error.message || t("action_impossible"));
         return;
       }
       await refetchProfile();
-      setActionMessage("Compte désactivé.");
+      setActionMessage(t("account_deactivated"));
     } finally {
       setDeactivateLoading(false);
     }
@@ -66,7 +68,7 @@ export default function AccountSettings() {
   async function handleConfirmDelete() {
     if (!user?.id || deleteLoading) return;
     if (deleteInput !== CONFIRM_WORD) {
-      setDeleteError("Tape exactement SUPPRIMER pour confirmer.");
+      setDeleteError(t("delete_input_error"));
       return;
     }
     setDeleteError(null);
@@ -76,7 +78,7 @@ export default function AccountSettings() {
         data: { session },
       } = await supabase.auth.getSession();
       if (!session?.access_token) {
-        setDeleteError("Session expirée. Reconnecte-toi.");
+        setDeleteError(t("session_expired_relogin"));
         return;
       }
       const url = `${env.supabaseUrl}/functions/v1/delete-account`;
@@ -90,7 +92,7 @@ export default function AccountSettings() {
         body: JSON.stringify({ confirmPhrase: CONFIRM_WORD }),
       });
       if (!res.ok) {
-        let msg = "Suppression impossible pour le moment.";
+        let msg = t("delete_unavailable");
         try {
           const j = (await res.json()) as { error?: string };
           if (typeof j.error === "string" && j.error) msg = j.error;
@@ -138,7 +140,7 @@ export default function AccountSettings() {
             color: APP_TEXT_MUTED,
           }}
         >
-          ← Profil
+          {`← ${t("profile_title")}`}
         </button>
 
         <h1
@@ -151,7 +153,7 @@ export default function AccountSettings() {
             letterSpacing: "0.06em",
           }}
         >
-          Compte
+          {t("account")}
         </h1>
 
         <section
@@ -171,7 +173,7 @@ export default function AccountSettings() {
               color: APP_TEXT,
             }}
           >
-            Gérer mon compte
+            {t("account_manage_title")}
           </h2>
           <p
             style={{
@@ -182,7 +184,7 @@ export default function AccountSettings() {
               lineHeight: 1.45,
             }}
           >
-            Pause, désactivation ou suppression définitive.
+            {t("account_manage_desc")}
           </p>
 
           <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -202,7 +204,7 @@ export default function AccountSettings() {
                 cursor: pauseLoading ? "wait" : "pointer",
               }}
             >
-              {pauseLoading ? "En cours…" : "Mettre le compte en pause"}
+              {pauseLoading ? t("account_in_progress") : t("account_pause")}
             </button>
 
             <button
@@ -221,7 +223,7 @@ export default function AccountSettings() {
                 cursor: deactivateLoading ? "wait" : "pointer",
               }}
             >
-              {deactivateLoading ? "En cours…" : "Désactiver le compte"}
+              {deactivateLoading ? t("account_in_progress") : t("account_deactivate")}
             </button>
 
             <button
@@ -243,7 +245,7 @@ export default function AccountSettings() {
                 cursor: "pointer",
               }}
             >
-              Supprimer définitivement le compte
+              {t("account_delete_forever")}
             </button>
           </div>
 
@@ -302,7 +304,7 @@ export default function AccountSettings() {
                 lineHeight: 1.3,
               }}
             >
-              Supprimer définitivement ?
+              {t("delete_confirm_title")}
             </h2>
             <p
               style={{
@@ -313,7 +315,7 @@ export default function AccountSettings() {
                 lineHeight: 1.5,
               }}
             >
-              Cette action est irréversible. Pour confirmer, tape{" "}
+              {t("delete_confirm_desc")}{" "}
               <strong style={{ color: APP_TEXT }}>{CONFIRM_WORD}</strong> ci-dessous.
             </p>
             <input
@@ -360,7 +362,7 @@ export default function AccountSettings() {
                   cursor: !canSubmitDelete ? "not-allowed" : deleteLoading ? "wait" : "pointer",
                 }}
               >
-                {deleteLoading ? "Suppression…" : "Confirmer la suppression"}
+                {deleteLoading ? t("delete_now") : t("delete_confirm_button")}
               </button>
               <button
                 type="button"
@@ -378,7 +380,7 @@ export default function AccountSettings() {
                   cursor: deleteLoading ? "wait" : "pointer",
                 }}
               >
-                Annuler
+                {t("cancel")}
               </button>
             </div>
           </div>

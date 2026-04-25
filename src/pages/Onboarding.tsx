@@ -5,11 +5,6 @@ import { env } from "../lib/env";
 import { useAuth } from "../contexts/AuthContext";
 import { GlobalHeader } from "../components/GlobalHeader";
 import { SplashScreen } from "../components/SplashScreen";
-import {
-  ACCESSIBILITY_SECTION_INTRO,
-  ONBOARDING_AVATAR_REQUIRED,
-  ONBOARDING_FULLBODY_REQUIRED,
-} from "../constants/copy";
 import { isAdultFromBirthIso } from "../lib/ageGate";
 import { isOnboardingComplete } from "../lib/profileCompleteness";
 import {
@@ -35,22 +30,23 @@ import { profilePhotoStoragePathFromPublicUrl } from "../lib/profilePhotoStorage
 import { photoModerationHeadline, photoModerationRejectedDetail } from "../lib/photoModerationUi";
 import { invokeModeratePhoto } from "../services/photoModeration.service";
 import type { PhotoModerationStatus } from "../types/photoModeration.types";
+import { useTranslation } from "../i18n/useTranslation";
 
 const genderOptions = [
-  { value: "female", label: "Femme" },
-  { value: "male", label: "Homme" },
-  { value: "trans_female", label: "Femme trans" },
-  { value: "trans_male", label: "Homme trans" },
-  { value: "non_binary", label: "Non-binaire" },
+  { value: "female", label: "gender.female" },
+  { value: "male", label: "gender.male" },
+  { value: "trans_female", label: "gender.trans_female" },
+  { value: "trans_male", label: "gender.trans_male" },
+  { value: "non_binary", label: "gender.non_binary" },
 ];
 
 const INTERESTED_IN_OPTIONS = [
-  { value: "women", label: "Femmes" },
-  { value: "men", label: "Hommes" },
-  { value: "trans_women", label: "Femmes trans" },
-  { value: "trans_men", label: "Hommes trans" },
-  { value: "non_binary", label: "Non-binaires" },
-  { value: "all", label: "Tous" },
+  { value: "women", label: "gender_preference.women" },
+  { value: "men", label: "gender_preference.men" },
+  { value: "trans_women", label: "gender_preference.trans_women" },
+  { value: "trans_men", label: "gender_preference.trans_men" },
+  { value: "non_binary", label: "gender_preference.non_binary" },
+  { value: "all", label: "gender_preference.everyone" },
 ] as const;
 const INTERESTED_IN_ALL_VALUE = "all";
 type InterestedInValue = (typeof INTERESTED_IN_OPTIONS)[number]["value"];
@@ -88,23 +84,21 @@ function serializeInterestedInValues(values: InterestedInValue[]): string | null
 
 /** Préférence horaire onboarding (tap) — stockée dans `sport_time`. */
 const ONBOARDING_TIME_QUICK_OPTIONS = [
-  { value: "Matin", label: "Matin" },
-  { value: "Soir", label: "Soir" },
+  { value: "Matin", label: "style.morning" },
+  { value: "Soir", label: "style.evening" },
 ] as const;
 
 const ONBOARDING_INTENSITY_QUICK_OPTIONS = [
-  { value: "chill", label: "Chill" },
-  { value: "intense", label: "Intense" },
+  { value: "chill", label: "style.chill" },
+  { value: "intense", label: "style.intense" },
 ] as const;
 
 /** Aligné `profileCompleteness` + migration 068 */
 const ORGANIZATION_OPTIONS = [
-  { value: "spontaneous", label: "Spontané" },
-  { value: "planned", label: "Planifié" },
+  { value: "spontaneous", label: "style.spontaneous" },
+  { value: "planned", label: "style.planned" },
 ] as const;
 
-const OPTIONAL_PROFILE_WARNING_MESSAGE =
-  "Certaines données optionnelles n’ont pas pu être enregistrées, mais vous pouvez continuer.";
 const OPTIONAL_PROFILE_COLUMNS = [
   "onboarding_sports_count",
   "onboarding_sports_with_level_count",
@@ -241,13 +235,13 @@ type OnboardingIntentUiValue = "dating_feeling" | "sport_social" | "both";
 
 type OnboardingIntentCard = {
   uiValue: OnboardingIntentUiValue;
-  title: string;
+  translationKey: "intention_meet_new_people" | "intention_something_more" | "intention_lets_see";
 };
 
 const ONBOARDING_INTENT_CARDS: OnboardingIntentCard[] = [
-  { uiValue: "dating_feeling", title: "Rencontre + feeling" },
-  { uiValue: "sport_social", title: "Rencontres sportives" },
-  { uiValue: "both", title: "Les deux" },
+  { uiValue: "sport_social", translationKey: "intention_meet_new_people" },
+  { uiValue: "dating_feeling", translationKey: "intention_something_more" },
+  { uiValue: "both", translationKey: "intention_lets_see" },
 ];
 
 /** Lecture robuste legacy -> carte UI (legacy historique inclus : dating/friendly/both). */
@@ -415,6 +409,7 @@ const inputClassName =
 const labelClassName = "mb-1 block text-sm font-semibold text-app-text";
 
 export default function Onboarding() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const {
     user,
@@ -657,7 +652,7 @@ export default function Onboarding() {
         if (raced.kind === "timeout") {
           console.warn("[Onboarding sports] fetch result: timeout");
           setSportsCatalog([]);
-          setSportsLoadError("Catalogue sport indisponible. Aucun sport sélectionnable pour le moment.");
+          setSportsLoadError(t("onboarding_sports_catalog_unavailable"));
           return;
         }
 
@@ -667,7 +662,7 @@ export default function Onboarding() {
         if (e) {
           console.error("[Onboarding sports]", e);
           setSportsCatalog([]);
-          setSportsLoadError(e.message || "Chargement du catalogue impossible.");
+          setSportsLoadError(e.message || t("onboarding_sports_load_failed"));
           return;
         }
 
@@ -686,12 +681,12 @@ export default function Onboarding() {
         setSportsLoadError(
           list.length > 0
             ? null
-            : "Catalogue sport indisponible. Aucun sport sélectionnable pour le moment.",
+            : t("onboarding_sports_catalog_unavailable"),
         );
       } catch (err) {
         console.error("[Onboarding sports] unexpected", err);
         setSportsCatalog([]);
-        setSportsLoadError("Erreur inattendue lors du chargement des sports.");
+        setSportsLoadError(t("onboarding_sports_unexpected"));
       } finally {
         if (!cancelled) {
           setLoadingSports(false);
@@ -704,7 +699,7 @@ export default function Onboarding() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (step !== 3) return;
@@ -947,27 +942,23 @@ export default function Onboarding() {
         <GlobalHeader variant="compact" />
         <div className="flex flex-1 flex-col items-center justify-center px-6 pb-10 pt-6">
           <div className="w-full max-w-md text-center">
-            <h1 className="text-2xl font-bold leading-snug text-app-text">Ton profil est prêt.</h1>
-            <p className="mt-2 text-sm leading-snug text-app-muted">
-              Fais vérifier ton profil pour inspirer confiance plus vite.
-            </p>
+            <h1 className="text-2xl font-bold leading-snug text-app-text">{t("onboarding_post_title")}</h1>
+            <p className="mt-2 text-sm leading-snug text-app-muted">{t("onboarding_post_subtitle")}</p>
             <div
               className="mt-6 w-full rounded-2xl border border-app-border/90 bg-app-card/60 px-4 py-3 text-left"
               role="region"
-              aria-label="Préférences mobilité, optionnel"
+              aria-label={t("onboarding_post_mobility_region_label")}
             >
               <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">
-                Optionnel — mobilité
+                {t("onboarding_post_mobility_kicker")}
               </p>
-              <p className="mt-1.5 text-sm leading-snug text-app-text">
-                {ACCESSIBILITY_SECTION_INTRO}
-              </p>
+              <p className="mt-1.5 text-sm leading-snug text-app-text">{t("onboarding_post_accessibility_intro")}</p>
               <button
                 type="button"
                 onClick={() => navigate("/profile", { replace: true })}
                 className="mt-3 text-sm font-semibold text-app-accent underline underline-offset-2"
               >
-                Régler dans Mon profil
+                {t("onboarding_post_mobility_cta")}
               </button>
             </div>
             <button
@@ -976,7 +967,7 @@ export default function Onboarding() {
               className="mt-8 w-full rounded-2xl py-4 text-base font-semibold shadow-sm"
               style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              Vérifier mon profil
+              {t("verify_profile")}
             </button>
             <button
               type="button"
@@ -990,14 +981,14 @@ export default function Onboarding() {
               }}
               className="mt-3 w-full rounded-2xl border border-app-border py-3 text-sm font-semibold text-app-text"
             >
-              Plus tard
+              {t("later")}
             </button>
             <button
               type="button"
               onClick={() => navigate("/discover", { replace: true })}
               className="mt-4 w-full text-center text-sm font-medium text-app-muted underline underline-offset-2"
             >
-              Découvrir des profils
+              {t("onboarding_find_session")}
             </button>
           </div>
         </div>
@@ -1031,36 +1022,34 @@ export default function Onboarding() {
 
   /** Message si le bouton final ne peut pas valider — évite un blocage silencieux (bouton désactivé sans explication). */
   function getCanSubmitBlockReason(): string | null {
-    if (firstName.trim() === "") return "Indiquez votre prénom.";
-    if (birthDate === "") return "Indiquez une date de naissance complète (JJ/MM/AAAA).";
-    if (!isAdultFromBirthIso(birthDate)) return "Vous devez avoir au moins 18 ans.";
-    if (gender === "") return "Choisissez votre genre.";
-    if (interestedIn.length === 0) return "Indiquez qui vous intéresse.";
-    if (intent === "") return "Choisissez un type de rencontre.";
+    if (firstName.trim() === "") return t("onboarding_err_first_name");
+    if (birthDate === "") return t("onboarding_err_birth_incomplete");
+    if (!isAdultFromBirthIso(birthDate)) return t("onboarding_err_age");
+    if (gender === "") return t("onboarding_err_gender");
+    if (interestedIn.length === 0) return t("onboarding_err_interested");
+    if (intent === "") return t("onboarding_err_intent");
     if (!locationReady) {
-      if (![10, 25, 50, 100].includes(obLocRadiusKm)) return "Choisis un rayon de recherche.";
-      return "Indique ta ville ou utilise ta position.";
+      if (![10, 25, 50, 100].includes(obLocRadiusKm)) return t("onboarding_err_radius");
+      return t("onboarding_err_city");
     }
-    if (selectedSportIds.length < 1) return "Sélectionnez au moins 1 sport (étape sports).";
-    if (selectedSportIds.length > 3) return "Maximum 3 sports.";
+    if (selectedSportIds.length < 1) return t("onboarding_err_sport_min");
+    if (selectedSportIds.length > 3) return t("onboarding_err_sport_max");
     if (!selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)]))) {
-      return "Chaque sport doit avoir un niveau (réessaie ou repasse l’étape sports).";
+      return t("onboarding_err_sport_level");
     }
     if (sportTime !== "Matin" && sportTime !== "Soir") {
-      return "Choisis un moment (matin ou soir) à l’étape « Ton style ».";
+      return t("onboarding_err_style_time");
     }
     if (sportIntensity !== "chill" && sportIntensity !== "intense") {
-      return "Choisis une intensité (chill ou intense).";
+      return t("onboarding_err_style_intensity");
     }
     if (planningStyle !== "spontaneous" && planningStyle !== "planned") {
-      return "Choisis plutôt spontané ou planifié.";
+      return t("onboarding_err_style_org");
     }
-    if (portraitSavedUrl.trim() === "" && portraitFile == null)
-      return "Ajoute tes deux photos (étape Montre qui tu es).";
-    if (bodySavedUrl.trim() === "" && bodyFile == null)
-      return "Ajoute tes deux photos (étape Montre qui tu es).";
-    if (!confirm18) return "Coche la confirmation « 18 ans ou plus ».";
-    if (!acceptTerms) return "Accepte les conditions d’utilisation et la politique de confidentialité.";
+    if (portraitSavedUrl.trim() === "" && portraitFile == null) return t("onboarding_err_photos_both");
+    if (bodySavedUrl.trim() === "" && bodyFile == null) return t("onboarding_err_photos_both");
+    if (!confirm18) return t("onboarding_err_confirm_18");
+    if (!acceptTerms) return t("onboarding_err_terms");
     return null;
   }
 
@@ -1126,15 +1115,15 @@ export default function Onboarding() {
     setPhotoStepError(null);
     setError(null);
     if (!PHOTO_ACCEPT_MIMES.has(file.type)) {
-      setPhotoStepError("Formats acceptés : JPG, PNG ou WebP.");
+      setPhotoStepError(t("onboarding_err_photo_format"));
       return;
     }
     if (file.size > PHOTO_MAX_BYTES) {
-      setPhotoStepError("Chaque photo doit faire 5 Mo maximum.");
+      setPhotoStepError(t("onboarding_err_photo_size"));
       return;
     }
     if (!user?.id) {
-      setPhotoStepError("Photo non enregistrée. Réessaie.");
+      setPhotoStepError(t("photo_error"));
       return;
     }
 
@@ -1149,7 +1138,7 @@ export default function Onboarding() {
         kind === "portrait" ? "portrait" : "activity"
       );
       if (!uploadedUrl) {
-        setPhotoStepError("Photo non enregistrée. Réessaie.");
+        setPhotoStepError(t("photo_error"));
         return;
       }
       await persistOnboardingPhotoInProfile(user.id, kind, uploadedUrl);
@@ -1163,7 +1152,7 @@ export default function Onboarding() {
       await saveOnboardingDraft(step);
     } catch (uploadErr) {
       logDetailedError("onboarding immediate photo upload", uploadErr, { kind });
-      setPhotoStepError("Photo non enregistrée. Réessaie.");
+      setPhotoStepError(t("photo_error"));
     } finally {
       setPhotoUploadingKind(null);
     }
@@ -1190,34 +1179,34 @@ export default function Onboarding() {
     setStepHint(null);
     if (current === 1) {
       if (!firstName.trim()) {
-        setStepHint("Indiquez votre prénom.");
+        setStepHint(t("onboarding_err_first_name"));
         return false;
       }
       if (!birthDate) {
         const d = birthDigitsFromRaw(birthInput);
         setStepHint(
           d.length === 8
-            ? "La date de naissance n’est pas valide."
-            : "Indiquez votre date de naissance (JJ/MM/AAAA)."
+            ? t("onboarding_err_birth_invalid")
+            : t("onboarding_err_birth_incomplete")
         );
         return false;
       }
       if (!isAdultFromBirthIso(birthDate)) {
-        setStepHint("Vous devez avoir au moins 18 ans.");
+        setStepHint(t("onboarding_err_age"));
         return false;
       }
       return true;
     }
     if (current === 2) {
       if (!gender) {
-        setStepHint("Choisissez votre genre.");
+        setStepHint(t("onboarding_err_gender"));
         return false;
       }
       return true;
     }
     if (current === 3) {
       if (interestedIn.length === 0) {
-        setStepHint("Indiquez qui vous intéresse.");
+        setStepHint(t("onboarding_err_interested"));
         return false;
       }
       return true;
@@ -1226,33 +1215,33 @@ export default function Onboarding() {
       const cityOk = obLocCity.trim().length >= 2;
       const coordsOk = obLocLat != null && obLocLng != null;
       if (!cityOk && !coordsOk) {
-        setStepHint("Indique ta ville ou utilise ta position actuelle.");
+        setStepHint(t("onboarding_err_city"));
         return false;
       }
       if (![10, 25, 50, 100].includes(obLocRadiusKm)) {
-        setStepHint("Choisis un rayon de recherche.");
+        setStepHint(t("onboarding_err_radius"));
         return false;
       }
       return true;
     }
     if (current === 5) {
       if (selectedSportIds.length < 1) {
-        setStepHint("Sélectionnez au moins 1 sport.");
+        setStepHint(t("onboarding_err_sport_min_short"));
         return false;
       }
       if (selectedSportIds.length > 3) {
-        setStepHint("Maximum 3 sports.");
+        setStepHint(t("onboarding_err_sport_max"));
         return false;
       }
       if (!selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)]))) {
-        setStepHint("Sélectionne à nouveau tes sports.");
+        setStepHint(t("onboarding_err_sport_reselect"));
         return false;
       }
       return true;
     }
     if (current === 6) {
       if (!intent) {
-        setStepHint("Choisis une intention.");
+        setStepHint(t("onboarding_err_intent"));
         return false;
       }
       return true;
@@ -1262,15 +1251,15 @@ export default function Onboarding() {
     }
     if (current === 8) {
       if (photoUploadingKind !== null) {
-        setPhotoStepError("Enregistrement photo en cours…");
+        setPhotoStepError(t("onboarding_photo_uploading"));
         return false;
       }
       if (!portraitFile && portraitSavedUrl.trim() === "") {
-        setPhotoStepError(ONBOARDING_AVATAR_REQUIRED);
+        setPhotoStepError(t("onboarding_avatar_required"));
         return false;
       }
       if (!bodyFile && bodySavedUrl.trim() === "") {
-        setPhotoStepError(ONBOARDING_FULLBODY_REQUIRED);
+        setPhotoStepError(t("onboarding_fullbody_required"));
         return false;
       }
       setPhotoStepError(null);
@@ -1278,15 +1267,15 @@ export default function Onboarding() {
     }
     if (current === 9) {
       if (sportTime !== "Matin" && sportTime !== "Soir") {
-        setStepHint("Choisis un moment : matin ou soir.");
+        setStepHint(t("onboarding_err_style_time"));
         return false;
       }
       if (sportIntensity !== "chill" && sportIntensity !== "intense") {
-        setStepHint("Choisis une intensité : chill ou intense.");
+        setStepHint(t("onboarding_err_style_intensity"));
         return false;
       }
       if (planningStyle !== "spontaneous" && planningStyle !== "planned") {
-        setStepHint("Choisis spontané ou planifié.");
+        setStepHint(t("onboarding_err_style_org"));
         return false;
       }
       return true;
@@ -1296,11 +1285,11 @@ export default function Onboarding() {
     }
     if (current === 11) {
       if (!confirm18) {
-        setStepHint("Coche « J’ai 18 ans ou plus ».");
+        setStepHint(t("onboarding_err_confirm_18"));
         return false;
       }
       if (!acceptTerms) {
-        setStepHint("Accepte les conditions et la politique de confidentialité.");
+        setStepHint(t("onboarding_err_terms"));
         return false;
       }
       return true;
@@ -1317,7 +1306,7 @@ export default function Onboarding() {
     }
     if (!validateStep(step)) return;
     if (step === 8 && photoUploadingKind !== null) {
-      setPhotoStepError("Enregistrement photo en cours…");
+      setPhotoStepError(t("onboarding_photo_uploading"));
       return;
     }
     if (step === 4 && obLocSource === null && obLocCity.trim().length >= 2) {
@@ -1337,7 +1326,7 @@ export default function Onboarding() {
     try {
       const c = await getCurrentPositionCoords();
       if (!c) {
-        setStepHint("Position indisponible. Tu peux saisir ta ville manuellement.");
+        setStepHint(t("onboarding_err_geo_unavailable"));
         return;
       }
       const city = await reverseGeocodeCity(c.lat, c.lng);
@@ -1347,7 +1336,7 @@ export default function Onboarding() {
       if (city) {
         setObLocCity(city);
       } else if (!obLocCity.trim()) {
-        setObLocCity("Ta zone");
+        setObLocCity(t("onboarding_zone_fallback"));
       }
     } finally {
       setObLocGeoLoading(false);
@@ -1382,13 +1371,13 @@ export default function Onboarding() {
     
     if (getUserError || !authUser?.id) {
       console.warn("[Onboarding] final submit: no authenticated user after refresh", getUserError);
-      alert("Session expirée ou introuvable. Reconnecte-toi.");
+      alert(t("onboarding_err_session"));
       navigate("/auth", { replace: true });
       return;
     }
     console.log("[Onboarding] final submit start");
     if (!canSubmit) {
-      const hint = getCanSubmitBlockReason() ?? "Complétez les champs obligatoires pour continuer.";
+      const hint = getCanSubmitBlockReason() ?? t("onboarding_err_submit_incomplete");
       setStepHint(hint);
       console.error("[Onboarding submit] blocked: canSubmit false", { reason: hint });
       return;
@@ -1401,7 +1390,7 @@ export default function Onboarding() {
     }
     if ((portraitSavedUrl.trim() === "" && !portraitFile) || (bodySavedUrl.trim() === "" && !bodyFile)) {
       setPhotoStepError(
-        portraitSavedUrl.trim() === "" && !portraitFile ? ONBOARDING_AVATAR_REQUIRED : ONBOARDING_FULLBODY_REQUIRED
+        portraitSavedUrl.trim() === "" && !portraitFile ? t("onboarding_avatar_required") : t("onboarding_fullbody_required")
       );
       setStep(8);
       return;
@@ -1414,7 +1403,7 @@ export default function Onboarding() {
 
     if (!isAdultFromBirthIso(birthDate)) {
       setLoading(false);
-      setError("SPLove est réservé aux personnes de 18 ans ou plus.");
+      setError(t("onboarding_error_age_gate"));
       console.error("[Onboarding submit] blocked: under minimum age");
       return;
     }
@@ -1447,7 +1436,7 @@ export default function Onboarding() {
         }
       } catch (uploadErr) {
         logDetailedError("upload photos", uploadErr);
-        setError("Photo non enregistrée. Réessaie.");
+        setError(t("photo_error"));
         return;
       }
 
@@ -1461,7 +1450,7 @@ export default function Onboarding() {
         const path2 = profilePhotoStoragePathFromPublicUrl(fullbodyUrl);
         if (!path1 || !path2) {
           setLoading(false);
-          setError("Impossible de préparer la vérification des photos. Réessaie.");
+          setError(t("onboarding_error_photo_moderation_prep"));
           return;
         }
         const m1 = await invokeModeratePhoto({
@@ -1474,7 +1463,7 @@ export default function Onboarding() {
           logDetailedError("photo moderation slot 1", m1.error ?? new Error("status missing"), {
             response: m1,
           });
-          setError("Vérification photo indisponible.");
+          setError(t("onboarding_error_photo_moderation_unavailable"));
           return;
         }
         slot1Status = m1.data.status;
@@ -1488,7 +1477,7 @@ export default function Onboarding() {
           logDetailedError("photo moderation slot 2", m2.error ?? new Error("status missing"), {
             response: m2,
           });
-          setError("Vérification photo indisponible.");
+          setError(t("onboarding_error_photo_moderation_unavailable"));
           return;
         }
         slot2Status = m2.data.status;
@@ -1509,8 +1498,8 @@ export default function Onboarding() {
       if (!PHOTO_VERIFICATION_PLACEHOLDER && moderationAllowsComplete) {
         moderationBanner =
           slot1Status === "pending_review" || slot2Status === "pending_review"
-            ? "Ta photo est en cours de vérification. Tu peux continuer ; ta fiche Discover s’affichera une fois les photos validées par l’équipe."
-            : "Photo validée.";
+            ? t("onboarding_moderation_pending_banner")
+            : t("onboarding_moderation_approved_banner");
       }
       setModerationSuccessNote(moderationBanner);
 
@@ -1609,7 +1598,7 @@ export default function Onboarding() {
           logDetailedError("profiles upsert after photo rejection", bailErr, {
             payload: failPayload,
           });
-          setError("Erreur lors de l’enregistrement du profil.");
+          setError(t("onboarding_error_profile_save"));
         }
         setLoading(false);
         return;
@@ -1713,7 +1702,7 @@ export default function Onboarding() {
           const prevSerialized = JSON.stringify(payloadForUpsert);
           payloadForUpsert = payloadStripped;
           if (JSON.stringify(payloadForUpsert) !== prevSerialized) {
-            setOptionalProfileWarning(OPTIONAL_PROFILE_WARNING_MESSAGE);
+            setOptionalProfileWarning(t("onboarding_optional_fields_warning"));
           }
           continue;
         }
@@ -1766,19 +1755,19 @@ export default function Onboarding() {
             faultyColumn: extractFaultyColumnNameFromPostgrestMessage(profileError.message),
           });
           setError(
-            /18 ans|réservé aux personnes/i.test(profileError.message || "")
-              ? "SPLove est réservé aux personnes de 18 ans ou plus."
-              : "Erreur lors de l’enregistrement du profil."
+            /18 ans|réservé aux personnes|18 years|age/i.test(profileError.message || "")
+              ? t("onboarding_error_age_gate")
+              : t("onboarding_error_profile_save")
           );
         } else {
-          setError("Réponse serveur incomplète après enregistrement du profil. Réessayez.");
+          setError(t("onboarding_error_profile_incomplete"));
         }
         return;
       }
 
       if (!isProfileRecord(upsertRow)) {
         console.error("[Onboarding submit] upsert: réponse inattendue (pas un objet profil)", upsertRow);
-        setError("Réponse serveur incomplète après enregistrement du profil. Réessayez.");
+        setError(t("onboarding_error_profile_incomplete"));
         return;
       }
 
@@ -1801,7 +1790,7 @@ export default function Onboarding() {
           .eq("profile_id", authUserId);
         if (deleteSportsErr) {
           logDetailedError("profile_sports delete", deleteSportsErr, { profile_id: authUserId });
-          setError("Impossible d’enregistrer vos sports pour le moment.");
+          setError(t("onboarding_error_sports_save"));
           return;
         }
         console.log("[Onboarding submit] result:", { step: "delete profile_sports", ok: true });
@@ -1829,7 +1818,7 @@ export default function Onboarding() {
         if (sportsError) {
           logDetailedError("profile_sports insert", sportsError, { rows });
           console.error("ONBOARDING_SAVE_ERROR", sportsError);
-          setError("Impossible d’enregistrer vos sports pour le moment.");
+          setError(t("onboarding_error_sports_save"));
           return;
         }
         console.log("SPORTS_PERSIST_RESULT", {
@@ -1872,9 +1861,7 @@ export default function Onboarding() {
           profile_completed: upsertRow.profile_completed,
           birth_date: upsertRow.birth_date,
         });
-        setError(
-          "Le profil n’a pas pu être validé côté application. Réessayez ou rafraîchissez la page.",
-        );
+        setError(t("onboarding_error_profile_gate"));
         return;
       }
 
@@ -1901,7 +1888,7 @@ export default function Onboarding() {
     } catch (err) {
       logDetailedError("handleSubmit catch", err);
       console.error("ONBOARDING_SAVE_ERROR", err);
-      setError("Une erreur est survenue. Réessayez.");
+      setError(t("onboarding_error_generic"));
     } finally {
       onboardingSubmitInFlightRef.current = false;
       console.log("[Onboarding submit] end");
@@ -1923,7 +1910,7 @@ export default function Onboarding() {
         <div className="flex w-full max-w-md flex-1 flex-col overflow-hidden rounded-2xl bg-app-card shadow-sm ring-1 ring-app-border sm:my-1 sm:max-h-[min(680px,calc(100vh-88px))]">
           <div className="shrink-0 border-b border-app-border px-3 pb-2 pt-2.5 sm:px-4 sm:pt-3">
             <p className="text-center text-[10px] font-semibold uppercase tracking-widest text-app-muted">
-              Étape {step} / {TOTAL_STEPS}
+              {t("onboarding_step_word")} {step} / {TOTAL_STEPS}
             </p>
             <div className="mx-auto mt-1.5 flex max-w-[220px] justify-center gap-1 px-1">
               {Array.from({ length: TOTAL_STEPS }, (_, i) => (
@@ -1940,7 +1927,7 @@ export default function Onboarding() {
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-app-bg ring-1 ring-app-border">
                   <img
                     src="/logo.png"
-                    alt="SPLove"
+                    alt={t("app_name")}
                     className="h-8 w-8 max-h-full max-w-full object-contain opacity-[0.92]"
                   />
                 </div>
@@ -1951,43 +1938,38 @@ export default function Onboarding() {
                   SPLove
                 </p>
               </div>
-              {step <= 3 ? (
-                <p className="mt-1 max-w-[280px] text-center text-xs leading-snug text-app-muted sm:text-sm">
-                  Le sport comme point de départ. Le reste vient en vrai.
-                </p>
-              ) : (
+              {step <= 3 ? null : (
                 <p className="mt-0.5 text-center text-[10px] font-medium uppercase tracking-wide text-app-muted">
-                  Profil
+                  {t("onboarding_header_profile_badge")}
                 </p>
               )}
             </div>
 
             <h1 className="mt-2.5 text-center text-base font-bold leading-snug text-app-text sm:text-lg">
-              {step === 1 && "Parlons de toi"}
-              {step === 2 && "Tu es ?"}
-              {step === 3 && "Qui aimerais-tu rencontrer ?"}
-              {step === 4 && "Où veux-tu rencontrer du monde ?"}
-              {step === 5 && "Quels sports te font vibrer ?"}
-              {step === 6 && "Tu es là pour quoi ?"}
-              {step === 7 && "Sur SPLove, les femmes font le premier pas."}
-              {step === 8 && "Montre qui tu es"}
-              {step === 9 && "Ton style"}
-              {step === 10 && "Ajoute une touche perso"}
-              {step === 11 && "Derniers détails"}
+              {step === 1 && t("onboarding_step1_title")}
+              {step === 2 && t("onboarding_step2_title")}
+              {step === 3 && t("onboarding_step3_title")}
+              {step === 4 && t("onboarding_step4_title")}
+              {step === 5 && t("onboarding_sports_title")}
+              {step === 6 && t("onboarding_intention_title")}
+              {step === 7 && t("onboarding_first_move_title")}
+              {step === 8 && t("onboarding_photos_hero_title")}
+              {step === 9 && t("onboarding_style_hero_title")}
+              {step === 10 && t("onboarding_bio_hero_title")}
+              {step === 11 && t("onboarding_final_hero_title")}
             </h1>
             <p className="mt-0.5 text-center text-xs leading-snug text-app-muted sm:text-sm">
-              {step === 1 && "Ton prénom et ta date de naissance."}
-              {step === 2 && "On utilise cette info pour te proposer des profils cohérents."}
-              {step === 3 && "Tu peux choisir plusieurs options."}
-              {step === 4 && "On te montre des profils autour de ta zone, sans afficher ton adresse exacte."}
-              {step === 5 && "Choisis jusqu’à 3 sports"}
-              {step === 6 && "Un choix, c’est tout."}
-              {step === 7 &&
-                "Dans les matchs amoureux femme-homme, c’est la femme qui envoie le premier message. Pour les autres matchs, la personne qui valide le match peut écrire."}
-              {step === 8 && "2 photos suffisent pour commencer"}
-              {step === 9 && "Trois réglages rapides."}
-              {step === 10 && "Optionnel"}
-              {step === 11 && "Dernière ligne droite."}
+              {step === 1 && t("onboarding_step1_subtitle")}
+              {step === 2 && t("onboarding_step2_subtitle")}
+              {step === 3 && t("onboarding_step3_subtitle")}
+              {step === 4 && t("onboarding_step4_subtitle")}
+              {step === 5 && t("onboarding_sports_subtitle")}
+              {step === 6 && t("onboarding_intention_subtitle")}
+              {step === 7 && t("onboarding_first_move_subtitle")}
+              {step === 8 && t("onboarding_photos_hero_subtitle")}
+              {step === 9 && t("onboarding_style_hero_subtitle")}
+              {step === 10 && t("onboarding_bio_hero_subtitle")}
+              {step === 11 && t("onboarding_final_hero_subtitle")}
             </p>
           </div>
 
@@ -2000,12 +1982,12 @@ export default function Onboarding() {
                 <div className="space-y-2.5 pb-2">
                   <div>
                     <label className={labelClassName} htmlFor="ob-first">
-                      Prénom *
+                      {t("first_name_required")}
                     </label>
                     <input
                       id="ob-first"
                       type="text"
-                      placeholder="Votre prénom"
+                      placeholder={t("first_name_placeholder")}
                       value={firstName}
                       onChange={(e) => setFirstName(e.target.value)}
                       autoComplete="given-name"
@@ -2014,14 +1996,14 @@ export default function Onboarding() {
                   </div>
                   <div>
                     <label className={labelClassName} htmlFor="ob-birth">
-                      Date de naissance *
+                      {t("birth_date_required")}
                     </label>
                     <input
                       id="ob-birth"
                       type="text"
                       inputMode="numeric"
                       autoComplete="bday"
-                      placeholder="JJ/MM/AAAA"
+                      placeholder={t("birth_date_placeholder")}
                       maxLength={10}
                       value={birthInput}
                       onChange={handleBirthInputChange}
@@ -2029,11 +2011,11 @@ export default function Onboarding() {
                     />
                     {birthDigitsFromRaw(birthInput).length === 8 && !birthDate && (
                       <p className="mt-1 text-xs text-red-600">
-                        Date invalide — vérifiez jour, mois et année ({BIRTH_YEAR_MIN}–{new Date().getFullYear()}).
+                        {t("birth_date_invalid")} ({BIRTH_YEAR_MIN}-{new Date().getFullYear()}).
                       </p>
                     )}
                     {birthDate && !isAdultFromBirthIso(birthDate) && (
-                      <p className="mt-1 text-xs text-red-600">Vous devez avoir au moins 18 ans.</p>
+                      <p className="mt-1 text-xs text-red-600">{t("must_be_18")}</p>
                     )}
                   </div>
                 </div>
@@ -2041,7 +2023,7 @@ export default function Onboarding() {
 
               {step === 2 && (
                 <div className="space-y-3 pb-2">
-                  <span className={labelClassName}>Genre *</span>
+                  <span className={labelClassName}>{t("gender_required")}</span>
                   <div className="grid grid-cols-2 gap-2">
                     {genderOptions.map((o) => {
                       const active = gender === o.value;
@@ -2058,7 +2040,7 @@ export default function Onboarding() {
                           }}
                           aria-pressed={active}
                         >
-                          {o.label}
+                          {t(o.label)}
                         </button>
                       );
                     })}
@@ -2068,12 +2050,12 @@ export default function Onboarding() {
 
               {step === 3 && (
                 <div className="space-y-3 pb-2">
-                  <span className={labelClassName}>Intéressé(e) par *</span>
+                  <span className={labelClassName}>{t("interested_in_required")}</span>
                   <div
                     id="ob-look"
                     className="grid max-h-44 grid-cols-2 gap-1.5 overflow-y-auto pr-1"
                     role="group"
-                    aria-label="Intéressé(e) par"
+                    aria-label={t("interested_in_required")}
                   >
                     {INTERESTED_IN_OPTIONS.map((o) => (
                       <button
@@ -2088,7 +2070,7 @@ export default function Onboarding() {
                         }}
                         aria-pressed={interestedIn.includes(o.value)}
                       >
-                        {o.label}
+                        {t(o.label)}
                       </button>
                     ))}
                   </div>
@@ -2099,12 +2081,12 @@ export default function Onboarding() {
                 <div className="space-y-4">
                   <div>
                     <label className={labelClassName} htmlFor="ob-loc-city">
-                      Ville
+                      {t("city")}
                     </label>
                     <input
                       id="ob-loc-city"
                       type="text"
-                      placeholder="Ex. Marseille"
+                      placeholder={t("onboarding_city_example")}
                       value={obLocCity}
                       onChange={(e) => {
                         setObLocCity(e.target.value);
@@ -2116,7 +2098,7 @@ export default function Onboarding() {
                   </div>
                   <div>
                     <label className={labelClassName} htmlFor="ob-loc-radius">
-                      Rayon
+                      {t("radius")}
                     </label>
                     <select
                       id="ob-loc-radius"
@@ -2126,7 +2108,7 @@ export default function Onboarding() {
                     >
                       {ONBOARDING_RADIUS_KM_OPTIONS.map((km) => (
                         <option key={km} value={km}>
-                          {km} km
+                          {`${km} ${t("km")}`}
                         </option>
                       ))}
                     </select>
@@ -2137,14 +2119,14 @@ export default function Onboarding() {
                     onClick={() => void handleObUseDeviceLocation()}
                     className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-sm font-semibold text-app-text transition hover:bg-app-border disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {obLocGeoLoading ? "Localisation…" : "Utiliser ma position actuelle"}
+                    {obLocGeoLoading ? t("loading") : t("use_current_location")}
                   </button>
                 </div>
               )}
 
               {step === 5 && (
                 <div className="space-y-2.5">
-                  <p className="text-xs text-app-muted">Jusqu’à 3 sports · recherche ci-dessous</p>
+                  <p className="text-xs text-app-muted">{t("onboarding_sports_hint")}</p>
 
                   {sportsLoadError ? (
                     <p className="rounded-lg border border-amber-200/90 bg-amber-50/90 px-3 py-2 text-xs leading-snug text-amber-950">
@@ -2173,7 +2155,7 @@ export default function Onboarding() {
                   )}
                   {featuredSports.length > 0 ? (
                     <div>
-                      <span className="mb-1.5 block text-xs font-medium text-app-muted">Les plus pratiqués</span>
+                      <span className="mb-1.5 block text-xs font-medium text-app-muted">{t("most_practiced")}</span>
                       <div className="flex flex-wrap gap-1.5">
                         {featuredSports.map((sport) => {
                           const isSelected = selectedSportIds.some((id) => String(id) === String(sport.id));
@@ -2199,7 +2181,7 @@ export default function Onboarding() {
 
                   {otherSports.length > 0 ? (
                     <div>
-                      <span className="mb-1.5 block text-xs font-medium text-app-muted">Tous les sports</span>
+                      <span className="mb-1.5 block text-xs font-medium text-app-muted">{t("all_sports")}</span>
                       <div className="flex flex-wrap gap-1.5">
                         {otherSports.map((sport) => {
                           const isSelected = selectedSportIds.some((id) => String(id) === String(sport.id));
@@ -2225,13 +2207,13 @@ export default function Onboarding() {
 
                   <div>
                     <label className={labelClassName} htmlFor="ob-sport-search">
-                      Rechercher un sport
+                      {t("search_sport")}
                     </label>
                     <input
                       id="ob-sport-search"
                       type="search"
                       autoComplete="off"
-                      placeholder="Rechercher un sport"
+                      placeholder={t("search_sport")}
                       value={sportSearch}
                       onChange={(e) => setSportSearch(e.target.value)}
                       onKeyDown={(e) => {
@@ -2243,7 +2225,7 @@ export default function Onboarding() {
                       className={inputClassName}
                     />
                     {sportSearch.trim().length > 0 && sportSearch.trim().length < 2 && (
-                      <p className="mt-1 text-xs text-app-muted">Encore {2 - sportSearch.trim().length} lettre(s).</p>
+                      <p className="mt-1 text-xs text-app-muted">{`${t("remaining_letters")} ${2 - sportSearch.trim().length}`}</p>
                     )}
                     {searchMatches.length > 0 && (
                       <ul
@@ -2269,7 +2251,7 @@ export default function Onboarding() {
                   </div>
 
                   {loadingSports ? (
-                    <p className="text-sm text-app-muted">Chargement du catalogue sport…</p>
+                    <p className="text-sm text-app-muted">{t("loading_sports_catalog")}</p>
                   ) : null}
                 </div>
               )}
@@ -2297,7 +2279,7 @@ export default function Onboarding() {
                           }
                         >
                           <span className="flex w-full items-center justify-between gap-2">
-                            <span className="text-base font-semibold">{card.title}</span>
+                            <span className="text-base font-semibold">{t(card.translationKey)}</span>
                             <span className="text-lg">{active ? "✓" : ""}</span>
                           </span>
                         </button>
@@ -2319,8 +2301,8 @@ export default function Onboarding() {
 
                   <div className="space-y-3">
                     <div>
-                      <span className={labelClassName}>Photo visage</span>
-                      <p className="mb-1.5 text-[11px] text-app-muted">Visage clair, seul(e)</p>
+                      <span className={labelClassName}>{t("onboarding_photo_face")}</span>
+                      <p className="mb-1.5 text-[11px] text-app-muted">{t("onboarding_photo_face_hint")}</p>
                       <input
                         ref={portraitInputRef}
                         id="ob-photo-portrait"
@@ -2339,13 +2321,13 @@ export default function Onboarding() {
                         {portraitDisplayUrl ? (
                           <img
                             src={portraitDisplayUrl}
-                            alt="Aperçu photo visage"
+                            alt={t("onboarding_photo_face_preview")}
                             className="aspect-[3/4] w-full max-w-[280px] mx-auto object-cover"
                           />
                         ) : (
                           <span className="flex aspect-[3/4] w-full max-w-[280px] mx-auto flex-col items-center justify-center gap-1 px-2 py-6">
-                            <span className="text-xs font-semibold text-app-text">Ajouter</span>
-                            <span className="text-[10px] text-app-muted">JPG, PNG, WebP · max 5 Mo</span>
+                            <span className="text-xs font-semibold text-app-text">{t("add_photo")}</span>
+                            <span className="text-[10px] text-app-muted">{t("photo_file_formats_hint")}</span>
                           </span>
                         )}
                       </label>
@@ -2355,17 +2337,17 @@ export default function Onboarding() {
                           onClick={() => portraitInputRef.current?.click()}
                           className="mt-2 w-full max-w-[280px] mx-auto rounded-xl border border-app-border bg-app-card py-2.5 text-sm font-semibold text-app-text hover:bg-app-border"
                         >
-                          Remplacer
+                          {t("replace_photo")}
                         </button>
                       ) : null}
                       {photoUploadingKind === "portrait" ? (
-                        <p className="mt-1 text-center text-[11px] text-app-muted">Enregistrement…</p>
+                        <p className="mt-1 text-center text-[11px] text-app-muted">{t("loading")}</p>
                       ) : null}
                     </div>
 
                     <div>
-                      <span className={labelClassName}>Photo activité</span>
-                      <p className="mb-1.5 text-[11px] text-app-muted">En mouvement ou en pied</p>
+                      <span className={labelClassName}>{t("onboarding_photo_activity")}</span>
+                      <p className="mb-1.5 text-[11px] text-app-muted">{t("onboarding_photo_activity_hint")}</p>
                       <input
                         ref={bodyInputRef}
                         id="ob-photo-body"
@@ -2384,13 +2366,13 @@ export default function Onboarding() {
                         {bodyDisplayUrl ? (
                           <img
                             src={bodyDisplayUrl}
-                            alt="Aperçu photo activité"
+                            alt={t("onboarding_photo_activity_preview")}
                             className="aspect-[3/4] w-full max-w-[280px] mx-auto object-cover"
                           />
                         ) : (
                           <span className="flex aspect-[3/4] w-full max-w-[280px] mx-auto flex-col items-center justify-center gap-1 px-2 py-6">
-                            <span className="text-xs font-semibold text-app-text">Ajouter</span>
-                            <span className="text-[10px] text-app-muted">JPG, PNG, WebP · max 5 Mo</span>
+                            <span className="text-xs font-semibold text-app-text">{t("add_photo")}</span>
+                            <span className="text-[10px] text-app-muted">{t("photo_file_formats_hint")}</span>
                           </span>
                         )}
                       </label>
@@ -2400,11 +2382,11 @@ export default function Onboarding() {
                           onClick={() => bodyInputRef.current?.click()}
                           className="mt-2 w-full max-w-[280px] mx-auto rounded-xl border border-app-border bg-app-card py-2.5 text-sm font-semibold text-app-text hover:bg-app-border"
                         >
-                          Remplacer
+                          {t("replace_photo")}
                         </button>
                       ) : null}
                       {photoUploadingKind === "body" ? (
-                        <p className="mt-1 text-center text-[11px] text-app-muted">Enregistrement…</p>
+                        <p className="mt-1 text-center text-[11px] text-app-muted">{t("loading")}</p>
                       ) : null}
                     </div>
                   </div>
@@ -2414,7 +2396,7 @@ export default function Onboarding() {
               {step === 9 && (
                 <div className="space-y-5">
                   <div>
-                    <span className={labelClassName}>Tu préfères</span>
+                    <span className={labelClassName}>{t("style_you_prefer")}</span>
                     <div className="mt-2 flex gap-2">
                       {ONBOARDING_TIME_QUICK_OPTIONS.map((o) => {
                         const active = sportTime === o.value;
@@ -2430,14 +2412,14 @@ export default function Onboarding() {
                               color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
                             }}
                           >
-                            {o.label}
+                            {t(o.label)}
                           </button>
                         );
                       })}
                     </div>
                   </div>
                   <div>
-                    <span className={labelClassName}>Ton rythme</span>
+                    <span className={labelClassName}>{t("style_your_pace")}</span>
                     <div className="mt-2 flex gap-2">
                       {ONBOARDING_INTENSITY_QUICK_OPTIONS.map((o) => {
                         const active = sportIntensity === o.value;
@@ -2453,14 +2435,14 @@ export default function Onboarding() {
                               color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
                             }}
                           >
-                            {o.label}
+                            {t(o.label)}
                           </button>
                         );
                       })}
                     </div>
                   </div>
                   <div>
-                    <span className={labelClassName}>Organisation</span>
+                    <span className={labelClassName}>{t("style_organization")}</span>
                     <div className="mt-2 flex flex-col gap-2">
                       {ORGANIZATION_OPTIONS.map((o) => {
                         const active = planningStyle === o.value;
@@ -2481,7 +2463,7 @@ export default function Onboarding() {
                                 : undefined
                             }
                           >
-                            {o.label}
+                            {t(o.label)}
                           </button>
                         );
                       })}
@@ -2493,14 +2475,14 @@ export default function Onboarding() {
               {step === 10 && (
                 <div className="space-y-3">
                   <label className={labelClassName} htmlFor="ob-sport-phrase">
-                    Ta phrase (optionnel)
+                    {t("onboarding_bio_hero_title")}
                   </label>
                   <textarea
                     id="ob-sport-phrase"
                     rows={4}
                     value={sportPhraseOptional}
                     onChange={(e) => setSportPhraseOptional(e.target.value)}
-                    placeholder="Ex : Toujours partant(e) pour une session skate au coucher du soleil."
+                    placeholder={t("onboarding_sport_phrase_placeholder")}
                     className={`${inputClassName} min-h-[100px] resize-y`}
                     autoComplete="off"
                   />
@@ -2509,7 +2491,7 @@ export default function Onboarding() {
                     onClick={() => void goNext()}
                     className="text-sm font-medium text-app-muted underline underline-offset-2"
                   >
-                    Passer
+                    {t("skip")}
                   </button>
                 </div>
               )}
@@ -2523,7 +2505,7 @@ export default function Onboarding() {
                       onChange={(e) => setConfirm18(e.target.checked)}
                       className="mt-0.5 h-5 w-5 shrink-0 rounded border-app-border"
                     />
-                    <span>J’ai 18 ans ou plus</span>
+                    <span>{t("confirm_18_plus")}</span>
                   </label>
                   <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-app-border bg-app-bg/60 px-3 py-3 text-sm text-app-text">
                     <input
@@ -2532,7 +2514,7 @@ export default function Onboarding() {
                       onChange={(e) => setAcceptTerms(e.target.checked)}
                       className="mt-0.5 h-5 w-5 shrink-0 rounded border-app-border"
                     />
-                    <span>J’accepte les conditions d’utilisation et la politique de confidentialité</span>
+                    <span>{t("accept_terms_privacy")}</span>
                   </label>
                 </div>
               )}
@@ -2560,7 +2542,7 @@ export default function Onboarding() {
                     onClick={goBack}
                     className="flex-1 rounded-xl border border-app-border py-3 text-sm font-semibold text-app-text hover:bg-app-border"
                   >
-                    Retour
+                    {t("back")}
                   </button>
                 ) : (
                   <span className="flex-1" aria-hidden />
@@ -2574,14 +2556,14 @@ export default function Onboarding() {
                     style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
                   >
                     {step === 4
-                      ? "Enregistrer ma localisation"
+                      ? t("onboarding_cta_save_location")
                       : step === 5
-                        ? "Continuer"
+                        ? t("continue")
                         : step === 7
-                          ? "J’ai compris"
+                          ? t("onboarding_cta_understood")
                           : step === 10
-                            ? "Continuer"
-                            : "Suivant"}
+                            ? t("continue")
+                            : t("next")}
                   </button>
                 ) : (
                   <button
@@ -2593,18 +2575,18 @@ export default function Onboarding() {
                       color: TEXT_ON_BRAND,
                     }}
                   >
-                    {loading ? "Chargement…" : "Accéder à SPLove"}
+                    {loading ? t("loading") : t("onboarding_find_session")}
                   </button>
                 )}
               </div>
               {hydratingDraft ? (
                 <p className="mt-2 text-xs text-app-muted" aria-live="polite">
-                  Restauration de votre progression…
+                  {t("onboarding_hydrating")}
                 </p>
               ) : null}
               {env.appEnv !== "production" && env.veriffPublicKey ? (
                 <p className="mt-2 text-xs text-app-muted">
-                  Vérification Veriff prête (non bloquante) : activable après onboarding.
+                  {t("onboarding_dev_veriff_note")}
                 </p>
               ) : null}
             </div>

@@ -12,6 +12,7 @@ import {
   CTA_DISABLED_BG,
   TEXT_ON_BRAND,
 } from "../constants/theme";
+import { useTranslation } from "../i18n/useTranslation";
 
 type SportOption = { id: string | number; name: string; category?: string | null };
 type LookingForValue =
@@ -23,18 +24,18 @@ type LookingForValue =
   | "all";
 
 const LOOKING_FOR_OPTIONS: { value: LookingForValue; label: string }[] = [
-  { value: "women", label: "Femmes" },
-  { value: "men", label: "Hommes" },
-  { value: "trans_women", label: "Femmes trans" },
-  { value: "trans_men", label: "Hommes trans" },
-  { value: "non_binary", label: "Personnes non-binaires" },
-  { value: "all", label: "Tous" },
+  { value: "women", label: "gender_preference.women" },
+  { value: "men", label: "gender_preference.men" },
+  { value: "trans_women", label: "gender_preference.trans_women" },
+  { value: "trans_men", label: "gender_preference.trans_men" },
+  { value: "non_binary", label: "gender_preference.non_binary" },
+  { value: "all", label: "gender_preference.everyone" },
 ];
 
 const INTENT_OPTIONS = [
-  { value: "dating_feeling", label: "Rencontre" },
-  { value: "sport_social", label: "Sport" },
-  { value: "both", label: "Les deux" },
+  { value: "dating_feeling", label: "intentions.dating" },
+  { value: "sport_social", label: "intentions.sport" },
+  { value: "both", label: "intentions.both" },
 ] as const;
 
 const TIME_OPTIONS = ["Matin", "Soir"] as const;
@@ -43,8 +44,8 @@ const INTENSITY_OPTIONS = [
   { value: "intense", label: "Intense" },
 ] as const;
 const PLANNING_OPTIONS = [
-  { value: "spontaneous", label: "Spontané" },
-  { value: "planned", label: "Planifié" },
+  { value: "spontaneous", label: "style.spontaneous" },
+  { value: "planned", label: "style.planned" },
 ] as const;
 
 const PHOTO_BUCKET = "profile-photos";
@@ -93,6 +94,7 @@ function parseLookingFor(raw: unknown): LookingForValue[] {
 }
 
 export default function EditProfile() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { user, profile, refetchProfile } = useAuth();
   const [loading, setLoading] = useState(false);
@@ -334,10 +336,10 @@ export default function EditProfile() {
   return (
     <div style={{ minHeight: "100vh", background: APP_BG, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" }}>
       <main style={{ padding: "24px", maxWidth: "560px", margin: "0 auto" }}>
-        <h1 style={{ margin: "0 0 18px 0", fontSize: "22px", fontWeight: 700, color: APP_TEXT }}>Modifier mon profil</h1>
+        <h1 style={{ margin: "0 0 18px 0", fontSize: "22px", fontWeight: 700, color: APP_TEXT }}>{t("edit_profile")}</h1>
 
         <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 14 }}>
-          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>Sports (max 3)</h2>
+          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>{t("sports_limit")}</h2>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
             {selectedSports.map((s) => (
               <button key={String(s.id)} type="button" onClick={() => toggleSport(s)} style={{ border: `1px solid ${BRAND_BG}`, background: BRAND_BG, color: TEXT_ON_BRAND, borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 600 }}>
@@ -345,7 +347,7 @@ export default function EditProfile() {
               </button>
             ))}
           </div>
-          <input value={sportSearch} onChange={(e) => setSportSearch(e.target.value)} placeholder="Rechercher un sport" style={{ width: "100%", boxSizing: "border-box", marginBottom: 8, padding: "10px 12px", borderRadius: 12, border: `1px solid ${APP_BORDER}`, background: APP_BG, color: APP_TEXT }} />
+          <input value={sportSearch} onChange={(e) => setSportSearch(e.target.value)} placeholder={t("search_sport")} style={{ width: "100%", boxSizing: "border-box", marginBottom: 8, padding: "10px 12px", borderRadius: 12, border: `1px solid ${APP_BORDER}`, background: APP_BG, color: APP_TEXT }} />
           {searchMatches.length > 0 ? (
             <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
               {searchMatches.map((s) => (
@@ -358,13 +360,13 @@ export default function EditProfile() {
         </section>
 
         <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 14 }}>
-          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>Intentions</h2>
+          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>{t("intentions.title")}</h2>
           <div style={{ display: "grid", gap: 8 }}>
             {INTENT_OPTIONS.map((opt) => {
               const active = intent === opt.value;
               return (
                 <button key={opt.value} type="button" onClick={() => setIntent(opt.value)} style={{ border: `1px solid ${active ? BRAND_BG : APP_BORDER}`, background: active ? BRAND_BG : APP_BG, color: active ? TEXT_ON_BRAND : APP_TEXT, borderRadius: 12, padding: "10px 12px", fontSize: 14, fontWeight: 600 }}>
-                  {opt.label}
+                  {t(opt.label)}
                 </button>
               );
             })}
@@ -372,13 +374,13 @@ export default function EditProfile() {
         </section>
 
         <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 14 }}>
-          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>Attirance</h2>
+          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>{t("gender_preference.title")}</h2>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
             {LOOKING_FOR_OPTIONS.map((opt) => {
               const active = lookingFor.includes(opt.value);
               return (
                 <button key={opt.value} type="button" onClick={() => toggleLookingFor(opt.value)} style={{ border: `1px solid ${active ? BRAND_BG : APP_BORDER}`, background: active ? BRAND_BG : APP_BG, color: active ? TEXT_ON_BRAND : APP_TEXT, borderRadius: 12, padding: "10px 8px", fontSize: 13, fontWeight: 600 }}>
-                  {opt.label}
+                  {t(opt.label)}
                 </button>
               );
             })}
@@ -386,12 +388,12 @@ export default function EditProfile() {
         </section>
 
         <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 14 }}>
-          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>Style</h2>
+          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>{t("style.title")}</h2>
           <div style={{ display: "grid", gap: 8, marginBottom: 8 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
               {TIME_OPTIONS.map((v) => (
                 <button key={v} type="button" onClick={() => setSportTime(v)} style={{ border: `1px solid ${sportTime === v ? BRAND_BG : APP_BORDER}`, background: sportTime === v ? BRAND_BG : APP_BG, color: sportTime === v ? TEXT_ON_BRAND : APP_TEXT, borderRadius: 12, padding: "10px 8px", fontSize: 13, fontWeight: 600 }}>
-                  {v}
+                  {v === "Matin" ? t("style.morning") : t("style.evening")}
                 </button>
               ))}
             </div>
@@ -405,7 +407,7 @@ export default function EditProfile() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
               {PLANNING_OPTIONS.map((v) => (
                 <button key={v.value} type="button" onClick={() => setPlanningStyle(v.value)} style={{ border: `1px solid ${planningStyle === v.value ? BRAND_BG : APP_BORDER}`, background: planningStyle === v.value ? BRAND_BG : APP_BG, color: planningStyle === v.value ? TEXT_ON_BRAND : APP_TEXT, borderRadius: 12, padding: "10px 8px", fontSize: 13, fontWeight: 600 }}>
-                  {v.label}
+                  {t(v.label)}
                 </button>
               ))}
             </div>
@@ -413,19 +415,19 @@ export default function EditProfile() {
         </section>
 
         <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 14 }}>
-          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>Bio</h2>
-          <textarea value={bio} onChange={(e) => setBio(e.target.value.slice(0, 500))} rows={4} placeholder="Parle un peu de toi..." style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 12, border: `1px solid ${APP_BORDER}`, background: APP_BG, color: APP_TEXT, resize: "vertical" }} />
+          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>{t("profile.bio_title")}</h2>
+          <textarea value={bio} onChange={(e) => setBio(e.target.value.slice(0, 500))} rows={4} placeholder={t("profile.bio_placeholder")} style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 12, border: `1px solid ${APP_BORDER}`, background: APP_BG, color: APP_TEXT, resize: "vertical" }} />
         </section>
 
         <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 18 }}>
-          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>Photos</h2>
+          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>{t("photos.title")}</h2>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
             <div style={{ border: `1px solid ${APP_BORDER}`, borderRadius: 14, padding: 10, background: APP_BG }}>
-              <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>Photo principale</p>
+              <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.primary")}</p>
               {portraitPreviewUrl || portraitUrl ? (
                 <img
                   src={portraitPreviewUrl || portraitUrl}
-                  alt="Photo principale"
+                  alt={t("photos.primary")}
                   style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, marginBottom: 10 }}
                 />
               ) : (
@@ -443,7 +445,7 @@ export default function EditProfile() {
                     fontSize: 12,
                   }}
                 >
-                  Aucun aperçu
+                  {t("photos.no_preview")}
                 </div>
               )}
               <input
@@ -469,15 +471,15 @@ export default function EditProfile() {
                   cursor: "pointer",
                 }}
               >
-                Remplacer la photo
+                {t("replace_photo")}
               </label>
             </div>
             <div style={{ border: `1px solid ${APP_BORDER}`, borderRadius: 14, padding: 10, background: APP_BG }}>
-              <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>Photo secondaire</p>
+              <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.secondary")}</p>
               {bodyPreviewUrl || bodyUrl ? (
                 <img
                   src={bodyPreviewUrl || bodyUrl}
-                  alt="Photo secondaire"
+                  alt={t("photos.secondary")}
                   style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, marginBottom: 10 }}
                 />
               ) : (
@@ -495,7 +497,7 @@ export default function EditProfile() {
                     fontSize: 12,
                   }}
                 >
-                  Aucun aperçu
+                  {t("photos.no_preview")}
                 </div>
               )}
               <input
@@ -521,7 +523,7 @@ export default function EditProfile() {
                   cursor: "pointer",
                 }}
               >
-                Remplacer la photo
+                {t("replace_photo")}
               </label>
             </div>
           </div>
@@ -529,10 +531,10 @@ export default function EditProfile() {
 
         <div style={{ display: "flex", gap: 10 }}>
           <button type="button" onClick={() => navigate("/profile")} style={{ flex: 1, borderRadius: 12, border: `1px solid ${APP_BORDER}`, background: APP_CARD, color: APP_TEXT, padding: "12px 14px", fontWeight: 600 }}>
-            Retour
+            {t("back")}
           </button>
           <button type="button" onClick={() => void handleSave()} disabled={loading} style={{ flex: 1, borderRadius: 12, border: "none", background: loading ? CTA_DISABLED_BG : BRAND_BG, color: TEXT_ON_BRAND, padding: "12px 14px", fontWeight: 700 }}>
-            {loading ? "Enregistrement…" : "Enregistrer"}
+            {loading ? t("loading") : t("save")}
           </button>
         </div>
         {message ? <p style={{ margin: "10px 2px 0", color: APP_TEXT_MUTED, fontSize: 13 }}>{message}</p> : null}

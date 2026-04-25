@@ -50,8 +50,10 @@ export type ParsedActivityResponseKind =
 
 export type ParsedActivityResponse = {
   kind: ParsedActivityResponseKind;
-  /** Texte affiché (compact, une ligne). */
-  displayLabel: string;
+  /** Clé i18n lorsque l’affichage est standard ; sinon `null` et utiliser `fallbackLabel`. */
+  i18nKey: string | null;
+  /** Texte brut (ex. heuristique) si `i18nKey` est null. */
+  fallbackLabel: string;
 };
 
 /** Union descriptive pour documentation / futurs refactors du renderer. */
@@ -194,37 +196,37 @@ export function parseActivityResponse(msg: ChatMessageInput): ParsedActivityResp
   const response = normalizeResponseToken(layer?.response ?? meta.response ?? meta.kind);
 
   if (response === "accepted" || response === "accept") {
-    return { kind: "accepted", displayLabel: "✅ Créneau accepté" };
+    return { kind: "accepted", i18nKey: "activity_response_line_accepted", fallbackLabel: "" };
   }
   if (response === "declined" || response === "decline" || response === "refused") {
-    return { kind: "declined", displayLabel: "❌ Créneau refusé" };
+    return { kind: "declined", i18nKey: "activity_response_line_declined", fallbackLabel: "" };
   }
   if (response === "countered" || response === "counter") {
-    return { kind: "countered", displayLabel: "🔁 Contre-proposition envoyée" };
+    return { kind: "countered", i18nKey: "activity_response_line_countered", fallbackLabel: "" };
   }
   if (response === "cancelled" || response === "canceled") {
-    return { kind: "cancelled", displayLabel: "🚫 Proposition annulée" };
+    return { kind: "cancelled", i18nKey: "activity_response_line_cancelled", fallbackLabel: "" };
   }
   if (response === "expired") {
-    return { kind: "expired", displayLabel: "⌛ Proposition expirée" };
+    return { kind: "expired", i18nKey: "activity_response_line_expired", fallbackLabel: "" };
   }
 
   // Heuristiques sur le texte si metadata absente ou inconnue
-  if (/✅|accepté|acceptée|ok pour moi/i.test(body)) {
-    return { kind: "accepted", displayLabel: "✅ Créneau accepté" };
+  if (/✅|accepté|acceptée|ok pour moi|accepted/i.test(body)) {
+    return { kind: "accepted", i18nKey: "activity_response_line_accepted", fallbackLabel: "" };
   }
-  if (/❌|refusé|refusée|pas dispo|créneau refusé/i.test(body)) {
-    return { kind: "declined", displayLabel: "❌ Créneau refusé" };
+  if (/❌|refusé|refusée|pas dispo|créneau refusé|declined|refused/i.test(body)) {
+    return { kind: "declined", i18nKey: "activity_response_line_declined", fallbackLabel: "" };
   }
-  if (/🔁|contre-proposition|autre créneau/i.test(body)) {
-    return { kind: "countered", displayLabel: "🔁 Contre-proposition envoyée" };
+  if (/🔁|contre-proposition|autre créneau|counter/i.test(body)) {
+    return { kind: "countered", i18nKey: "activity_response_line_countered", fallbackLabel: "" };
   }
   if (/annul|cancel/i.test(body)) {
-    return { kind: "cancelled", displayLabel: "🚫 Proposition annulée" };
+    return { kind: "cancelled", i18nKey: "activity_response_line_cancelled", fallbackLabel: "" };
   }
 
   if (body.length > 0) {
-    return { kind: "unknown", displayLabel: body };
+    return { kind: "unknown", i18nKey: null, fallbackLabel: body };
   }
-  return { kind: "unknown", displayLabel: "Mise à jour" };
+  return { kind: "unknown", i18nKey: "activity_response_update", fallbackLabel: "" };
 }

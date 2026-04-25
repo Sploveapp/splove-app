@@ -1,11 +1,8 @@
 import type { ActivityPayload } from "../lib/chatActivity";
-import {
-  GUIDED_REPLY_NOT_AVAILABLE,
-  GUIDED_REPLY_OTHER_TIME,
-  GUIDED_REPLY_YES,
-  whenLabelFr,
-} from "../lib/chatActivity";
+import { formatActivityReply } from "../lib/chatActivity";
+import type { ActivityReplyChoice } from "../lib/chatActivity";
 import { APP_BORDER, APP_CARD, APP_TEXT, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
+import { useTranslation } from "../i18n/useTranslation";
 
 type Props = {
   payload: ActivityPayload;
@@ -15,6 +12,22 @@ type Props = {
   sending?: boolean;
 };
 
+function whenLabelI18n(w: ActivityPayload["when"], t: (k: string) => string): string {
+  switch (w) {
+    case "tonight":
+      return t("activity_when_tonight");
+    case "tomorrow":
+      return t("activity_when_tomorrow");
+    case "week":
+      return t("activity_when_week");
+    case "weekend":
+      return t("activity_when_weekend");
+    case "other":
+    default:
+      return t("activity_when_other");
+  }
+}
+
 export function ActivityMessageBubble({
   payload,
   mine,
@@ -22,7 +35,9 @@ export function ActivityMessageBubble({
   onGuidedReply,
   sending,
 }: Props) {
+  const { t } = useTranslation();
   const placeLine = payload.place?.trim();
+  const sendGuided = (choice: ActivityReplyChoice) => onGuidedReply(formatActivityReply(choice));
 
   return (
     <div className="space-y-2">
@@ -38,12 +53,12 @@ export function ActivityMessageBubble({
         }}
       >
         <p className="text-[11px] font-semibold uppercase tracking-wide opacity-90">
-          Proposition d’activité
+          {t("activity_title")}
         </p>
         <p className="mt-1 text-[13px] opacity-90">
           {payload.sport}
           <span className="mx-1 opacity-60">·</span>
-          {whenLabelFr(payload.when)}
+          {whenLabelI18n(payload.when, t)}
           {placeLine ? (
             <>
               <span className="mx-1 opacity-60">·</span>
@@ -56,31 +71,33 @@ export function ActivityMessageBubble({
 
       {showGuidedReplies && !mine && (
         <div className="flex max-w-[95%] flex-col gap-2">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-app-muted">Réponses rapides</p>
+          <p className="text-[11px] font-medium uppercase tracking-wide text-app-muted">
+            {t("activity_quick_replies_title")}
+          </p>
           <div className="flex flex-col gap-2">
             <button
               type="button"
               disabled={sending}
-              onClick={() => onGuidedReply(GUIDED_REPLY_YES)}
+              onClick={() => sendGuided("go")}
               className="rounded-xl border border-app-border bg-app-card px-3 py-2.5 text-left text-[14px] font-medium text-app-text shadow-sm hover:bg-app-border disabled:opacity-50"
             >
-              J’y vais
+              {t("guided_reply_yes_label")}
             </button>
             <button
               type="button"
               disabled={sending}
-              onClick={() => onGuidedReply(GUIDED_REPLY_OTHER_TIME)}
+              onClick={() => sendGuided("other_slot")}
               className="rounded-xl border border-app-border bg-app-card px-3 py-2.5 text-left text-[14px] font-medium text-app-text shadow-sm hover:bg-app-border disabled:opacity-50"
             >
-              Proposer un autre moment
+              {t("guided_reply_other_time_label")}
             </button>
             <button
               type="button"
               disabled={sending}
-              onClick={() => onGuidedReply(GUIDED_REPLY_NOT_AVAILABLE)}
+              onClick={() => sendGuided("not_available")}
               className="rounded-xl border border-app-border bg-app-card px-3 py-2.5 text-left text-[14px] font-medium text-app-text shadow-sm hover:bg-app-border disabled:opacity-50"
             >
-              Pas dispo
+              {t("guided_reply_not_available_label")}
             </button>
           </div>
         </div>

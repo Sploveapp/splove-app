@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { CHAT_MESSAGES_TABLE, logSupabaseTableError, supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
+import { useTranslation } from "../i18n/useTranslation";
 
 type InboxRow = {
   conversationId: string;
@@ -15,6 +16,7 @@ type InboxRow = {
 };
 
 export default function Messages() {
+  const { t } = useTranslation();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [rows, setRows] = useState<InboxRow[]>([]);
@@ -135,7 +137,7 @@ export default function Messages() {
 
       setRows(out);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Erreur de chargement");
+      setError(e instanceof Error ? e.message : t("loading_error"));
     } finally {
       setLoading(false);
     }
@@ -148,9 +150,9 @@ export default function Messages() {
   if (!user?.id) {
     return (
       <div className="p-6 text-center text-sm text-app-muted">
-        <p>Connectez-vous pour voir vos messages.</p>
+        <p>{t("messages_login_required")}</p>
         <Link className="mt-4 inline-block font-semibold text-[#FF1E2D] underline" to="/auth">
-          Connexion
+          {t("login")}
         </Link>
       </div>
     );
@@ -159,11 +161,11 @@ export default function Messages() {
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-app-bg font-sans">
       <main className="mx-auto w-full max-w-md flex-1 px-4 pb-6 pt-2">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-app-muted">Messages</p>
-        <h1 className="mt-1 text-xl font-bold text-app-text">Conversations</h1>
-        <p className="mt-1 text-sm text-app-muted">Tous vos matchs et fils de discussion.</p>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-app-muted">{t("messages_title")}</p>
+        <h1 className="mt-1 text-xl font-bold text-app-text">{t("messages_conversations")}</h1>
+        <p className="mt-1 text-sm text-app-muted">{t("messages_subtitle")}</p>
 
-        {loading && <p className="mt-6 text-sm text-app-muted">Chargement…</p>}
+        {loading && <p className="mt-6 text-sm text-app-muted">{t("loading")}</p>}
         {error && (
           <p className="mt-4 rounded-xl border border-red-100 bg-red-50/90 px-3 py-2 text-sm text-red-700">{error}</p>
         )}
@@ -171,15 +173,14 @@ export default function Messages() {
         {!loading && !error && rows.length === 0 && (
           <div className="mt-8 rounded-2xl border border-dashed border-app-border bg-app-card px-5 py-10 text-center shadow-sm">
             <p className="text-sm leading-relaxed text-app-muted">
-              Aucune conversation pour l’instant. Quand vous avez un match, la discussion apparaît ici — vous pouvez aussi
-              ouvrir le chat depuis l’écran de match.
+              {t("messages_empty_state")}
             </p>
             <button
               type="button"
               onClick={() => navigate("/discover")}
               className="mt-4 rounded-full bg-[#FF1E2D] px-4 py-2 text-sm font-semibold text-white"
             >
-              Découvrir des profils
+              {t("discover_profiles")}
             </button>
           </div>
         )}
@@ -203,12 +204,12 @@ export default function Messages() {
                     <div className="h-12 w-12 shrink-0 rounded-full bg-app-border ring-2 ring-app-border" />
                   )}
                   <div className="min-w-0 flex-1">
-                    <p className="truncate font-semibold text-app-text">{r.otherName || "Profil"}</p>
+                    <p className="truncate font-semibold text-app-text">{r.otherName || t("unnamed_profile")}</p>
                     <p className="truncate text-sm text-app-muted">
-                      {r.lastMessage ?? "Pas encore de message — dites bonjour !"}
+                      {r.lastMessage ?? t("messages_no_message_yet")}
                     </p>
                   </div>
-                  <span className="shrink-0 text-[12px] font-medium text-[#FF1E2D]">Ouvrir</span>
+                  <span className="shrink-0 text-[12px] font-medium text-[#FF1E2D]">{t("open")}</span>
                 </button>
               </li>
             ))}

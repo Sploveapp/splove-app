@@ -7,23 +7,29 @@ import { useAuth } from "../contexts/AuthContext";
 import { APP_BG, APP_BORDER, APP_CARD, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { SplashScreen } from "../components/SplashScreen";
 import { IconEye, IconEyeOff } from "../components/ui/Icon";
+import { useTranslation } from "../i18n/useTranslation";
 
-function authErrorToUserMessage(err: unknown): string {
+function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
   const raw = err instanceof Error ? err.message : String(err);
   const m = raw.toLowerCase();
   if (m.includes("invalid login credentials") || m.includes("invalid_grant")) {
-    return "Email ou mot de passe incorrect.";
+    return language === "en" ? "Incorrect email or password." : "Email ou mot de passe incorrect.";
   }
   if (m.includes("email not confirmed")) {
-    return "Vérifie ta boîte mail pour confirmer ton compte.";
+    return language === "en"
+      ? "Check your inbox to confirm your account."
+      : "Verifie ta boite mail pour confirmer ton compte.";
   }
   if (m.includes("user already registered")) {
-    return "Ce compte existe déjà. Connecte-toi.";
+    return language === "en" ? "This account already exists. Log in." : "Ce compte existe deja. Connecte-toi.";
   }
-  return "Connexion impossible. Réessaie dans un instant.";
+  return language === "en"
+    ? "Unable to sign in right now. Please try again."
+    : "Connexion impossible. Reessaie dans un instant.";
 }
 
 export default function Auth() {
+  const { t, language } = useTranslation();
   const { user, isProfileComplete, isLoading, isAuthInitialized } = useAuth();
   const [introSplash, setIntroSplash] = useState(true);
   const [email, setEmail] = useState("");
@@ -73,7 +79,7 @@ export default function Auth() {
       });
       if (error) throw error;
     } catch (err: unknown) {
-      setMessage({ type: "error", text: authErrorToUserMessage(err) });
+      setMessage({ type: "error", text: authErrorToUserMessage(err, language) });
     } finally {
       setOauthLoading(null);
     }
@@ -91,7 +97,7 @@ export default function Auth() {
         if (authUserId) {
           await ensureProfileRowForAuthUserId(authUserId);
         }
-        setMessage({ type: "success", text: "Compte créé. Vérifie ton email pour confirmer." });
+        setMessage({ type: "success", text: t("auth_signup_success") });
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -99,7 +105,7 @@ export default function Auth() {
     } catch (err: unknown) {
       setMessage({
         type: "error",
-        text: authErrorToUserMessage(err),
+        text: authErrorToUserMessage(err, language),
       });
     } finally {
       setLoading(false);
@@ -159,9 +165,9 @@ export default function Auth() {
               letterSpacing: "-0.02em",
             }}
           >
-            Swipe ailleurs.
+            {t("auth_hero_title_line_1")}
             <br />
-            Rencontre ici.
+            {t("auth_hero_title_line_2")}
           </h1>
           <p
             style={{
@@ -172,7 +178,7 @@ export default function Auth() {
               lineHeight: 1.45,
             }}
           >
-            Un match. Une activité. Une vraie rencontre.
+            {t("auth_hero_subtitle")}
           </p>
         </div>
 
@@ -183,7 +189,7 @@ export default function Auth() {
             disabled={!!oauthLoading || loading}
             onClick={() => void signInWithProvider("apple")}
           >
-            {oauthLoading === "apple" ? "Connexion…" : "Continuer avec Apple"}
+            {oauthLoading === "apple" ? `${t("loading")}` : t("continue_with_apple")}
           </button>
           <button
             type="button"
@@ -191,7 +197,7 @@ export default function Auth() {
             disabled={!!oauthLoading || loading}
             onClick={() => void signInWithProvider("google")}
           >
-            {oauthLoading === "google" ? "Connexion…" : "Continuer avec Google"}
+            {oauthLoading === "google" ? `${t("loading")}` : t("continue_with_google")}
           </button>
 
           <button
@@ -211,7 +217,7 @@ export default function Auth() {
               cursor: "pointer",
             }}
           >
-            {showEmailForm ? "Masquer email" : "Continuer avec email"}
+            {showEmailForm ? t("hide_email") : t("continue_with_email")}
           </button>
 
           {showEmailForm ? (
@@ -230,7 +236,7 @@ export default function Auth() {
             >
               <input
                 type="email"
-                placeholder="Email"
+                placeholder={t("email")}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -249,7 +255,7 @@ export default function Auth() {
               <div style={{ position: "relative" }}>
                 <input
                   type={showPassword ? "text" : "password"}
-                  placeholder="Mot de passe"
+                  placeholder={t("password")}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
@@ -270,7 +276,7 @@ export default function Auth() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+                  aria-label={showPassword ? t("hide_password") : t("show_password")}
                   style={{
                     position: "absolute",
                     right: 8,
@@ -292,7 +298,7 @@ export default function Auth() {
                     to="/forgot-password"
                     style={{ fontSize: "13px", color: BRAND_BG, fontWeight: 600, textDecoration: "none" }}
                   >
-                    Mot de passe oublié ?
+                    {t("forgot_password")}
                   </Link>
                 </div>
               )}
@@ -309,7 +315,7 @@ export default function Auth() {
                 </p>
               )}
               <button type="submit" disabled={loading} style={btnPrimary}>
-                {loading ? "Chargement…" : isSignUp ? "Créer mon compte" : "Se connecter"}
+                {loading ? t("loading") : isSignUp ? t("create_account") : t("login")}
               </button>
               <button
                 type="button"
@@ -327,7 +333,7 @@ export default function Auth() {
                   cursor: "pointer",
                 }}
               >
-                {isSignUp ? "Déjà un compte ? Se connecter" : "Pas encore de compte ? S’inscrire"}
+                {isSignUp ? t("auth_toggle_signin") : t("auth_toggle_signup")}
               </button>
             </form>
           ) : null}
@@ -343,7 +349,7 @@ export default function Auth() {
             padding: "0 8px",
           }}
         >
-          En continuant, tu acceptes nos CGU et notre Politique de confidentialité.
+          {t("auth_terms_notice")}
         </p>
       </div>
     </div>

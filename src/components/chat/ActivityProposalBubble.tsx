@@ -7,7 +7,8 @@ import {
   getAvailableProposalActions,
   isProposalClosed,
 } from "../../lib/messages/activityProposalRules";
-import { normalizeActivityProposalStatus, statusBadgeLabelFr } from "../../lib/messages/activityProposal";
+import { normalizeActivityProposalStatus, statusBadgeLabel } from "../../lib/messages/activityProposal";
+import { useTranslation } from "../../i18n/useTranslation";
 
 export type ActivityProposalBubbleProps = {
   proposal: ActivityProposalRowLike;
@@ -24,32 +25,37 @@ export type ActivityProposalBubbleProps = {
   onCancel: () => void;
 };
 
-function formatWhenLine(p: ActivityProposalRowLike): string {
+function formatWhenLine(p: ActivityProposalRowLike, locale: string, slotPending: string): string {
   if (p.scheduled_at) {
     try {
       const d = new Date(p.scheduled_at);
       if (!Number.isNaN(d.getTime())) {
-        return d.toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" });
+        return d.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
       }
     } catch {
       /* ignore */
     }
   }
-  return p.time_slot?.trim() || "Créneau à confirmer";
+  return p.time_slot?.trim() || slotPending;
 }
 
-function formatRemainingLabel(expiresAt: string | null | undefined): string | null {
+function formatRemainingLabel(
+  expiresAt: string | null | undefined,
+  tr: (k: string) => string,
+): string | null {
   if (!expiresAt) return null;
   const t = new Date(expiresAt).getTime();
   if (Number.isNaN(t)) return null;
   const delta = t - Date.now();
-  if (delta <= 0) return "Expirée";
+  if (delta <= 0) return tr("activity_proposal_expired_short");
   const totalMinutes = Math.floor(delta / (60 * 1000));
   const h = Math.floor(totalMinutes / 60);
   const m = totalMinutes % 60;
-  if (h <= 0) return `${m} min restantes`;
-  if (m === 0) return `${h} h restantes`;
-  return `${h} h ${m} min restantes`;
+  if (h <= 0) return tr("activity_remaining_minutes").replace("{{m}}", String(m));
+  if (m === 0) return tr("activity_remaining_hours").replace("{{h}}", String(h));
+  return tr("activity_remaining_hours_minutes")
+    .replace("{{h}}", String(h))
+    .replace("{{m}}", String(m));
 }
 
 export function ActivityProposalBubble({
@@ -65,6 +71,8 @@ export function ActivityProposalBubble({
   onCounter,
   onCancel,
 }: ActivityProposalBubbleProps) {
+  const { t, language } = useTranslation();
+  const dateLocale = language === "en" ? "en-GB" : "fr-FR";
   const ctx = buildProposalRulesContext({
     proposal: p,
     currentUserId,
@@ -77,13 +85,13 @@ export function ActivityProposalBubble({
   const effectiveStatus = getActivityProposalStatus(p, ctx.payload);
   const st = normalizeActivityProposalStatus(effectiveStatus);
   const closed = isProposalClosed(ctx.payload, p);
-  const badge = statusBadgeLabelFr(st);
+  const badge = statusBadgeLabel(st, t);
 
-  const sportLine = p.sport?.trim() || "Activité";
+  const sportLine = p.sport?.trim() || t("activity_default_sport");
   const emoji = sportEmojiHint(sportLine);
   const placeLine = p.location?.trim() || "—";
-  const whenLine = formatWhenLine(p);
-  const remainingLine = formatRemainingLabel(p.expires_at);
+  const whenLine = formatWhenLine(p, dateLocale, t("date_to_confirm"));
+  const remainingLine = formatRemainingLabel(p.expires_at, t);
   const noteLine = p.note?.trim();
 
   const shellDisabled = proposalActionLocked || pairBlocked;
@@ -113,7 +121,7 @@ export function ActivityProposalBubble({
         }`}
       >
         <p className="text-center text-[11px] font-bold uppercase tracking-[0.12em] text-app-muted">
-          Proposition d’activité
+          {t("activity_title")}
         </p>
 
         <div className="mt-3 space-y-1.5 text-left">
@@ -139,7 +147,7 @@ export function ActivityProposalBubble({
 
         <div className="my-3 border-t border-app-border/80" aria-hidden />
 
-        <p className="text-center text-sm font-medium leading-snug text-app-text">Ça te dit ?</p>
+        <p className="text-center text-sm font-medium leading-snug text-app-text">{t("activity_question")}</p>
 
         {noteLine ? (
           <p className="mt-2 text-center text-[13px] leading-snug text-app-muted">{noteLine}</p>
@@ -147,7 +155,7 @@ export function ActivityProposalBubble({
 
         {!ctx.dataReliable ? (
           <p className="mt-2 text-center text-[11px] leading-snug text-app-muted">
-            Informations de créneau incomplètes — actions désactivées.
+            {t("activity_slot_incomplete_actions_disabled")}
           </p>
         ) : null}
 
@@ -164,7 +172,7 @@ export function ActivityProposalBubble({
               className="w-full rounded-xl py-2.5 text-[13px] font-bold shadow-sm transition hover:opacity-95 disabled:opacity-50"
               style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              Accepter
+              {t("activity_accept")}
             </button>
             <button
               type="button"
@@ -172,7 +180,7 @@ export function ActivityProposalBubble({
               onClick={onDecline}
               className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border/40 disabled:opacity-50"
             >
-              Refuser
+              {t("activity_decline")}
             </button>
             <button
               type="button"
@@ -180,7 +188,7 @@ export function ActivityProposalBubble({
               onClick={onCounter}
               className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border/40 disabled:opacity-50"
             >
-              Proposer un créneau
+              {t("activity_propose_slot")}
             </button>
           </div>
         ) : null}
@@ -197,13 +205,13 @@ export function ActivityProposalBubble({
               onClick={onCancel}
               className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border disabled:opacity-50"
             >
-              Annuler
+              {t("cancel")}
             </button>
           </div>
         ) : null}
 
         {closed && !anyInteraction && ctx.dataReliable ? (
-          <p className="mt-2 text-center text-[11px] text-app-muted">Créneau clos — plus d’action possible.</p>
+          <p className="mt-2 text-center text-[11px] text-app-muted">{t("activity_slot_closed_no_action")}</p>
         ) : null}
 
         {badge ? (

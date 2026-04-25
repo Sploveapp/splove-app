@@ -1,13 +1,5 @@
 import type { LikeReceived } from "../types/premium.types";
-import {
-  BLOCK_PROFILE_LINK_LABEL,
-  LIKES_YOU_CONTINUE_EXCHANGE,
-  LIKES_YOU_LIKE,
-  LIKES_YOU_OPEN_CONVERSATION,
-  LIKES_YOU_PASS,
-  LIKES_YOU_VIEW_PROFILE,
-  REPORT_LINK_LABEL,
-} from "../constants/copy";
+import { useTranslation } from "../i18n/useTranslation";
 import { VerifiedBadge } from "./VerifiedBadge";
 import { isPhotoVerified } from "../lib/profileVerification";
 import {
@@ -39,7 +31,7 @@ type Props = {
   onLikeBack?: (profileId: string) => void;
   onPass?: (profileId: string) => void;
   onOpenConversation?: (profileId: string) => void;
-  onViewProfile?: (profileId: string) => void;
+  onViewProfile?: (like: LikeReceived) => void;
   onReport?: (profileId: string) => void;
   onReportPhoto?: (profileId: string) => void;
   /** Retrait silencieux du flux (sans indication à l’autre personne). */
@@ -56,6 +48,7 @@ export function LikesYouProfileCard({
   onReportPhoto,
   onBlock,
 }: Props) {
+  const { t } = useTranslation();
   const profile = like.profile;
   if (!profile) return null;
   const profileWithOptional = profile as {
@@ -75,16 +68,23 @@ export function LikesYouProfileCard({
     sport_phrase: profile.sport_phrase,
     sport_feeling: profile.sport_feeling,
     firstCommonSport: sports[0] ?? null,
+    genericFallback: t("likes.guided_fallback"),
   });
   const photo = profile.main_photo_url?.trim() ?? "";
   const hasExistingRelation = Boolean(like.is_match || like.conversation_id || like.match_id);
-  const conversationLabel = like.conversation_id ? LIKES_YOU_CONTINUE_EXCHANGE : LIKES_YOU_OPEN_CONVERSATION;
+  const conversationLabel = like.conversation_id
+    ? t("likes.continue_chat")
+    : t("likes.open_conversation");
   const reliabilityBadge = (() => {
     const raw = String(profileWithOptional.reliability_label ?? "").toLowerCase().trim();
-    if (raw === "high") return { label: "High", bg: "#10B981" };
-    if (raw === "low") return { label: "Low", bg: "#EF4444" };
-    return { label: "Medium", bg: "#F59E0B" };
+    if (raw === "high") return { label: t("likes.reliability_high"), bg: "#10B981" };
+    if (raw === "low") return { label: t("likes.reliability_low"), bg: "#EF4444" };
+    return { label: t("likes.reliability_medium"), bg: "#F59E0B" };
   })();
+  const displayName = profile.first_name?.trim() || t("likes.unnamed");
+  const photoAlt = profile.first_name?.trim()
+    ? t("likes.photo_alt", { name: profile.first_name.trim() })
+    : t("likes.profile_photo_alt");
 
   return (
     <div
@@ -101,7 +101,7 @@ export function LikesYouProfileCard({
         {photo ? (
           <img
             src={photo}
-            alt={profile.first_name ? `Photo de ${profile.first_name}` : "Photo du profil"}
+            alt={photoAlt}
             className="h-full w-full object-cover"
           />
         ) : (
@@ -121,12 +121,12 @@ export function LikesYouProfileCard({
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/70 to-transparent" />
         <div className="absolute bottom-3 left-3 right-3 text-white">
           <p className="text-base font-semibold leading-tight">
-            {profile.first_name ?? "Sans prénom"}
+            {displayName}
             {age != null ? `, ${age}` : ""}
           </p>
           <p className="line-clamp-2 truncate text-sm opacity-90">{sports.join(" • ")}</p>
           <p className="text-xs opacity-80">
-            {momentPreference === "morning" ? "🌅 Matin" : "🌙 Soir"}
+            {momentPreference === "morning" ? t("likes.moment_morning") : t("likes.moment_evening")}
           </p>
         </div>
       </div>
@@ -148,7 +148,7 @@ export function LikesYouProfileCard({
               color: APP_TEXT,
             }}
           >
-            {profile.first_name ?? "Sans prénom"}
+            {displayName}
           </p>
           {isPhotoVerified(profile) ? <VerifiedBadge /> : null}
           <span
@@ -205,7 +205,7 @@ export function LikesYouProfileCard({
           {onViewProfile && (
             <button
               type="button"
-              onClick={() => onViewProfile(profile.id)}
+              onClick={() => onViewProfile(like)}
               style={{
                 flex: 1,
                 padding: "14px",
@@ -218,7 +218,7 @@ export function LikesYouProfileCard({
                 color: APP_TEXT_MUTED,
               }}
             >
-              {LIKES_YOU_VIEW_PROFILE}
+              {t("likes.view_profile")}
             </button>
           )}
           {!hasExistingRelation && onPass && (
@@ -242,7 +242,7 @@ export function LikesYouProfileCard({
               }}
             >
               <IconPass size={20} />
-              {LIKES_YOU_PASS}
+              {t("likes.pass")}
             </button>
           )}
           {!hasExistingRelation && onLikeBack && (
@@ -295,7 +295,7 @@ export function LikesYouProfileCard({
                   className="opacity-0 group-active:opacity-100"
                 />
               </span>
-              {LIKES_YOU_LIKE}
+              {t("likes.like")}
             </button>
           )}
           {hasExistingRelation && onOpenConversation && (
@@ -339,7 +339,7 @@ export function LikesYouProfileCard({
                 textAlign: "left",
               }}
             >
-              {BLOCK_PROFILE_LINK_LABEL}
+              {t("likes.hide_profile")}
             </button>
           )}
           {onReport && (
@@ -357,7 +357,7 @@ export function LikesYouProfileCard({
                 textAlign: "left",
               }}
             >
-              {REPORT_LINK_LABEL}
+              {t("likes.report_profile")}
             </button>
           )}
           {onReportPhoto && (
@@ -375,7 +375,7 @@ export function LikesYouProfileCard({
                 textAlign: "left",
               }}
             >
-              Signaler cette photo
+              {t("likes.report_photo")}
             </button>
           )}
         </div>

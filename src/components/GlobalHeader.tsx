@@ -1,6 +1,7 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { NAV_ICON_HOVER } from "../constants/theme";
+import { useTranslation } from "../i18n/useTranslation";
 
 type GlobalHeaderProps = {
   /** En-tête plus bas pour parcours longs (ex. onboarding). */
@@ -11,6 +12,7 @@ type GlobalHeaderProps = {
  * En-tête global : marque + déconnexion ; onglets Découvrir / SPLove+ sur les routes concernées.
  */
 export function GlobalHeader({ variant = "default" }: GlobalHeaderProps) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const compact = variant === "compact";
@@ -57,12 +59,12 @@ export function GlobalHeader({ variant = "default" }: GlobalHeaderProps) {
           <button
             type="button"
             onClick={() => void handleLogout()}
-            aria-label="Se déconnecter"
+            aria-label={t("auth.logout")}
             className={`shrink-0 rounded-lg font-medium text-app-muted transition-colors hover:bg-white/[0.04] hover:text-app-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/25 ${
               compact ? "px-2 py-1 text-[11px]" : "px-2 py-1.5 text-[11px]"
             }`}
           >
-            Se déconnecter
+            {t("auth.logout")}
           </button>
         </div>
 
@@ -70,7 +72,7 @@ export function GlobalHeader({ variant = "default" }: GlobalHeaderProps) {
         {showPrimaryNav ? (
           <nav
             className="flex w-full items-stretch gap-8 pt-1"
-            aria-label="Découvrir et SPLove+"
+            aria-label={`${t("discover_profiles")} / ${t("premium_title")}`}
           >
             <Link
               to="/discover"
@@ -80,7 +82,7 @@ export function GlobalHeader({ variant = "default" }: GlobalHeaderProps) {
                   : "border-b-2 border-transparent text-app-muted hover:text-app-text/90"
               }`}
             >
-              Découvrir
+              {t("discover_profiles")}
             </Link>
             <Link
               to="/splove-plus"

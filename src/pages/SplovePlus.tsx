@@ -1,291 +1,547 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useTranslation } from "../i18n/useTranslation";
+
+const BETA_METRICS_KEY = "splove_plus_beta_metrics";
+
+const K = {
+  plusActive: "splove_plus_active",
+  incPriority: "splove_plus_priority_proposals",
+  incGhost: "splove_plus_ghost_mode",
+  incPlaces: "splove_plus_common_places",
+  incReminders: "splove_plus_smart_reminders",
+  incSmartBoost: "splove_plus_smart_boost",
+  osBoost: "splove_boost_active",
+  osBoostDuration: "splove_boost_duration",
+  osGhost24: "splove_ghost_24h",
+  osPriority: "splove_priority_one_shot",
+  osPlaces24: "splove_common_places_24h",
+  osReminder: "splove_smart_reminder_one_shot",
+} as const;
+
+type BetaMetrics = {
+  paywallViews: number;
+  ctaClicks: number;
+  activations: number;
+  featureUsage: Record<string, number>;
+};
+
+type IncludedState = {
+  priority: boolean;
+  ghost: boolean;
+  places: boolean;
+  reminders: boolean;
+  smartBoost: boolean;
+};
+
+type OneShotState = {
+  boost: boolean;
+  boostDuration: "30" | "60" | null;
+  ghost: boolean;
+  priority: boolean;
+  places: boolean;
+  reminder: boolean;
+};
+
+type ModalId = "boost" | "ghost" | "priority" | "places" | "reminder" | null;
+
+function readBetaMetrics(): BetaMetrics {
+  try {
+    const raw = localStorage.getItem(BETA_METRICS_KEY);
+    if (!raw) {
+      return { paywallViews: 0, ctaClicks: 0, activations: 0, featureUsage: {} };
+    }
+    const parsed = JSON.parse(raw) as Partial<BetaMetrics>;
+    return {
+      paywallViews: Number(parsed.paywallViews ?? 0),
+      ctaClicks: Number(parsed.ctaClicks ?? 0),
+      activations: Number(parsed.activations ?? 0),
+      featureUsage: parsed.featureUsage && typeof parsed.featureUsage === "object" ? parsed.featureUsage : {},
+    };
+  } catch {
+    return { paywallViews: 0, ctaClicks: 0, activations: 0, featureUsage: {} };
+  }
+}
+
+function writeBetaMetrics(metrics: BetaMetrics) {
+  try {
+    localStorage.setItem(BETA_METRICS_KEY, JSON.stringify(metrics));
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function trackBetaEvent(eventName: "paywall_view" | "cta_click" | "activation" | "feature_usage", featureKey?: string) {
+  const current = readBetaMetrics();
+  if (eventName === "paywall_view") current.paywallViews += 1;
+  if (eventName === "cta_click") current.ctaClicks += 1;
+  if (eventName === "activation") current.activations += 1;
+  if (eventName === "feature_usage") {
+    const key = (featureKey ?? "unknown").trim() || "unknown";
+    current.featureUsage[key] = (current.featureUsage[key] ?? 0) + 1;
+  }
+  writeBetaMetrics(current);
+  const activationRate = current.ctaClicks > 0 ? Number(((current.activations / current.ctaClicks) * 100).toFixed(1)) : 0;
+  console.info("[SPLove+ beta metrics]", {
+    eventName,
+    featureKey: featureKey ?? null,
+    paywallViews: current.paywallViews,
+    ctaClicks: current.ctaClicks,
+    activations: current.activations,
+    activationRatePercent: activationRate,
+    featureUsage: current.featureUsage,
+  });
+}
+
+function readLsBool(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeLs(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
+function loadIncluded(): IncludedState {
+  return {
+    priority: readLsBool(K.incPriority),
+    ghost: readLsBool(K.incGhost),
+    places: readLsBool(K.incPlaces),
+    reminders: readLsBool(K.incReminders),
+    smartBoost: readLsBool(K.incSmartBoost),
+  };
+}
+
+function loadOneShots(): OneShotState {
+  let dur: "30" | "60" | null = null;
+  try {
+    const d = localStorage.getItem(K.osBoostDuration);
+    if (d === "30" || d === "60") dur = d;
+  } catch {
+    // ignore
+  }
+  return {
+    boost: readLsBool(K.osBoost),
+    boostDuration: dur,
+    ghost: readLsBool(K.osGhost24),
+    priority: readLsBool(K.osPriority),
+    places: readLsBool(K.osPlaces24),
+    reminder: readLsBool(K.osReminder),
+  };
+}
 
 export default function SplovePlus() {
-  const isBetaTester = true;
-  const [isSplovePlusActive, setIsSplovePlusActive] = useState(false);
-  const [isGhostModeOn, setIsGhostModeOn] = useState(false);
-  const [boostModalOpen, setBoostModalOpen] = useState(false);
-  const [placesModalOpen, setPlacesModalOpen] = useState(false);
+  const { t, language } = useTranslation();
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [microBoostModalOpen, setMicroBoostModalOpen] = useState(false);
-  const [microGhostActive, setMicroGhostActive] = useState(false);
-  const [microPriorityActive, setMicroPriorityActive] = useState(false);
-  const [microPlacesActive, setMicroPlacesActive] = useState(false);
-  const [microReminderActive, setMicroReminderActive] = useState(false);
+  const [plusActive, setPlusActive] = useState(() => readLsBool(K.plusActive));
+  const [included, setIncluded] = useState<IncludedState>(() => loadIncluded());
+  const [oneShots, setOneShots] = useState<OneShotState>(() => loadOneShots());
+  const [modal, setModal] = useState<ModalId>(null);
+  const [boostDuration, setBoostDuration] = useState<"30" | "60">("30");
 
   useEffect(() => {
     if (!toastMessage) return;
-    const timer = window.setTimeout(() => setToastMessage(null), 2600);
+    const timer = window.setTimeout(() => setToastMessage(null), 2500);
     return () => window.clearTimeout(timer);
   }, [toastMessage]);
 
-  function showToast(message: string) {
-    setToastMessage(message);
+  useEffect(() => {
+    trackBetaEvent("paywall_view");
+  }, []);
+
+  function setIncludedKey(field: keyof IncludedState, key: string, value: boolean) {
+    writeLs(key, value ? "true" : "false");
+    setIncluded((prev) => ({ ...prev, [field]: value }));
+    trackBetaEvent("feature_usage", `incl_${field}`);
   }
 
-  function activateBoost(duration: "30 min" | "1h") {
-    setBoostModalOpen(false);
-    showToast(`Boost activé pendant ${duration} 🚀`);
+  function toggleIncluded(field: keyof IncludedState) {
+    if (!plusActive) return;
+    const map: Record<keyof IncludedState, string> = {
+      priority: K.incPriority,
+      ghost: K.incGhost,
+      places: K.incPlaces,
+      reminders: K.incReminders,
+      smartBoost: K.incSmartBoost,
+    };
+    const key = map[field];
+    setIncludedKey(field, key, !included[field]);
   }
 
-  function activateMicroOption(type: "ghost" | "priority" | "places" | "reminder") {
-    showToast("Option offerte pendant la bêta 🎁");
-    if (type === "ghost") setMicroGhostActive(true);
-    if (type === "priority") setMicroPriorityActive(true);
-    if (type === "places") setMicroPlacesActive(true);
-    if (type === "reminder") setMicroReminderActive(true);
+  function handlePrimaryCta() {
+    trackBetaEvent("cta_click");
+    if (plusActive) return;
+    trackBetaEvent("activation");
+    writeLs(K.plusActive, "true");
+    setPlusActive(true);
+    setToastMessage(t("activation_success"));
   }
+
+  function openOneShot(kind: NonNullable<ModalId>, already: boolean) {
+    if (already) {
+      setToastMessage(t("one_shot_activated"));
+      return;
+    }
+    if (kind === "boost") {
+      const d = oneShots.boostDuration;
+      if (d === "30" || d === "60") setBoostDuration(d);
+      else setBoostDuration("30");
+    }
+    setModal(kind);
+  }
+
+  function confirmOneShot() {
+    if (!modal) return;
+    if (modal === "boost") {
+      writeLs(K.osBoost, "true");
+      writeLs(K.osBoostDuration, boostDuration);
+    }
+    if (modal === "ghost") writeLs(K.osGhost24, "true");
+    if (modal === "priority") writeLs(K.osPriority, "true");
+    if (modal === "places") writeLs(K.osPlaces24, "true");
+    if (modal === "reminder") writeLs(K.osReminder, "true");
+    setModal(null);
+    setOneShots(loadOneShots());
+    setToastMessage(t("activation_success"));
+  }
+
+  const heroP =
+    language === "en"
+      ? "SPLove+ accelerates what really matters: meeting in real life."
+      : "SPLove+ accelere ce qui compte vraiment : se voir en vrai.";
 
   return (
-    <main className="min-h-screen bg-[#0B0B0F] px-5 py-6 text-white">
+    <main className="min-h-screen bg-[#0B0B0F] px-4 pb-28 pt-6 text-white">
       <section className="mx-auto max-w-md space-y-6">
-        <header className="space-y-3 pt-4 text-center">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-[#FF3B3B]/30 bg-[#FF3B3B]/15">
-            <span className="text-3xl">⚡</span>
+        <header className="space-y-4 text-center">
+          <div className="mx-auto inline-flex rounded-full border border-[#FF3B3B]/35 bg-[#FF3B3B]/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.1em] text-[#FF7A7A]">
+            SPLove+
           </div>
-
-          <h1 className="text-3xl font-semibold tracking-tight">Passe du match au réel.</h1>
-
-          <p className="leading-relaxed text-white/70">
-            Moins de discussion inutile. Plus de vraies rencontres.
+          <h1 className="text-3xl font-semibold leading-tight tracking-tight">
+            {t("premium_tagline")}
+          </h1>
+          <p className="text-sm leading-relaxed text-white/70">{heroP}</p>
+          <p className="mx-auto inline-flex rounded-full border border-[#FF3B3B]/30 bg-[#FF3B3B]/10 px-3 py-1 text-xs font-medium text-[#FF9B9B]">
+            {language === "en"
+              ? "🧪 Beta access active - SPLove+ temporarily free"
+              : "🧪 Acces beta actif - SPLove+ offert temporairement"}
           </p>
-        </header>
-
-        {isBetaTester && (
-          <div className="rounded-3xl border border-[#FF3B3B]/30 bg-[#FF3B3B]/10 p-4 text-center">
-            <p className="text-sm font-medium text-[#FF6B6B]">Offert pendant la bêta 🎁</p>
-            <p className="mt-1 text-xs text-white/60">Accès anticipé — sans engagement</p>
-          </div>
-        )}
-
-        <section className="grid gap-3">
-          <FeatureCard
-            icon="🚀"
-            title="Boost visibilité"
-            text="Sois vu par les profils compatibles au moment où ils sont actifs."
-            actionLabel="Activer"
-            onClick={() => setBoostModalOpen(true)}
-          />
-          <FeatureCard
-            icon="👻"
-            title="Mode Fantôme"
-            text="Explore librement sans être vu. Tu apparais uniquement quand il y a un vrai match."
-            actionLabel={isGhostModeOn ? "Désactiver" : "Activer"}
-            onClick={() => {
-              const next = !isGhostModeOn;
-              setIsGhostModeOn(next);
-              if (next) showToast("Mode Fantôme activé 👻");
-            }}
-            statusLine={isGhostModeOn ? "Mode Fantôme activé 👻" : null}
-          />
-          <FeatureCard
-            icon="⚡"
-            title="Proposition prioritaire"
-            text="Ta proposition d’activité passe en priorité. Plus de chances d’avoir une réponse."
-            actionLabel="Activer"
-            onClick={() => showToast("Ta prochaine proposition sera prioritaire ⚡")}
-          />
-          <FeatureCard
-            icon="📍"
-            title="Lieux communs"
-            text="Découvre les endroits où vous pourriez vraiment vous rencontrer."
-            actionLabel="Découvrir"
-            onClick={() => setPlacesModalOpen(true)}
-          />
-          <FeatureCard
-            icon="🔔"
-            title="Rappel intelligent"
-            text="Un petit coup de pouce pour ne pas laisser passer une vraie opportunité."
-            actionLabel="Activer"
-            onClick={() => showToast("Rappels intelligents activés 🔔")}
-          />
-        </section>
-
-        <section className="grid gap-3">
-          <FeatureCard
-            icon="🎯"
-            title="Mode rencontre active"
-            text="Passe en priorité quand tu cherches une rencontre en ce moment."
-            actionLabel="Nouveau"
-            onClick={() => showToast("Active ce mode depuis ton profil.")}
-          />
-          <FeatureCard
-            icon="🛡️"
-            title="Fiabilité visible"
-            text="Affiche un niveau de fiabilité High, Medium ou Low sur les profils."
-            actionLabel="Nouveau"
-            onClick={() => showToast("Le badge fiabilité est désormais visible.")}
-          />
-          <FeatureCard
-            icon="🕒"
-            title="Créneaux intelligents"
-            text="Suggestions automatiques de créneaux quand vos disponibilités se chevauchent."
-            actionLabel="Nouveau"
-            onClick={() => showToast("Suggestions de créneaux activées dans le chat.")}
-          />
-        </section>
-
-        <section className="space-y-4 rounded-3xl border border-white/10 bg-white/[0.04] p-5">
-          <div className="flex items-end justify-between">
-            <div>
-              <p className="text-sm text-white/50">Après la bêta</p>
-              <p className="text-2xl font-semibold">9,99€ / mois</p>
-            </div>
-            <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-white/70">
-              Sans engagement
-            </span>
-          </div>
-
           <button
             type="button"
-            onClick={() => {
-              if (!isSplovePlusActive) {
-                setIsSplovePlusActive(true);
-                showToast("Bienvenue dans SPLove+ bêta 🎁");
-              }
-            }}
-            className={`w-full rounded-2xl py-4 font-semibold transition active:scale-[0.98] ${
-              isSplovePlusActive ? "bg-emerald-500/80" : "bg-[#FF3B3B]"
-            }`}
+            onClick={handlePrimaryCta}
+            disabled={plusActive}
+            className="w-full rounded-2xl bg-[#FF3B3B] px-4 py-3.5 text-[15px] font-semibold text-white shadow-[0_10px_30px_rgba(255,59,59,0.25)] transition duration-200 hover:opacity-95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isSplovePlusActive ? "SPLove+ activé" : "Activer gratuitement"}
+            {plusActive ? t("splove_plus_status_active") : t("premium_cta")}
           </button>
-
-          <p className="text-center text-xs text-white/45">
-            Les likes, le chat et Qui m’a liké restent gratuits.
+          <p className="text-xs font-medium text-[#FF9B9B]">
+            {language === "en" ? "+3x more activity proposals accepted" : "+3x plus de propositions acceptees"}
           </p>
+          {plusActive ? (
+            <p className="text-xs font-medium text-emerald-300/95">{t("splove_plus_status_active")}</p>
+          ) : null}
+        </header>
+
+        {plusActive ? (
+          <section
+            className="space-y-3 rounded-3xl border border-white/10 bg-white/[0.03] p-4"
+            aria-label={t("premium_included_options")}
+          >
+            <h2 className="text-base font-semibold text-white">{t("premium_included_options")}</h2>
+            <ToggleRow
+              label={t("premium_feature_2")}
+              active={included.priority}
+              activeWord={t("active")}
+              activateLabel={t("activate")}
+              deactivateLabel={t("deactivate")}
+              onToggle={() => toggleIncluded("priority")}
+            />
+            <ToggleRow
+              label={t("one_shot_ghost")}
+              active={included.ghost}
+              activeWord={t("active")}
+              activateLabel={t("activate")}
+              deactivateLabel={t("deactivate")}
+              onToggle={() => toggleIncluded("ghost")}
+            />
+            <ToggleRow
+              label={t("premium_feature_3")}
+              active={included.places}
+              activeWord={t("active")}
+              activateLabel={t("activate")}
+              deactivateLabel={t("deactivate")}
+              onToggle={() => toggleIncluded("places")}
+            />
+            <ToggleRow
+              label={t("one_shot_smart_reminder")}
+              active={included.reminders}
+              activeWord={t("active")}
+              activateLabel={t("activate")}
+              deactivateLabel={t("deactivate")}
+              onToggle={() => toggleIncluded("reminders")}
+            />
+            <ToggleRow
+              label={t("premium_feature_4")}
+              active={included.smartBoost}
+              activeWord={t("active")}
+              activateLabel={t("activate")}
+              deactivateLabel={t("deactivate")}
+              onToggle={() => toggleIncluded("smartBoost")}
+            />
+          </section>
+        ) : null}
+
+        <section className="space-y-3">
+          <BenefitCard
+            icon="⚡"
+            title={t("premium_feature_2")}
+            text={
+              language === "en"
+                ? "Your activity suggestions are shown first to turn a match into a real plan."
+                : "Tes propositions arrivent en priorité pour transformer le match en plan concret."
+            }
+            onClick={() => trackBetaEvent("feature_usage", "priority_proposals")}
+          />
+          <BenefitCard
+            icon="👻"
+            title={language === "en" ? "Go invisible anytime" : "Deviens invisible quand tu veux"}
+            text={
+              language === "en"
+                ? "Enable ghost mode and stay visible only when timing is right."
+                : "Active le mode fantome et reste visible seulement quand c'est le bon moment."
+            }
+            onClick={() => trackBetaEvent("feature_usage", "ghost_mode")}
+          />
+          <BenefitCard
+            icon="📍"
+            title={t("premium_feature_3")}
+            text={
+              language === "en"
+                ? "Find shared real-life places to make meeting easier."
+                : "Repère des lieux communs crédibles pour passer au réel plus facilement."
+            }
+            onClick={() => trackBetaEvent("feature_usage", "common_places")}
+          />
+          <BenefitCard
+            icon="🔔"
+            title={language === "en" ? "Never miss an opportunity" : "Ne rate plus une opportunite"}
+            text={
+              language === "en"
+                ? "Smart reminders at the right time to follow up naturally."
+                : "Rappels intelligents au bon timing pour relancer sans forcer."
+            }
+            onClick={() => trackBetaEvent("feature_usage", "smart_reminders")}
+          />
+          <BenefitCard
+            icon="🚀"
+            title={t("premium_feature_4")}
+            text={
+              language === "en"
+                ? "Smart boost when the right profiles are online."
+                : "Boost intelligent quand les bons profils sont réellement connectés."
+            }
+            onClick={() => trackBetaEvent("feature_usage", "smart_boost")}
+          />
         </section>
 
-        <section className="space-y-3 rounded-3xl border border-white/10 bg-white/[0.04] p-5">
-          <div>
-            <p className="text-base font-semibold text-white">T’envie de tester une seule option ?</p>
+        <section className="rounded-3xl border border-[#FF3B3B]/30 bg-gradient-to-b from-[#1A1114] to-[#141419] p-5">
+          <p className="text-sm font-medium text-[#FF8F8F]">SPLove+</p>
+          <p className="mt-1 text-3xl font-semibold text-white">{t("premium_price_month")}</p>
+          <ul className="mt-4 space-y-2 text-sm text-white/80">
+            <li>{`• ${t("premium_feature_2")}`}</li>
+            <li>{`• ${language === "en" ? "Ghost mode" : "Mode fantome"}`}</li>
+            <li>{`• ${t("premium_feature_3")}`}</li>
+            <li>{`• ${language === "en" ? "Smart reminders" : "Rappels intelligents"}`}</li>
+            <li>{`• ${language === "en" ? "Smart boost" : "Smart boost"}`}</li>
+          </ul>
+          <button
+            type="button"
+            onClick={handlePrimaryCta}
+            disabled={plusActive}
+            className="mt-4 w-full rounded-2xl bg-[#FF3B3B] px-4 py-3.5 text-[15px] font-semibold text-white transition duration-200 hover:opacity-95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {plusActive ? t("splove_plus_status_active") : t("premium_cta")}
+          </button>
+          <p className="mt-2 text-center text-xs text-white/55">{t("premium_cancel_anytime")}</p>
+          <p className="mt-1 text-center text-xs text-white/45">{t("premium_maybe_paid_after_beta")}</p>
+        </section>
+
+        <section className="space-y-3 rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+          <h2 className="text-base font-semibold text-white">{t("premium_try_title")}</h2>
+          <div className="grid gap-2">
+            <MiniOfferCard
+              title={t("one_shot_boost_visibility")}
+              price={t("price_eur_199")}
+              isActive={oneShots.boost}
+              activeDetail={
+                oneShots.boost && oneShots.boostDuration
+                  ? oneShots.boostDuration === "30"
+                    ? t("boost_duration_30")
+                    : t("boost_duration_60")
+                  : null
+              }
+              onClick={() => openOneShot("boost", oneShots.boost)}
+            />
+            <MiniOfferCard
+              title={t("one_shot_ghost")}
+              price={t("price_eur_299")}
+              isActive={oneShots.ghost}
+              onClick={() => openOneShot("ghost", oneShots.ghost)}
+            />
+            <MiniOfferCard
+              title={t("one_shot_priority")}
+              price={t("price_eur_399")}
+              isActive={oneShots.priority}
+              onClick={() => openOneShot("priority", oneShots.priority)}
+            />
+            <MiniOfferCard
+              title={t("one_shot_common_places")}
+              price={t("price_eur_299")}
+              isActive={oneShots.places}
+              onClick={() => openOneShot("places", oneShots.places)}
+            />
+            <MiniOfferCard
+              title={t("one_shot_smart_reminder")}
+              price={t("price_eur_199")}
+              isActive={oneShots.reminder}
+              onClick={() => openOneShot("reminder", oneShots.reminder)}
+            />
           </div>
-
-          <MicroPurchaseCard
-            title="Boost visibilité"
-            price="1,99€"
-            details="Choix 30 min ou 1h"
-            ctaLabel="Choisir"
-            onClick={() => setMicroBoostModalOpen(true)}
-          />
-          <MicroPurchaseCard
-            title="Mode Fantôme"
-            price="1,99€"
-            details="Durée 24h"
-            ctaLabel="Activer"
-            onClick={() => activateMicroOption("ghost")}
-            statusLine={microGhostActive ? "Activé en bêta" : null}
-          />
-          <MicroPurchaseCard
-            title="Proposition prioritaire"
-            price="1,99€"
-            details="Valable sur la prochaine proposition d’activité"
-            ctaLabel="Prioriser"
-            onClick={() => activateMicroOption("priority")}
-            statusLine={microPriorityActive ? "Priorité activée en bêta" : null}
-          />
-          <MicroPurchaseCard
-            title="Lieux communs"
-            price="1,99€"
-            details="Accès 24h aux spots/lieux communs"
-            ctaLabel="Découvrir"
-            onClick={() => {
-              activateMicroOption("places");
-              setPlacesModalOpen(true);
-            }}
-            statusLine={microPlacesActive ? "Accès activé en bêta" : null}
-          />
-          <MicroPurchaseCard
-            title="Rappel intelligent"
-            price="1,99€"
-            details="Rappel avant expiration des 48h"
-            ctaLabel="Activer"
-            onClick={() => activateMicroOption("reminder")}
-            statusLine={microReminderActive ? "Rappel activé en bêta" : null}
-          />
         </section>
 
-        <section className="space-y-3 rounded-3xl bg-white/[0.03] p-4">
-          <p className="text-sm leading-relaxed text-white/65">
-            SPLove+ sert à accélérer les vraies rencontres.
-          </p>
-          <p className="text-sm leading-relaxed text-white/65">
-            SPLove+ ne bloque pas les rencontres. Il accélère les moments où vous pouvez vraiment
-            passer au réel.
-          </p>
-          <p className="text-sm leading-relaxed text-white/65">
-            Ici, on ne swipe pas pendant des semaines. On se rencontre.
-          </p>
-        </section>
+        <footer className="pb-2 text-center text-sm leading-relaxed text-white/65">
+          {t("premium_footer")}
+        </footer>
       </section>
 
-      {boostModalOpen ? (
-        <ModalShell title="Boost visibilité" onClose={() => setBoostModalOpen(false)}>
-          <p className="text-sm leading-relaxed text-white/70">
-            Choisis la durée pour mettre ton profil en avant maintenant.
-          </p>
-          <div className="mt-4 grid gap-2">
-            <button
-              type="button"
-              onClick={() => activateBoost("30 min")}
-              className="w-full rounded-xl border border-white/15 bg-white/5 py-3 text-sm font-semibold transition hover:bg-white/10"
-            >
-              Boost 30 min
-            </button>
-            <button
-              type="button"
-              onClick={() => activateBoost("1h")}
-              className="w-full rounded-xl border border-white/15 bg-white/5 py-3 text-sm font-semibold transition hover:bg-white/10"
-            >
-              Boost 1h
-            </button>
-          </div>
-        </ModalShell>
-      ) : null}
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#0B0B0F]/95 px-4 py-3 backdrop-blur">
+        <div className="mx-auto max-w-md">
+          <button
+            type="button"
+            onClick={handlePrimaryCta}
+            disabled={plusActive}
+            className="w-full rounded-2xl bg-[#FF3B3B] px-4 py-3.5 text-[15px] font-semibold text-white shadow-[0_10px_30px_rgba(255,59,59,0.25)] transition duration-200 hover:opacity-95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {plusActive ? t("splove_plus_status_active") : t("premium_cta")}
+          </button>
+        </div>
+      </div>
 
-      {placesModalOpen ? (
-        <ModalShell title="Lieux communs" onClose={() => setPlacesModalOpen(false)}>
-          <p className="text-sm leading-relaxed text-white/70">
-            Bientôt : découvre les spots sportifs que vous avez en commun.
-          </p>
-        </ModalShell>
-      ) : null}
+      {modal ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4"
+          role="presentation"
+          onClick={() => setModal(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-md rounded-t-3xl border border-white/10 bg-[#12121a] p-5 shadow-2xl sm:rounded-3xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {modal === "boost" ? (
+              <>
+                <h2 className="text-lg font-semibold text-white">{t("one_shot_boost_visibility")}</h2>
+                <p className="mt-1 text-sm text-[#FF9B9B]">{t("price_eur_199")}</p>
+                <p className="mt-4 text-sm font-medium text-white/90">{t("choose_duration")}</p>
+                <div className="mt-2 flex gap-2">
+                  {(["30", "60"] as const).map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setBoostDuration(d)}
+                      className={`flex-1 rounded-2xl border py-2.5 text-sm font-semibold transition ${
+                        boostDuration === d
+                          ? "border-[#FF3B3B] bg-[#FF3B3B]/20 text-white"
+                          : "border-white/10 bg-white/[0.04] text-white/80"
+                      }`}
+                    >
+                      {d === "30" ? t("boost_duration_30") : t("boost_duration_60")}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
 
-      {microBoostModalOpen ? (
-        <ModalShell title="Boost visibilité (option ponctuelle)" onClose={() => setMicroBoostModalOpen(false)}>
-          <p className="text-sm leading-relaxed text-white/70">
-            Option offerte pendant la bêta 🎁 Choisis la durée puis active le boost.
-          </p>
-          <div className="mt-4 grid gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setMicroBoostModalOpen(false);
-                showToast("Option offerte pendant la bêta 🎁");
-                window.setTimeout(() => showToast("Boost activé pendant 30 min 🚀"), 300);
-              }}
-              className="w-full rounded-xl border border-white/15 bg-white/5 py-3 text-sm font-semibold transition hover:bg-white/10"
-            >
-              Boost 30 min
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMicroBoostModalOpen(false);
-                showToast("Option offerte pendant la bêta 🎁");
-                window.setTimeout(() => showToast("Boost activé pendant 1h 🚀"), 300);
-              }}
-              className="w-full rounded-xl border border-white/15 bg-white/5 py-3 text-sm font-semibold transition hover:bg-white/10"
-            >
-              Boost 1h
-            </button>
+            {modal === "ghost" ? (
+              <>
+                <h2 className="text-lg font-semibold text-white">{t("one_shot_ghost")}</h2>
+                <p className="mt-1 text-sm text-[#FF9B9B]">{t("price_eur_299")}</p>
+                <p className="mt-4 text-sm leading-relaxed text-white/80">{t("activate_ghost_24h")}</p>
+              </>
+            ) : null}
+
+            {modal === "priority" ? (
+              <>
+                <h2 className="text-lg font-semibold text-white">{t("one_shot_priority")}</h2>
+                <p className="mt-1 text-sm text-[#FF9B9B]">{t("price_eur_399")}</p>
+                <p className="mt-4 text-sm leading-relaxed text-white/80">
+                  {t("prioritize_next_proposal")}
+                </p>
+              </>
+            ) : null}
+
+            {modal === "places" ? (
+              <>
+                <h2 className="text-lg font-semibold text-white">{t("one_shot_common_places")}</h2>
+                <p className="mt-1 text-sm text-[#FF9B9B]">{t("price_eur_299")}</p>
+                <p className="mt-4 text-sm leading-relaxed text-white/80">
+                  {t("unlock_common_places_24h")}
+                </p>
+              </>
+            ) : null}
+
+            {modal === "reminder" ? (
+              <>
+                <h2 className="text-lg font-semibold text-white">{t("one_shot_smart_reminder")}</h2>
+                <p className="mt-1 text-sm text-[#FF9B9B]">{t("price_eur_199")}</p>
+                <p className="mt-4 text-sm leading-relaxed text-white/80">
+                  {t("activate_smart_reminder")}
+                </p>
+              </>
+            ) : null}
+
+            <p className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2.5 text-xs leading-snug text-amber-100/90">
+              {t("beta_payment_disabled")}
+            </p>
+
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setModal(null)}
+                className="flex-1 rounded-2xl border border-white/15 py-3 text-sm font-semibold text-white/90"
+              >
+                {t("cancel")}
+              </button>
+              <button
+                type="button"
+                onClick={confirmOneShot}
+                className="flex-1 rounded-2xl bg-[#FF3B3B] py-3 text-sm font-semibold text-white"
+              >
+                {modal === "boost"
+                  ? t("activate_boost")
+                  : modal === "ghost"
+                    ? t("activate_ghost_24h")
+                    : modal === "priority"
+                      ? t("prioritize_next_proposal")
+                      : modal === "places"
+                        ? t("unlock_common_places_24h")
+                        : t("activate_smart_reminder")}
+              </button>
+            </div>
           </div>
-        </ModalShell>
+        </div>
       ) : null}
 
       {toastMessage ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex justify-center px-4">
-          <div className="w-full max-w-md rounded-2xl border border-white/15 bg-[#15151D] px-4 py-3 text-center text-sm font-medium text-white shadow-2xl">
+        <div className="pointer-events-none fixed inset-x-0 bottom-24 z-[60] flex justify-center px-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#15151D] px-4 py-3 text-center text-sm font-medium text-white shadow-2xl">
             {toastMessage}
           </div>
         </div>
@@ -294,115 +550,117 @@ export default function SplovePlus() {
   );
 }
 
-function MicroPurchaseCard({
-  title,
-  price,
-  details,
-  ctaLabel,
-  onClick,
-  statusLine = null,
+function ToggleRow({
+  label,
+  active,
+  activeWord,
+  activateLabel,
+  deactivateLabel,
+  onToggle,
 }: {
-  title: string;
-  price: string;
-  details: string;
-  ctaLabel: string;
-  onClick: () => void;
-  statusLine?: string | null;
+  label: string;
+  active: boolean;
+  activeWord: string;
+  activateLabel: string;
+  deactivateLabel: string;
+  onToggle: () => void;
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3.5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-semibold text-white">{title}</p>
-          <p className="mt-0.5 text-xs text-white/55">{details}</p>
-          <p className="mt-1 text-sm font-semibold text-[#FF8B8B]">{price}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onClick}
-          className="rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
-        >
-          {ctaLabel}
-        </button>
-      </div>
-      {statusLine ? <p className="mt-2 text-xs text-emerald-300">{statusLine}</p> : null}
+    <div className="flex items-center justify-between gap-3 border-b border-white/5 py-2.5 last:border-0 last:pb-0">
+      <span className="text-sm font-medium text-white/95">
+        {label}
+        {active ? (
+          <span className="ml-1.5 text-[11px] font-semibold text-emerald-300/90">· {activeWord}</span>
+        ) : null}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={active}
+        aria-label={active ? deactivateLabel : activateLabel}
+        onClick={onToggle}
+        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+          active ? "bg-[#FF3B3B]" : "bg-white/20"
+        }`}
+      >
+        <span
+          className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-transform ${
+            active ? "left-1 translate-x-5" : "left-1 translate-x-0"
+          }`}
+        />
+      </button>
     </div>
   );
 }
 
-function FeatureCard({
+function BenefitCard({
   icon,
   title,
   text,
-  actionLabel,
   onClick,
-  statusLine = null,
 }: {
   icon: string;
   title: string;
   text: string;
-  actionLabel: string;
-  onClick: () => void;
-  statusLine?: string | null;
+  onClick?: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="w-full rounded-3xl border border-white/10 bg-white/[0.04] p-4 text-left transition hover:bg-white/[0.07]"
+      className="w-full rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left transition duration-150 hover:bg-white/[0.06]"
     >
-      <div className="flex gap-4">
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-xl">
-        {icon}
-      </div>
-      <div>
-        <h3 className="font-semibold">{title}</h3>
-        <p className="mt-1 text-sm leading-relaxed text-white/60">{text}</p>
-        <div className="mt-3 flex items-center justify-between">
-          <span className="text-xs font-semibold text-[#FF7B7B]">{actionLabel}</span>
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#FF3B3B]/15 text-lg">
+          {icon}
         </div>
-        {statusLine ? <p className="mt-2 text-xs text-emerald-300">{statusLine}</p> : null}
-      </div>
+        <div>
+          <h3 className="text-sm font-semibold text-white">{title}</h3>
+          <p className="mt-1 text-sm leading-relaxed text-white/65">{text}</p>
+        </div>
       </div>
     </button>
   );
 }
 
-function ModalShell({
+function MiniOfferCard({
   title,
-  children,
-  onClose,
+  price,
+  isActive,
+  activeDetail,
+  onClick,
 }: {
   title: string;
-  children: React.ReactNode;
-  onClose: () => void;
+  price: string;
+  isActive: boolean;
+  activeDetail?: string | null;
+  onClick?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 px-4 pb-4 pt-10 sm:items-center"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full items-center justify-between gap-2 rounded-2xl border px-3.5 py-3 text-left transition duration-150 ${
+        isActive
+          ? "border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/15"
+          : "border-white/10 bg-white/[0.02] hover:bg-white/[0.06]"
+      }`}
     >
-      <div
-        className="w-full max-w-md rounded-3xl border border-white/10 bg-[#111117] p-5 shadow-2xl"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-base font-semibold text-white">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-white/15 px-2.5 py-1 text-xs text-white/70 transition hover:bg-white/10"
-          >
-            Fermer
-          </button>
-        </div>
-        {children}
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-white">{title}</div>
+        {isActive ? (
+          <div className="mt-0.5 text-[11px] font-medium text-emerald-300/95">
+            ✓ {t("one_shot_activated")}
+            {activeDetail ? ` · ${activeDetail}` : null}
+          </div>
+        ) : null}
       </div>
-    </div>
+      <div className="shrink-0 text-right">
+        <span className={`text-sm font-semibold ${isActive ? "text-emerald-200/90" : "text-[#FF9B9B]"}`}>
+          {price}
+        </span>
+      </div>
+    </button>
   );
 }

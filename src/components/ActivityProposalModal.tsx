@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import {
   type ActivityPayload,
+  type ActivityWhen,
   formatActivityProposalNote,
 } from "../lib/chatActivity";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { SAFETY_CONTENT_REFUSAL } from "../constants/copy";
 import { messageContainsDisallowedContent } from "../lib/contentModeration";
+import { useTranslation } from "../i18n/useTranslation";
 
 type Props = {
   open: boolean;
@@ -21,9 +23,21 @@ type Props = {
   suggestedSlots?: string[];
   /** Contre-proposition : retour vers la vue précédente sans envoi ni changement de statut. */
   onBack?: () => void;
+  /** Surcharge de la note structurée (i18n). Par défaut : `formatActivityProposalNote` (FR hérité). */
+  formatActivityProposalNoteOverride?: (input: {
+    sport: string;
+    when: ActivityWhen;
+    place: string;
+    userLine?: string;
+  }) => string;
 };
 
-const QUICK_NOTE_CHIPS = ["Ça te dit ?", "Partant(e) ?", "On y va ?", "Pourquoi pas 🙂"] as const;
+const QUICK_NOTE_CHIP_KEYS = [
+  "activity_modal_chip_1",
+  "activity_modal_chip_2",
+  "activity_modal_chip_3",
+  "activity_modal_chip_4",
+] as const;
 
 export function ActivityProposalModal({
   open,
@@ -38,7 +52,12 @@ export function ActivityProposalModal({
   initialScheduledAt,
   suggestedSlots = [],
   onBack,
+  formatActivityProposalNoteOverride,
 }: Props) {
+  const { t, language } = useTranslation();
+  const dateLocale = language === "en" ? "en-GB" : "fr-FR";
+  const buildNote =
+    formatActivityProposalNoteOverride ?? formatActivityProposalNote;
   const firstSport = sharedSports[0] ?? "";
   const [sport, setSport] = useState(firstSport);
   const [sportOther, setSportOther] = useState("");
@@ -93,10 +112,10 @@ export function ActivityProposalModal({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!resolvedSport) {
-      setError("Indiquez un sport ou une activité.");
+      setError(t("activity_modal_err_sport"));
       return;
     }
-    const fullMessage = formatActivityProposalNote({
+    const fullMessage = buildNote({
       sport: resolvedSport,
       when: "other",
       place: place.trim(),
@@ -104,19 +123,19 @@ export function ActivityProposalModal({
     });
     const scheduledAtDate = new Date(scheduledAtLocal);
     if (Number.isNaN(scheduledAtDate.getTime())) {
-      setError("Choisissez une date et une heure valides.");
+      setError(t("activity_modal_err_datetime"));
       return;
     }
     const scheduledAtIso = scheduledAtDate.toISOString();
     const pieces = [place.trim(), noteText.trim(), sportOther.trim(), resolvedSport];
     for (const p of pieces) {
       if (p && messageContainsDisallowedContent(p)) {
-        setError(SAFETY_CONTENT_REFUSAL);
+        setError(t("safety_content_refusal"));
         return;
       }
     }
     if (messageContainsDisallowedContent(fullMessage)) {
-      setError(SAFETY_CONTENT_REFUSAL);
+      setError(t("safety_content_refusal"));
       return;
     }
     setError(null);
@@ -132,7 +151,13 @@ export function ActivityProposalModal({
       onClose();
     } catch (err) {
       console.error("[ActivityProposalModal] submit failed:", err);
-      setError(err instanceof Error ? err.message : "Envoi impossible");
+      const m = err instanceof Error ? err.message : "";
+      if (!m) setError(t("activity_modal_err_send"));
+      else if (m === SAFETY_CONTENT_REFUSAL || m === "safety_content_refusal")
+        setError(t("safety_content_refusal"));
+      else if (m.startsWith("chat_") || m.startsWith("proposal_") || m.startsWith("safety_"))
+        setError(t(m));
+      else setError(m);
     } finally {
       setSending(false);
     }
@@ -161,11 +186,11 @@ export function ActivityProposalModal({
                 onClick={onBack}
                 className="shrink-0 rounded-full px-2 py-1 text-sm font-medium text-app-muted hover:bg-app-border hover:text-app-text"
               >
-                Retour
+                {t("back")}
               </button>
             ) : null}
             <h2 id="activity-modal-title" className="min-w-0 truncate text-base font-semibold tracking-tight text-app-text">
-              {titleOverride ?? "Programmer une activité"}
+              {titleOverride ?? t("activity_modal_title_default")}
             </h2>
           </div>
           <button
@@ -173,19 +198,18 @@ export function ActivityProposalModal({
             onClick={onClose}
             className="shrink-0 rounded-full px-2 py-1 text-sm font-medium text-app-muted hover:bg-app-border hover:text-app-text"
           >
-            Fermer
+            {t("close")}
           </button>
         </div>
 
         <div className="space-y-5 px-5 py-5">
           <p className="text-[13px] leading-relaxed text-app-muted">
-            {descriptionOverride ??
-              "Propose un sport, un moment et un lieu. Vous pourrez ajuster les détails ensemble dans le chat."}
+            {descriptionOverride ?? t("activity_modal_description_default")}
           </p>
 
           <div>
             <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-app-muted">
-              Sport
+              {t("activity_modal_label_sport")}
             </label>
             {sharedSports.length > 0 ? (
               <select
@@ -198,13 +222,13 @@ export function ActivityProposalModal({
                     {s}
                   </option>
                 ))}
-                <option value="__other__">Autre…</option>
+                <option value="__other__">{t("activity_modal_option_other")}</option>
               </select>
             ) : (
               <input
   value={sportOther}
   onChange={(e) => setSportOther(e.target.value)}
-  placeholder="Ex. running, tennis, piscine…"
+  placeholder={t("activity_modal_placeholder_sport_free")}
   className="w-full rounded-xl border border-app-border bg-white px-3 py-3 text-[15px] text-black outline-none placeholder:text-gray-400 caret-black"
   style={{ color: "#000000", WebkitTextFillColor: "#000000" }}
 />
@@ -213,7 +237,7 @@ export function ActivityProposalModal({
               <input
               value={sportOther}
               onChange={(e) => setSportOther(e.target.value)}
-              placeholder="Précisez l’activité"
+              placeholder={t("activity_modal_placeholder_sport_specify")}
               className="mt-2 w-full rounded-xl border border-app-border bg-white px-3 py-3 text-[15px] text-black outline-none placeholder:text-gray-400 caret-black"
               style={{ color: "#000000", WebkitTextFillColor: "#000000" }}
             />
@@ -222,7 +246,7 @@ export function ActivityProposalModal({
 
           <div>
             <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-app-muted">
-              Date / heure
+              {t("activity_modal_label_datetime")}
             </label>
             {suggestedSlots.length > 0 ? (
               <div className="mb-2 flex flex-wrap gap-2">
@@ -232,7 +256,7 @@ export function ActivityProposalModal({
                   const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000)
                     .toISOString()
                     .slice(0, 16);
-                  const label = d.toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
+                  const label = d.toLocaleString(dateLocale, { dateStyle: "short", timeStyle: "short" });
                   return (
                     <button
                       key={iso}
@@ -256,24 +280,27 @@ export function ActivityProposalModal({
 
           <div>
             <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-app-muted">
-              Lieu <span className="font-normal normal-case">(facultatif)</span>
+              {t("activity_modal_label_place")}{" "}
+              <span className="font-normal normal-case">{t("activity_modal_optional")}</span>
             </label>
             <input
               value={place}
               onChange={(e) => setPlace(e.target.value)}
-              placeholder="Ex. Cassis, Skatepark du Prado, bord de mer…"
+              placeholder={t("activity_modal_placeholder_place")}
               className="w-full rounded-xl border border-app-border bg-app-card px-3 py-3 text-[15px] text-app-text outline-none focus:ring-2 focus:ring-[#FF1E2D]/25"
             />
           </div>
 
           <div className="border-t border-app-border/80 pt-4">
             <span className="mb-3 block text-[11px] font-semibold uppercase tracking-wide text-app-muted/90">
-              Message <span className="font-normal normal-case">(optionnel)</span>
+              {t("message")} <span className="font-normal normal-case">{t("activity_modal_message_optional")}</span>
             </span>
             <div className="flex flex-wrap gap-2">
-              {QUICK_NOTE_CHIPS.map((q) => (
+              {QUICK_NOTE_CHIP_KEYS.map((key) => {
+                const q = t(key);
+                return (
                 <button
-                  key={q}
+                  key={key}
                   type="button"
                   onClick={() => {
                     setNoteText(q);
@@ -287,21 +314,22 @@ export function ActivityProposalModal({
                 >
                   {q}
                 </button>
-              ))}
+              );
+              })}
             </div>
             <button
               type="button"
               onClick={() => setShowCustomNote((v) => !v)}
               className="mt-2 text-[13px] font-medium text-[#FF1E2D] underline-offset-2 hover:underline"
             >
-              {showCustomNote ? "Masquer la saisie libre" : "Personnaliser le message"}
+              {showCustomNote ? t("activity_modal_hide_custom") : t("activity_modal_customize_message")}
             </button>
             {showCustomNote && (
               <textarea
                 value={noteText}
                 onChange={(e) => setNoteText(e.target.value)}
                 rows={2}
-                placeholder="Votre phrase…"
+                placeholder={t("activity_modal_placeholder_phrase")}
                 className="mt-2 w-full resize-none rounded-xl border border-app-border bg-app-card px-3 py-2.5 text-[15px] leading-relaxed text-app-text outline-none focus:ring-2 focus:ring-[#FF1E2D]/25"
               />
             )}
@@ -316,14 +344,14 @@ export function ActivityProposalModal({
               className="w-full rounded-2xl px-4 py-3.5 text-[15px] font-semibold shadow-sm disabled:opacity-60"
               style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              {sending ? "Envoi…" : submitLabel ?? "Envoyer la proposition"}
+              {sending ? t("sending") : submitLabel ?? t("activity_modal_submit_default")}
             </button>
             <button
               type="button"
               onClick={onClose}
               className="rounded-2xl border border-app-border bg-app-card px-4 py-2.5 text-[14px] font-medium text-app-muted hover:bg-app-border"
             >
-              Annuler
+              {t("cancel")}
             </button>
           </div>
         </div>

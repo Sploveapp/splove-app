@@ -4,8 +4,8 @@
 
 export function formatDiscoverDistanceLabel(km: number | null | undefined): string | null {
   if (km == null || !Number.isFinite(km) || km < 0) return null;
-  if (km < 1) return "À moins de 1 km";
-  return `À ${Math.round(km)} km`;
+  if (km < 1) return "A moins de 1 km";
+  return `A ${Math.round(km)} km`;
 }
 
 function sameCity(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -21,6 +21,10 @@ export function buildDiscoverLocationLines(opts: {
   distanceKm: number | null | undefined;
   viewerCity: string | null;
   profileCity: string | null;
+  labels?: {
+    sameSector?: string;
+    zoneHintPrefix?: string;
+  };
 }): { line1: string | null; line2: string | null } {
   const dist = formatDiscoverDistanceLabel(opts.distanceKm);
   const city = opts.profileCity?.trim() || null;
@@ -28,10 +32,10 @@ export function buildDiscoverLocationLines(opts: {
     return { line1: dist, line2: city ?? null };
   }
   if (sameCity(opts.viewerCity, opts.profileCity)) {
-    return { line1: "Dans ton secteur", line2: null };
+    return { line1: opts.labels?.sameSector ?? "Dans ton secteur", line2: null };
   }
   if (city) {
-    return { line1: `Indication zone · ${city}`, line2: null };
+    return { line1: `${opts.labels?.zoneHintPrefix ?? "Area hint"} · ${city}`, line2: null };
   }
   return { line1: null, line2: null };
 }

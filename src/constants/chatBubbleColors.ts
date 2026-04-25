@@ -22,7 +22,7 @@ export type ChatBubbleColorDef = {
 
 export const CHAT_BUBBLE_COLORS: Record<ChatBubbleColorKey, ChatBubbleColorDef> = {
   red: {
-    label: "Rouge",
+    label: "colors.red",
     bubbleSurfaceClass: "border-[#FF1E2D]/45 bg-[#FF1E2D] text-white",
     previewClass: "bg-[#FF1E2D]",
     inputFocusClass: "focus:border-[#FF1E2D]/60 focus:ring-[#FF1E2D]/35",
@@ -30,7 +30,7 @@ export const CHAT_BUBBLE_COLORS: Record<ChatBubbleColorKey, ChatBubbleColorDef> 
     dotClass: "bg-[#FF1E2D]",
   },
   violet: {
-    label: "Violet",
+    label: "colors.purple",
     bubbleSurfaceClass: "border-violet-600/40 bg-violet-600 text-white",
     previewClass: "bg-violet-600",
     inputFocusClass: "focus:border-violet-400/70 focus:ring-violet-400/35",
@@ -38,7 +38,7 @@ export const CHAT_BUBBLE_COLORS: Record<ChatBubbleColorKey, ChatBubbleColorDef> 
     dotClass: "bg-violet-500",
   },
   green: {
-    label: "Vert",
+    label: "colors.green",
     bubbleSurfaceClass: "border-emerald-600/40 bg-emerald-600 text-white",
     previewClass: "bg-emerald-600",
     inputFocusClass: "focus:border-emerald-400/70 focus:ring-emerald-400/35",
@@ -46,7 +46,7 @@ export const CHAT_BUBBLE_COLORS: Record<ChatBubbleColorKey, ChatBubbleColorDef> 
     dotClass: "bg-emerald-500",
   },
   yellow: {
-    label: "Jaune",
+    label: "colors.yellow",
     bubbleSurfaceClass: "border-amber-400/55 bg-amber-300 text-neutral-900",
     previewClass: "bg-amber-300",
     inputFocusClass: "focus:border-amber-300/70 focus:ring-amber-300/35",
@@ -54,7 +54,7 @@ export const CHAT_BUBBLE_COLORS: Record<ChatBubbleColorKey, ChatBubbleColorDef> 
     dotClass: "bg-amber-400",
   },
   white: {
-    label: "Blanc",
+    label: "colors.white",
     bubbleSurfaceClass: "border-zinc-400/70 bg-white text-neutral-900",
     previewClass: "bg-white",
     inputFocusClass: "focus:border-zinc-200/70 focus:ring-zinc-200/30",

@@ -38,13 +38,22 @@ import {
   getAvailableProposalActions,
 } from "../lib/messages/activityProposalRules";
 import { ensureConversationWindow } from "../lib/ensureConversationWindow";
-import {
-  BLOCK_PROFILE_CONFIRM,
-  BLOCK_PROFILE_LINK_LABEL,
-  CHAT_FIRST_MESSAGE_HINT_HOMME,
-  REPORT_LINK_LABEL,
-  SAFETY_CONTENT_REFUSAL,
-} from "../constants/copy";
+import { SAFETY_CONTENT_REFUSAL } from "../constants/copy";
+
+function userFacingError(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  message: string,
+): string {
+  if (message === SAFETY_CONTENT_REFUSAL) return t("safety_content_refusal");
+  if (
+    message.startsWith("chat_") ||
+    message.startsWith("proposal_") ||
+    message.startsWith("safety_")
+  ) {
+    return t(message);
+  }
+  return message;
+}
 import { canUserSendChatTextMessage } from "../lib/chatFirstMessagePolicy";
 import { ReportModal } from "../components/ReportModal";
 import { VerifiedBadge } from "../components/VerifiedBadge";
@@ -62,6 +71,7 @@ import {
   saveConversationMessageBubbleThemeToStorage,
   type MessageBubbleTheme,
 } from "../lib/messageBubbleTheme";
+import { useTranslation } from "../i18n/useTranslation";
 
 const CHAT_WINDOW_HOURS_MS = 48 * 60 * 60 * 1000;
 /** 1 h après le créneau pour proposer un retour discret (anti-prompt agressif). */
@@ -76,11 +86,7 @@ const CHAT_DEFAULT_ACCENT: MessageBubbleTheme = "violet";
 
 export type ActivityFeedbackSentiment = "positive" | "neutral" | "negative";
 
-const CHAT_QUICK_SUGGESTIONS = [
-  "Salut ! Tu es dispo bientôt ?",
-  "On se fixe un lieu ensemble ?",
-  "Partant(e) pour un créneau ?",
-] as const;
+const CHAT_QUICK_SUGGESTION_KEYS = ["chat_quick_1", "chat_quick_2", "chat_quick_3"] as const;
 
 type ChatSessionPhase = "new_match" | "active_chat" | "inactive";
 
@@ -190,10 +196,6 @@ function buildOverlapSlotSuggestions(
   return suggestions.slice(0, 2);
 }
 
-function formatProposalWhenLine(p: ProposalRow): string {
-  return p.time_slot?.trim() || "Date à confirmer";
-}
-
 function normalizeProposalStatus(p: ProposalRow): string {
   return normalizeActivityProposalStatus(p.status);
 }
@@ -203,36 +205,38 @@ function isCounterProposedModalStatus(status: string | null | undefined): boolea
   return s === "counter_proposed" || s === "countered" || s === "replaced" || s === "reschedule_requested";
 }
 
-function genericProposalError() {
-  return "Une erreur est survenue. Réessaie.";
+function proposalStatusCardLine(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  p: ProposalRow,
+): string {
+  const s = normalizeProposalStatus(p);
+  if (s === "accepted") return t("proposal_status_card_accepted");
+  if (s === "declined") return t("proposal_status_card_declined");
+  if (s === "expired") return t("proposal_status_card_expired");
+  if (s === "cancelled") return t("proposal_status_card_cancelled");
+  if (s === "reschedule_requested") return t("proposal_status_card_reschedule");
+  if (s === "alternative_requested") return t("proposal_status_card_alternative");
+  if (s === "replaced" || s === "countered") return t("proposal_status_card_counter");
+  if (s === "pending" || s === "proposed") return t("proposal_status_card_pending");
+  return t("proposal_status_card_generic");
 }
 
-function proposalStatusLabelFr(p: ProposalRow): string {
+function proposalFrozenLine(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  p: ProposalRow,
+): string {
   const s = normalizeProposalStatus(p);
-  if (s === "accepted") return "Acceptée";
-  if (s === "declined") return "Refusée";
-  if (s === "expired") return "Expirée";
-  if (s === "cancelled") return "Annulée";
-  if (s === "reschedule_requested") return "Replanification demandée";
-  if (s === "alternative_requested") return "Autre activité demandée";
-  if (s === "replaced" || s === "countered") return "Contre-proposition envoyée";
-  if (s === "pending" || s === "proposed") return "En attente de réponse";
-  return "Proposition";
-}
-
-/** Libellé figé sous la carte / le détail lorsque la proposition n’est plus modifiable. */
-function proposalFrozenStateLineFr(p: ProposalRow): string {
-  const s = normalizeProposalStatus(p);
-  if (s === "accepted") return "✅ Accepté";
-  if (s === "declined") return "Pas dispo pour cette activité";
-  if (s === "expired") return "Proposition expirée";
-  if (s === "cancelled") return "Proposition annulée";
-  if (s === "reschedule_requested") return "Replanification demandée";
-  if (s === "countered" || s === "replaced") return "Contre-proposition envoyée";
-  return proposalStatusLabelFr(p);
+  if (s === "accepted") return t("proposal_frozen_accepted");
+  if (s === "declined") return t("proposal_frozen_declined");
+  if (s === "expired") return t("proposal_frozen_expired");
+  if (s === "cancelled") return t("proposal_frozen_cancelled");
+  if (s === "reschedule_requested") return t("proposal_frozen_reschedule");
+  if (s === "countered" || s === "replaced") return t("proposal_frozen_counter");
+  return proposalStatusCardLine(t, p);
 }
 
 export default function Chat() {
+  const { t, language } = useTranslation();
   const { conversationId } = useParams<{ conversationId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
@@ -389,7 +393,7 @@ export default function Chat() {
     authWatchdogRef.current = window.setTimeout(() => {
       if (!authLoading) return;
       console.error("[Chat loading] timeout watchdog triggered");
-      const msg = "Chargement de session trop long. Vérifiez la connexion puis réessayez.";
+      const msg = t("chat_err_auth_timeout");
       console.error("[Chat loading] setting error state:", msg);
       setAuthGateError(msg);
       setLoading(false);
@@ -401,7 +405,7 @@ export default function Chat() {
         authWatchdogRef.current = null;
       }
     };
-  }, [authLoading]);
+  }, [authLoading, t]);
 
   const reloadProposals = useCallback(async (cid: string) => {
     console.log("[Chat] reloadProposals: start", { conversationId: cid });
@@ -455,7 +459,7 @@ export default function Chat() {
       });
       if (error) {
         logSupabaseTableError(CHAT_MESSAGES_TABLE, "select", error);
-        return error.message?.trim() || "Erreur lors du chargement des messages.";
+        return error.message?.trim() || t("chat_err_messages_load");
       }
       setChatMessages((data as TextMessageRow[]) ?? []);
       if (user?.id) {
@@ -469,7 +473,7 @@ export default function Chat() {
       }
       return null;
     },
-    [user?.id],
+    [user?.id, t],
   );
 
   useEffect(() => {
@@ -488,7 +492,7 @@ export default function Chat() {
       if (cancelled) return;
       if (chatLoadSeqRef.current !== seq) return;
       console.error("[Chat loading] timeout watchdog triggered");
-      const msg = "Le chargement de la session est trop long. Vérifiez votre connexion puis réessayez.";
+      const msg = t("chat_err_session_timeout");
       console.error("[Chat loading] setting error state:", msg);
       setLoadError(msg);
       setLoading(false);
@@ -501,13 +505,13 @@ export default function Chat() {
       console.log("[Chat loading] start fetch");
       try {
         if (!conversationId) {
-          const msg = "Aucun identifiant de session.";
+          const msg = t("chat_err_no_conversation");
           console.error("[Chat loading] setting error state:", msg);
           setLoadError(msg);
           return;
         }
         if (!user?.id) {
-          const msg = "Connectez-vous pour accéder à cette session.";
+          const msg = t("chat_err_login");
           console.error("[Chat loading] setting error state:", msg);
           setLoadError(msg);
           return;
@@ -536,13 +540,13 @@ export default function Chat() {
         if (cancelled) return;
 
         if (convErr) {
-          const msg = convErr.message?.trim() || "Erreur lors du chargement de la session (Supabase).";
+          const msg = convErr.message?.trim() || t("chat_err_conversation");
           console.error("[Chat loading] setting error state:", msg);
           setLoadError(msg);
           return;
         }
         if (!conv?.match_id) {
-          const msg = "Session introuvable.";
+          const msg = t("chat_err_conversation_not_found");
           console.error("[Chat loading] setting error state:", msg);
           setLoadError(msg);
           return;
@@ -567,13 +571,13 @@ export default function Chat() {
         if (cancelled) return;
 
         if (mErr) {
-          const msg = mErr.message?.trim() || "Erreur lors du chargement du match (Supabase).";
+          const msg = mErr.message?.trim() || t("chat_err_match");
           console.error("[Chat loading] setting error state:", msg);
           setLoadError(msg);
           return;
         }
         if (!mRow) {
-          const msg = "Session introuvable.";
+          const msg = t("chat_err_conversation_not_found");
           console.error("[Chat loading] setting error state:", msg);
           setLoadError(msg);
           return;
@@ -587,7 +591,7 @@ export default function Chat() {
             reason: "user not in match pair",
             currentUserId: user.id,
           });
-          const msg = "Accès non autorisé.";
+          const msg = t("chat_err_forbidden");
           console.error("[Chat loading] setting error state:", msg);
           setLoadError(msg);
           return;
@@ -671,7 +675,7 @@ export default function Chat() {
       } catch (e) {
         console.error("[Chat loading] caught error:", e);
         const message = e instanceof Error ? e.message : String(e);
-        const msg = message.trim() ? message : "Une erreur est survenue pendant le chargement.";
+        const msg = message.trim() ? message : t("chat_err_load");
         console.error("[Chat loading] setting error state:", msg);
         setLoadError(msg);
       } finally {
@@ -687,7 +691,7 @@ export default function Chat() {
       cancelled = true;
       clearWatchdog();
     };
-  }, [authLoading, conversationId, user?.id, navState?.matchedByUserId, reloadProposals, reloadChatMessages]);
+  }, [authLoading, conversationId, user?.id, navState?.matchedByUserId, reloadProposals, reloadChatMessages, t]);
 
   const scrollToProposalCard = useCallback((proposalId: string) => {
     requestAnimationFrame(() => {
@@ -926,15 +930,15 @@ export default function Chat() {
       windowExpiresAt ?? (matchOpenedAt != null ? matchOpenedAt + CHAT_WINDOW_HOURS_MS : null);
     if (baseExpiresAt == null) return null;
     const remainingMs = Math.max(0, baseExpiresAt - nowTick);
-    if (remainingMs <= 0) return "Fenêtre de proposition expirée";
+    if (remainingMs <= 0) return t("session_window_expired");
     const remainingHours = Math.max(1, Math.ceil(remainingMs / (60 * 60 * 1000)));
-    return `${remainingHours}h restantes pour proposer une activité`;
-  }, [windowExpiresAt, matchOpenedAt, nowTick]);
+    return t("session_timer", { hours: String(remainingHours) });
+  }, [windowExpiresAt, matchOpenedAt, nowTick, t]);
 
   const sharedSportsLine = useMemo(() => {
-    if (sharedSports.length === 0) return "Sport en commun à définir";
+    if (sharedSports.length === 0) return t("session_no_sport");
     return sharedSports.join(" • ");
-  }, [sharedSports]);
+  }, [sharedSports, t]);
 
   const canSendChatText = useMemo(() => {
     if (!user?.id || !partnerUserId || !pairChatMeta) return true;
@@ -948,10 +952,10 @@ export default function Chat() {
   }, [user?.id, partnerUserId, pairChatMeta, chatMessages.length]);
 
   const proposalStatusLabel = useMemo(() => {
-    if (hasAcceptedProposal) return "Une rencontre est déjà planifiée";
-    if (pendingProposal) return "Un créneau est déjà en attente";
+    if (hasAcceptedProposal) return t("session_card_planned");
+    if (pendingProposal) return t("session_notice_pending");
     return null;
-  }, [pendingProposal, hasAcceptedProposal]);
+  }, [pendingProposal, hasAcceptedProposal, t]);
   const pendingWithoutResponse = useMemo(() => {
     if (!pendingProposal) return false;
     const createdMs = parseCreatedMs(pendingProposal.created_at);
@@ -1043,32 +1047,33 @@ export default function Chat() {
   }, [chatMessages, proposals, proposalsById, conversationId, sortedProposalsDesc]);
 
   async function sendActivity(payload: ActivityPayload, replaceProposalId: string | null = null) {
-    if (!user?.id || !conversationId || !chatMatchId) throw new Error("Non connecté");
-    if (pairBlocked) throw new Error("Échange impossible avec ce profil.");
-    if (proposalActionInFlightId !== null) throw new Error("Une action est déjà en cours.");
+    if (!user?.id || !conversationId || !chatMatchId) throw new Error("chat_error_not_connected");
+    if (pairBlocked) throw new Error("chat_error_exchange_blocked");
+    if (proposalActionInFlightId !== null) throw new Error("chat_error_action_in_flight");
 
     const notePrefix = hasPlus ? "[Proposition prioritaire SPLove+] " : "";
     const note = `${notePrefix}${payload.message.trim()}`.trim();
     const pl = payload.place.trim();
     if (messageContainsDisallowedContent(note) || (pl.length > 0 && messageContainsDisallowedContent(pl))) {
-      throw new Error(SAFETY_CONTENT_REFUSAL);
+      throw new Error("safety_content_refusal");
     }
 
     const fallbackSchedule = computeProposalSchedule(payload.when);
     const scheduledAtIso = payload.scheduledAt?.trim() || fallbackSchedule.scheduledAt;
+    const dateLocale = language === "en" ? "en-GB" : "fr-FR";
     const timeLabel = (() => {
       if (!scheduledAtIso) return fallbackSchedule.timeLabel;
       const d = new Date(scheduledAtIso);
       if (Number.isNaN(d.getTime())) return fallbackSchedule.timeLabel;
-      return d.toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" });
+      return d.toLocaleString(dateLocale, { dateStyle: "medium", timeStyle: "short" });
     })();
-    const loc = payload.place.trim() || "À définir";
+    const loc = payload.place.trim() || t("place_to_define");
 
     if (replaceProposalId) {
       const prev = proposals.find((x) => x.id === replaceProposalId);
       if (!prev) {
         if (import.meta.env.DEV) console.debug("[Chat] sendActivity counter: proposal not found", replaceProposalId);
-        throw new Error("Proposition introuvable.");
+        throw new Error("chat_error_proposal_not_found");
       }
       const ctx = buildProposalRulesContext({
         proposal: prev,
@@ -1119,7 +1124,7 @@ export default function Chat() {
   async function handleAutoRelance() {
     if (!user?.id || !conversationId || !pendingProposal || autoRelanceRunning) return;
     if (!autoRelanceEnabled || !hasPlus) {
-      setMessagePolicyError("La relance automatique est reservee a SPLove+.");
+      setMessagePolicyError(t("chat_error_auto_relance_plus"));
       return;
     }
     if (hasAutoRelanceBeenSent(user.id, pendingProposal.id)) return;
@@ -1128,12 +1133,12 @@ export default function Chat() {
     const { error } = await supabase.from(CHAT_MESSAGES_TABLE).insert({
       conversation_id: conversationId,
       sender_id: user.id,
-      body: "Relance SPLove+ : je te remets la proposition en haut, dis-moi si ce creneau te va 🙂",
+      body: t("chat_auto_relance_message"),
     });
     setAutoRelanceRunning(false);
 
     if (error) {
-      setMessagePolicyError("Relance impossible pour le moment.");
+      setMessagePolicyError(t("chat_error_relance_failed"));
       return;
     }
     markAutoRelanceSent(user.id, pendingProposal.id);
@@ -1163,17 +1168,17 @@ export default function Chat() {
   async function sendChatMessage() {
     if (!user?.id || !conversationId) return;
     if (pairBlocked) {
-      setMessagePolicyError("Échange impossible avec ce profil.");
+      setMessagePolicyError(t("chat_error_exchange_blocked"));
       return;
     }
     if (!canSendChatText) {
-      setMessagePolicyError(CHAT_FIRST_MESSAGE_HINT_HOMME);
+      setMessagePolicyError(t("chat_first_message_policy_homme"));
       return;
     }
     const text = draftMessage.trim();
     if (!text) return;
     if (messageContainsDisallowedContent(text)) {
-      setMessagePolicyError(SAFETY_CONTENT_REFUSAL);
+      setMessagePolicyError(t("safety_content_refusal"));
       return;
     }
     setMessagePolicyError(null);
@@ -1189,7 +1194,7 @@ export default function Chat() {
       logSupabaseTableError(CHAT_MESSAGES_TABLE, "insert", error);
       const msg = (error.message ?? "").toLowerCase();
       if (error.code === "23514" || /contenu non autorisé|splove:/i.test(msg)) {
-        setMessagePolicyError(SAFETY_CONTENT_REFUSAL);
+        setMessagePolicyError(t("safety_content_refusal"));
       }
       return;
     }
@@ -1205,18 +1210,18 @@ export default function Chat() {
     }
     if (pairBlocked) {
       console.error("[Chat] add blocked reason", "pairBlocked");
-      setMessagePolicyError("Échange impossible avec ce profil.");
+      setMessagePolicyError(t("chat_error_exchange_blocked"));
       return;
     }
     if (!canSendChatText) {
       console.error("[Chat] add blocked reason", "firstMessagePolicy");
-      setMessagePolicyError(CHAT_FIRST_MESSAGE_HINT_HOMME);
+      setMessagePolicyError(t("chat_first_message_policy_homme"));
       return;
     }
     const text = draftMessage.trim();
     if (!text) {
       console.error("[Chat] add blocked reason", "emptyDraft");
-      setMessagePolicyError("Écrivez un message avant d’envoyer.");
+      setMessagePolicyError(t("chat_error_write_first"));
       return;
     }
     console.log("[Chat] add payload", { body: text, conversationId, senderId: user.id });
@@ -1229,7 +1234,7 @@ export default function Chat() {
 
     const p = proposals.find((x) => x.id === proposalId);
     if (!p) {
-      setMessagePolicyError("Proposition introuvable.");
+      setMessagePolicyError(t("chat_error_proposal_not_found"));
       return;
     }
     const ctx = buildProposalRulesContext({
@@ -1242,7 +1247,7 @@ export default function Chat() {
     const gate = assertProposalActionAllowed(action, ctx);
     if (!gate.ok) {
       if (import.meta.env.DEV) console.debug("[Chat] respondToProposal blocked", gate.reason);
-      setMessagePolicyError(gate.reason);
+      setMessagePolicyError(t(gate.reason));
       return;
     }
 
@@ -1260,7 +1265,8 @@ export default function Chat() {
       await reloadProposals(conversationId);
       await reloadChatMessages(conversationId);
     } catch (e) {
-      setMessagePolicyError(e instanceof Error ? e.message : genericProposalError());
+      const msg = e instanceof Error ? e.message : t("chat_error_generic");
+      setMessagePolicyError(userFacingError(t, msg));
     } finally {
       setProposalActionInFlightId(null);
     }
@@ -1268,7 +1274,7 @@ export default function Chat() {
 
   async function handleBlockPartner() {
     if (!user?.id || !partnerUserId || blockPartnerInFlightRef.current) return;
-    if (!window.confirm(BLOCK_PROFILE_CONFIRM)) return;
+    if (!window.confirm(t("block_profile_confirm"))) return;
     blockPartnerInFlightRef.current = true;
     try {
       const { error } = await insertBlock(user.id, partnerUserId);
@@ -1305,7 +1311,7 @@ export default function Chat() {
       return;
     }
     if (hasAcceptedProposal) {
-      setMessagePolicyError("Une activité est déjà confirmée dans cette conversation.");
+      setMessagePolicyError(t("chat_error_activity_confirmed"));
       return;
     }
     setModalOpen(true);
@@ -1314,9 +1320,9 @@ export default function Chat() {
   if (!conversationId) {
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-app-bg p-6 font-sans">
-        <p className="text-sm text-red-600">Aucun identifiant de session.</p>
+        <p className="text-sm text-red-600">{t("chat_err_no_conversation")}</p>
         <Link className="mt-6 text-sm font-semibold text-[#FF1E2D] underline" to="/discover">
-          Retour à Découvrir
+          {t("chat_back_to_discover")}
         </Link>
       </div>
     );
@@ -1325,7 +1331,7 @@ export default function Chat() {
   if (authLoading && !authGateError) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center bg-app-bg p-6 font-sans">
-        <p className="text-sm text-app-muted">Chargement de la session…</p>
+        <p className="text-sm text-app-muted">{t("chat_loading_session")}</p>
       </div>
     );
   }
@@ -1335,7 +1341,7 @@ export default function Chat() {
       <div className="flex min-h-0 flex-1 flex-col bg-app-bg p-6 font-sans">
         <p className="text-sm text-red-600">{authGateError}</p>
         <Link className="mt-6 text-sm font-semibold text-[#FF1E2D] underline" to="/discover">
-          Retour à Découvrir
+          {t("chat_back_to_discover")}
         </Link>
       </div>
     );
@@ -1344,9 +1350,9 @@ export default function Chat() {
   if (!user?.id) {
     return (
       <div className="flex min-h-0 flex-1 flex-col bg-app-bg p-6 font-sans">
-        <p className="text-sm text-red-600">Connectez-vous pour accéder à cette session.</p>
+        <p className="text-sm text-red-600">{t("chat_err_login")}</p>
         <Link className="mt-6 text-sm font-semibold text-[#FF1E2D] underline" to="/discover">
-          Retour à Découvrir
+          {t("chat_back_to_discover")}
         </Link>
       </div>
     );
@@ -1355,7 +1361,7 @@ export default function Chat() {
   if (loading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center bg-app-bg p-6 font-sans">
-        <p className="text-sm text-app-muted">Chargement de la session…</p>
+        <p className="text-sm text-app-muted">{t("chat_loading_session")}</p>
       </div>
     );
   }
@@ -1365,7 +1371,7 @@ export default function Chat() {
       <div className="flex min-h-0 flex-1 flex-col bg-app-bg p-6 font-sans">
         <p className="text-sm text-red-600">{loadError}</p>
         <Link className="mt-6 text-sm font-semibold text-[#FF1E2D] underline" to="/discover">
-          Retour à Découvrir
+          {t("chat_back_to_discover")}
         </Link>
       </div>
     );
@@ -1379,7 +1385,7 @@ export default function Chat() {
             to="/discover"
             className="text-[13px] font-semibold text-[#FF1E2D] underline-offset-2 hover:underline"
           >
-            Retour à Découvrir
+            {t("chat_back_to_discover")}
           </Link>
           <button
             type="button"
@@ -1388,7 +1394,7 @@ export default function Chat() {
               setChatStyleOpen(false);
             }}
             aria-expanded={chatOptionsOpen}
-            aria-label="Options de la discussion"
+            aria-label={t("chat_options_aria")}
             className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-app-border bg-app-bg text-app-muted transition hover:bg-app-border hover:text-app-text"
           >
             <span className="text-base leading-none">•••</span>
@@ -1401,13 +1407,13 @@ export default function Chat() {
               onClick={() => setChatStyleOpen((v) => !v)}
               className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[13px] font-medium text-app-text transition hover:bg-app-border/50"
             >
-              <span>Style de discussion</span>
+              <span>{t("chat_style")}</span>
               <span className="text-app-muted">{chatStyleOpen ? "−" : "+"}</span>
             </button>
             {chatStyleOpen ? (
               <div className="mt-1 space-y-2 rounded-xl bg-app-bg/80 px-2 py-2">
                 <p className="px-1 text-[11px] leading-snug text-app-muted">
-                  Tes messages à toi dans cette conversation ; le reste reste sobre.
+                  {t("chat_style_hint")}
                 </p>
                 <div className="space-y-1">
                   {CHAT_ACCENT_OPTIONS.map((opt) => {
@@ -1432,9 +1438,9 @@ export default function Chat() {
                       >
                         <span className="flex items-center gap-2">
                           <span className={`h-2.5 w-2.5 rounded-full ${optDef.dotClass}`} />
-                          {optDef.label}
+                          {t(optDef.label)}
                         </span>
-                        {active ? <span className="text-[11px]">Actif</span> : null}
+                        {active ? <span className="text-[11px]">{t("active")}</span> : null}
                       </button>
                     );
                   })}
@@ -1454,10 +1460,14 @@ export default function Chat() {
             <div className="h-11 w-11 shrink-0 rounded-full bg-app-border ring-2 ring-app-border" />
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-app-muted">Session</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-app-muted">
+              {t("session_title")}
+            </p>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-lg font-bold text-app-text">
-                {partnerName ? `Avec ${partnerName}` : "Sortie à organiser"}
+                {partnerName
+                  ? t("session_with", { name: partnerName })
+                  : t("chat_plan_activity")}
               </h1>
               {partnerPhotoVerified ? <VerifiedBadge variant="compact" /> : null}
             </div>
@@ -1473,7 +1483,7 @@ export default function Chat() {
             className="rounded-xl px-3 py-2 text-[12px] font-semibold transition disabled:opacity-60"
             style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
           >
-            {hasPlus ? "+ Proposer (prioritaire)" : "+ Proposer"}
+            {hasPlus ? `+ ${t("chat_propose_priority")}` : `+ ${t("chat_propose_add")}`}
           </button>
         </div>
         {partnerUserId && user?.id ? (
@@ -1483,7 +1493,7 @@ export default function Chat() {
               onClick={() => setReportOpen(true)}
               className="text-[12px] font-medium text-app-muted underline decoration-app-border underline-offset-2 hover:text-app-muted"
             >
-              {REPORT_LINK_LABEL}
+              {t("report_profile")}
             </button>
             {!pairBlocked ? (
               <button
@@ -1491,7 +1501,7 @@ export default function Chat() {
                 onClick={() => void handleBlockPartner()}
                 className="text-[12px] font-medium text-app-muted underline decoration-app-border underline-offset-2 hover:text-app-muted"
               >
-                {BLOCK_PROFILE_LINK_LABEL}
+                {t("hide_profile")}
               </button>
             ) : null}
           </div>
@@ -1501,16 +1511,16 @@ export default function Chat() {
       <main className="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col px-4 py-4">
         {pairBlocked ? (
           <p className="mb-3 rounded-xl border border-app-border bg-app-border/90 px-3 py-2.5 text-sm leading-snug text-app-text">
-            Vous ne pouvez plus organiser de sortie avec cette personne.
+            {t("chat_blocked_organize")}
           </p>
         ) : null}
         {!pairBlocked ? (
           <div className="mb-3 rounded-2xl border border-app-border/90 bg-app-bg/90 px-4 py-3 shadow-sm ring-1 ring-white/[0.05]">
             {chatSessionPhase === "new_match" ? (
               <>
-                <p className="text-[13px] font-semibold leading-snug text-app-text">Message système</p>
+                <p className="text-[13px] font-semibold leading-snug text-app-text">{t("system_message")}</p>
                 <p className="mt-1 text-[12px] leading-relaxed text-app-muted">
-                  Vous avez matché 🎯 Vous avez 48h pour proposer une activité autour d’un sport en commun.
+                  {t("chat_match_intro")}
                 </p>
                 <button
                   type="button"
@@ -1518,19 +1528,16 @@ export default function Chat() {
                   className="mt-3 w-full rounded-xl py-2.5 text-[13px] font-bold shadow-sm transition hover:opacity-95"
                   style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
                 >
-                  Proposer une activité
+                  {t("propose_activity")}
                 </button>
               </>
             ) : chatSessionPhase === "active_chat" ? (
               <p className="text-[13px] leading-snug">
-                <span className="font-semibold text-app-text">Échange en cours.</span>{" "}
-                <span className="text-app-muted">Proposez un créneau quand vous êtes prêts.</span>
+                <span className="font-semibold text-app-text">{t("chat_in_progress")}</span>{" "}
+                <span className="text-app-muted">{t("chat_propose_when_ready")}</span>
               </p>
             ) : (
-              <p className="text-[13px] leading-relaxed text-app-muted">
-                Fenêtre privilégiée passée — vous pouvez encore écrire ou relancer la rencontre depuis le bloc
-                ci-dessous.
-              </p>
+              <p className="text-[13px] leading-relaxed text-app-muted">{t("chat_inactive_window_hint")}</p>
             )}
           </div>
         ) : null}
@@ -1545,8 +1552,7 @@ export default function Chat() {
         {!pairBlocked && pendingWithoutResponse ? (
           <div className="mb-3 rounded-2xl border border-app-border/80 bg-app-card px-4 py-3 shadow-sm">
             <p className="text-[12px] leading-snug text-app-muted">
-              Trigger inactivite : la proposition attend une reponse.{" "}
-              {hasPlus ? "Tu peux lancer une relance auto." : "SPLove+ peut relancer automatiquement."}
+              {t("chat_pending_nudge")} {hasPlus ? t("chat_pending_nudge_cta_plus") : t("chat_pending_nudge_cta_free")}
             </p>
             {hasPlus ? (
               <button
@@ -1555,7 +1561,7 @@ export default function Chat() {
                 onClick={() => void handleAutoRelance()}
                 className="mt-2 rounded-xl border border-app-border bg-app-bg px-3 py-2 text-[12px] font-semibold text-app-text disabled:opacity-50"
               >
-                {autoRelanceRunning ? "Relance..." : "Relance automatique"}
+                {autoRelanceRunning ? t("chat_relance_sending") : t("chat_relance_auto")}
               </button>
             ) : (
               <button
@@ -1563,19 +1569,19 @@ export default function Chat() {
                 onClick={() => navigate("/splove-plus")}
                 className="mt-2 rounded-xl border border-app-border bg-app-bg px-3 py-2 text-[12px] font-semibold text-app-text"
               >
-                Decouvrir SPLove+
+                {t("chat_discover_splove_plus")}
               </button>
             )}
           </div>
         ) : null}
         {!pairBlocked && hasAcceptedProposal ? (
           <div className="mb-3 rounded-2xl border border-emerald-400/20 bg-emerald-950/35 px-4 py-3 text-center shadow-sm ring-1 ring-emerald-400/10">
-            <p className="text-[13px] font-semibold text-emerald-100">Activité confirmée ✅</p>
+            <p className="text-[13px] font-semibold text-emerald-100">{`${t("chat_activity_confirmed")} ✅`}</p>
             <Link
               to="/mes-rencontres"
               className="mt-2 inline-flex rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-[12px] font-semibold text-emerald-100 transition hover:bg-emerald-300/20"
             >
-              Voir dans Mes rencontres
+              {t("chat_see_meetups")}
             </Link>
           </div>
         ) : null}
@@ -1587,9 +1593,7 @@ export default function Chat() {
           onProposeClick={() => {
             if (hasPendingProposal) {
               console.error("[Chat] add blocked", "pendingProposalExists");
-              setMessagePolicyError(
-                "Un créneau est déjà en attente. Répondez sur la carte ou proposez un autre moment.",
-              );
+              setMessagePolicyError(t("chat_error_slot_pending_detail"));
               return;
             }
             setModalOpen(true);
@@ -1612,16 +1616,16 @@ export default function Chat() {
         {feedbackEligibleProposal && !pairBlocked ? (
           <div className="mb-3 rounded-2xl border border-app-border/70 bg-app-card/90 px-3 py-2.5 shadow-sm ring-1 ring-white/[0.04]">
             <p className="text-[11px] font-medium leading-snug text-app-muted">
-              Un mot sur votre sortie ? Optionnel — ça aide à faire remonter les profils impliqués.
+              {t("chat_feedback_outing_hint")}
             </p>
             <div className="mt-2 flex flex-wrap gap-2">
               {(
                 [
-                  { s: "positive" as const, label: "👍 Bien passé" },
-                  { s: "neutral" as const, label: "😐 Mitigé" },
-                  { s: "negative" as const, label: "👎 Pas ouf" },
+                  { s: "positive" as const, labelKey: "chat_feedback_positive" as const },
+                  { s: "neutral" as const, labelKey: "chat_feedback_neutral" as const },
+                  { s: "negative" as const, labelKey: "chat_feedback_negative" as const },
                 ] as const
-              ).map(({ s, label }) => (
+              ).map(({ s, labelKey }) => (
                 <button
                   key={s}
                   type="button"
@@ -1629,7 +1633,7 @@ export default function Chat() {
                   onClick={() => void submitActivityOutcome(feedbackEligibleProposal.id, s)}
                   className="rounded-full border border-app-border/90 bg-app-bg px-3 py-1.5 text-[11px] font-semibold text-app-text transition hover:bg-app-border disabled:opacity-50"
                 >
-                  {label}
+                  {t(labelKey)}
                 </button>
               ))}
             </div>
@@ -1668,16 +1672,14 @@ export default function Chat() {
             disabled={pairBlocked}
             className="mb-3 w-full rounded-xl border border-app-border bg-app-card py-3 text-sm font-semibold text-app-text shadow-sm transition hover:bg-app-border disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Proposer une activité
+            {t("propose_activity")}
           </button>
         )}
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4">
           {chatTimeline.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-app-border bg-app-card/80 px-4 py-8 text-center">
-              <p className="text-sm leading-relaxed text-app-muted">
-                Ajoutez un détail pour lancer la sortie — proposer un vrai créneau reste possible quand vous voulez.
-              </p>
+              <p className="text-sm leading-relaxed text-app-muted">{t("chat_empty_thread_hint")}</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -1735,28 +1737,28 @@ export default function Chat() {
         <div className="shrink-0 space-y-3 border-t border-app-border/80 bg-app-bg pt-3">
           {!pairBlocked && partnerName && partnerTypingUntil > Date.now() ? (
             <p className="text-[12px] italic leading-snug text-app-muted" aria-live="polite">
-              {partnerName} est en train d’écrire…
+              {t("chat_typing", { name: partnerName ?? "" })}
             </p>
           ) : null}
           {!canSendChatText && chatMessages.length === 0 ? (
             <p className="rounded-xl border border-app-border/90 bg-app-card px-3 py-2.5 text-[13px] leading-relaxed text-app-muted">
-              {CHAT_FIRST_MESSAGE_HINT_HOMME}
+              {t("chat_first_message_policy_homme")}
             </p>
           ) : null}
           {!pairBlocked && canSendChatText ? (
-            <div className="flex flex-wrap gap-2" aria-label="Suggestions de messages">
-              {CHAT_QUICK_SUGGESTIONS.map((s) => (
+            <div className="flex flex-wrap gap-2" aria-label={t("chat_quick_suggestions_aria")}>
+              {CHAT_QUICK_SUGGESTION_KEYS.map((key) => (
                 <button
-                  key={s}
+                  key={key}
                   type="button"
                   onClick={() => {
-                    setDraftMessage(s);
+                    setDraftMessage(t(key));
                     setMessagePolicyError(null);
                     requestAnimationFrame(() => chatMessageInputRef.current?.focus());
                   }}
                   className="rounded-full border border-app-border/90 bg-app-card px-3 py-1.5 text-left text-[12px] font-medium leading-snug text-app-muted transition hover:border-app-accent/35 hover:text-app-text"
                 >
-                  {s}
+                  {t(key)}
                 </button>
               ))}
             </div>
@@ -1781,7 +1783,7 @@ export default function Chat() {
                     handleAddClick();
                   }
                 }}
-                placeholder="Ajoutez un détail pour la sortie…"
+                placeholder={t("chat_placeholder")}
                 rows={2}
                 disabled={sendingMessage || pairBlocked || !canSendChatText}
                 enterKeyHint="send"
@@ -1803,7 +1805,7 @@ export default function Chat() {
                   className="transition-opacity duration-150 ease-out group-active:opacity-80"
                 />
               </span>
-              Ajouter
+              {t("chat_add")}
             </button>
           </div>
           {messagePolicyError ? (
@@ -1816,9 +1818,7 @@ export default function Chat() {
           ) : null}
           {hasPendingProposal || hasAcceptedProposal ? (
             <p className="rounded-xl border border-app-border/80 bg-app-card/80 px-3 py-2.5 text-center text-[12px] leading-snug text-app-muted">
-              {hasAcceptedProposal
-                ? "Une rencontre est déjà planifiée — vous ne pouvez pas proposer un autre créneau ici."
-                : "Un créneau est déjà en attente de réponse."}
+              {hasAcceptedProposal ? t("chat_double_meetup") : t("chat_double_slot_waiting")}
             </p>
           ) : (
             <button
@@ -1830,7 +1830,7 @@ export default function Chat() {
               disabled={pairBlocked}
               className="w-full rounded-xl border border-app-border bg-app-card py-3 text-sm font-semibold text-app-text shadow-sm transition hover:bg-app-border disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Proposer une activité
+            {t("propose_activity")}
             </button>
           )}
         </div>
@@ -1852,47 +1852,51 @@ export default function Chat() {
           >
             <div className="border-b border-app-border/80 px-4 py-3">
               <h2 id="proposal-detail-title" className="text-base font-bold text-app-text">
-                Détail de la proposition
+                {t("proposal_detail_title")}
               </h2>
               {proposalDetail.supersedes_proposal_id ? (
                 <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-[#FF1E2D]/90">
-                  Contre-proposition
+                  {t("proposal_counter_badge")}
                 </p>
               ) : null}
-              <p className="mt-0.5 text-[12px] text-app-muted">{proposalStatusLabelFr(proposalDetail)}</p>
+              <p className="mt-0.5 text-[12px] text-app-muted">
+                {proposalStatusCardLine(t, proposalDetail)}
+              </p>
             </div>
             <div className="space-y-3 px-4 py-4 text-app-text">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">Activité</p>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">{t("activity")}</p>
                 <p className="mt-0.5 text-[15px] font-semibold">{proposalDetail.sport}</p>
               </div>
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">Quand</p>
-                <p className="mt-0.5 text-sm">{formatProposalWhenLine(proposalDetail)}</p>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">{t("when")}</p>
+                <p className="mt-0.5 text-sm">
+                  {proposalDetail.time_slot?.trim() || t("date_to_confirm")}
+                </p>
               </div>
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">Lieu</p>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">{t("place")}</p>
                 <p className="mt-0.5 text-sm">{proposalDetail.location?.trim() || "—"}</p>
               </div>
               {proposalDetail.note?.trim() ? (
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">Message</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">{t("message")}</p>
                   <p className="mt-0.5 whitespace-pre-wrap text-sm leading-snug">{proposalDetail.note}</p>
                 </div>
               ) : null}
               {user?.id && normalizeProposalStatus(proposalDetail) === "accepted" ? (
                 <div className="rounded-xl border border-app-border/80 bg-app-bg/80 px-3 py-2.5 text-[13px] leading-snug">
-                  <p className="font-semibold text-emerald-200/95">✅ Accepté</p>
+                  <p className="font-semibold text-emerald-200/95">{`✅ ${t("accepted")}`}</p>
                 </div>
               ) : null}
               {user?.id && normalizeProposalStatus(proposalDetail) === "declined" ? (
                 <div className="rounded-xl border border-app-border/80 bg-app-bg/80 px-3 py-2.5 text-[13px] leading-snug">
-                  <p className="font-semibold text-app-muted">❌ Refusé</p>
+                  <p className="font-semibold text-app-muted">{`❌ ${t("refused")}`}</p>
                 </div>
               ) : null}
               {user?.id && isCounterProposedModalStatus(proposalDetail.status) ? (
                 <div className="rounded-xl border border-app-border/80 bg-app-bg/80 px-3 py-2.5 text-[13px] leading-snug">
-                  <p className="font-semibold text-app-muted">🔁 Contre-proposition envoyée</p>
+                  <p className="font-semibold text-app-muted">{`🔁 ${t("counter_proposal_sent")}`}</p>
                 </div>
               ) : null}
               {user?.id &&
@@ -1909,7 +1913,7 @@ export default function Chat() {
                       className="w-full rounded-xl py-2.5 text-[13px] font-bold shadow-sm transition hover:opacity-95 disabled:opacity-50"
                       style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
                     >
-                      Oui
+                      {t("proposal_yes")}
                     </button>
                   ) : null}
                   {proposalDetailActions.decline ? (
@@ -1922,7 +1926,7 @@ export default function Chat() {
                       }}
                       className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border disabled:opacity-50"
                     >
-                      Non
+                      {t("proposal_no")}
                     </button>
                   ) : null}
                   {proposalDetailActions.counter ? (
@@ -1941,7 +1945,7 @@ export default function Chat() {
                       }}
                       className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border disabled:opacity-50"
                     >
-                      🔁 Proposer autre
+                      🔁 {t("proposal_counter_suggest")}
                     </button>
                   ) : null}
                 </div>
@@ -1955,7 +1959,9 @@ export default function Chat() {
               normalizeProposalStatus(proposalDetail) !== "declined" &&
               !isCounterProposedModalStatus(proposalDetail.status) ? (
                 <div className="rounded-xl border border-app-border/80 bg-app-bg/80 px-3 py-2.5 text-[13px] leading-snug">
-                  <p className="font-semibold text-app-muted">{proposalFrozenStateLineFr(proposalDetail)}</p>
+                  <p className="font-semibold text-app-muted">
+                    {proposalFrozenLine(t, proposalDetail)}
+                  </p>
                 </div>
               ) : null}
             </div>
@@ -1965,7 +1971,7 @@ export default function Chat() {
                 onClick={() => setProposalDetail(null)}
                 className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border"
               >
-                Fermer
+                {t("close")}
               </button>
             </div>
           </div>
@@ -1980,13 +1986,9 @@ export default function Chat() {
           setModalOpen(false);
         }}
         sharedSports={sharedSports}
-        titleOverride={counterReplaceProposalId ? "Contre-proposition" : undefined}
-        descriptionOverride={
-          counterReplaceProposalId
-            ? "Proposez une autre activité. La nouvelle proposition remplace la précédente dans la conversation."
-            : undefined
-        }
-        submitLabel={counterReplaceProposalId ? "Envoyer la nouvelle proposition" : undefined}
+        titleOverride={counterReplaceProposalId ? t("proposal_counter_modal_title") : undefined}
+        descriptionOverride={counterReplaceProposalId ? t("proposal_counter_modal_desc") : undefined}
+        submitLabel={counterReplaceProposalId ? t("proposal_counter_submit") : undefined}
         onBack={
           counterReplaceProposalId
             ? () => {

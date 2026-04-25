@@ -9,15 +9,17 @@ export function guidedProfileSentence(input: {
   sport_phrase?: string | null;
   sport_feeling?: string | null;
   firstCommonSport: string | null;
+  commonSportLineSuffix?: string;
+  genericFallback?: string;
 }): string {
   const phrase = input.sport_phrase?.trim();
   if (phrase) return phrase.length > 140 ? `${phrase.slice(0, 137).trim()}…` : phrase;
   const feel = input.sport_feeling?.trim();
   if (feel) return feel.length > 120 ? `${feel.slice(0, 117).trim()}…` : feel;
   if (input.firstCommonSport) {
-    return `${input.firstCommonSport} — envie d’une vraie sortie.`;
+    return `${input.firstCommonSport} — ${input.commonSportLineSuffix ?? "ready for a real outing."}`;
   }
-  return "Envie de bouger ensemble, sans attendre.";
+  return input.genericFallback ?? "Envie de bouger ensemble, sans attendre.";
 }
 
 /** Libellé court d’intention (BDD : Amical | Amoureux). */
@@ -49,15 +51,16 @@ export function filterDiscoverReasonsForDisplay(
 /** Indication de zone floue — jamais de distance km exacte sans géoloc serveur. */
 export function softAreaHint(
   viewerCity: string | null,
-  profileCity: string | null | undefined
+  profileCity: string | null | undefined,
+  labels?: { nearby?: string; twoSectors?: string },
 ): string | null {
   const b = profileCity?.trim();
   if (!b) return null;
   const a = viewerCity?.trim();
   if (a && a.toLowerCase() === b.toLowerCase()) {
-    return "Secteur voisin du vôtre (indication profil)";
+    return labels?.nearby ?? "Secteur voisin du vôtre (indication profil)";
   }
-  return "Deux secteurs — à cadrer sur un créneau commun";
+  return labels?.twoSectors ?? "Deux secteurs — à cadrer sur un créneau commun";
 }
 
 /** Écran match — phrase d’élan (pas de lieu ni horaire précis). */

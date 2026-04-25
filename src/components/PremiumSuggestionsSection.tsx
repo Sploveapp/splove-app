@@ -16,6 +16,7 @@ type Props = {
   subtitle?: string;
   items: PremiumSuggestion[];
   ctaLabel?: string;
+  commonSportLabel?: string;
   onCardCta?: (id: string) => void;
 };
 
@@ -30,6 +31,7 @@ export function PremiumSuggestionsSection({
   subtitle = "Des profils compatibles pour une vraie rencontre par le sport.",
   items,
   ctaLabel = "Ouvrir la fiche",
+  commonSportLabel = "Common ground",
   onCardCta,
 }: Props) {
   return (
@@ -60,7 +62,9 @@ export function PremiumSuggestionsSection({
                 </p>
                 {item.verified ? <VerifiedBadge variant="compact" /> : null}
               </div>
-              <p className="mt-0.5 text-xs text-app-muted">Terrain commun : {item.commonSport}</p>
+              <p className="mt-0.5 text-xs text-app-muted">
+                {commonSportLabel} : {item.commonSport}
+              </p>
               <p className="mt-1 text-xs text-app-text">
                 {item.projectionCopy || FALLBACK[index % FALLBACK.length]}
               </p>

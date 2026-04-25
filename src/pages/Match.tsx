@@ -12,6 +12,7 @@ import { ensureConversationWindow } from "../lib/ensureConversationWindow";
 import { BETA_MODE } from "../constants/beta";
 import { buildCreateActivityProposalRpcArgs } from "../lib/messages/activityProposalMutations";
 import { createAutoProposalForMatchIfEligible } from "../services/activityProposals.service";
+import { useTranslation } from "../i18n/useTranslation";
 
 export type MatchLocationState = {
   partnerFirstName?: string | null;
@@ -23,6 +24,7 @@ export type MatchLocationState = {
 };
 
 export default function Match() {
+  const { t } = useTranslation();
   const { conversationId } = useParams<{ conversationId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
@@ -79,14 +81,14 @@ export default function Match() {
   if (!conversationId) {
     return (
       <div className="p-6 text-center text-sm text-red-600">
-        Conversation introuvable.
+        {t("conversation_not_found")}
       </div>
     );
   }
 
   async function sendActivity(payload: ActivityPayload) {
-    if (!user?.id) throw new Error("Non connecté");
-    if (!conversationId) throw new Error("Conversation introuvable.");
+    if (!user?.id) throw new Error(t("not_connected"));
+    if (!conversationId) throw new Error(t("conversation_not_found"));
     const { timeLabel } = computeProposalSchedule(payload.when);
     console.log("[Activity] create proposal", {
       conversation_id: conversationId,
@@ -140,18 +142,18 @@ export default function Match() {
             <div className="mx-auto w-28 overflow-hidden rounded-2xl ring-2 ring-app-border">
               <img
                 src={partnerPhoto}
-                alt={partnerName ? `Photo de ${partnerName}` : "Photo du profil"}
+                alt={partnerName ? `${t("photo_of")} ${partnerName}` : t("profile_photo")}
                 className="aspect-[3/4] h-full w-full object-cover"
               />
             </div>
           )}
-          <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.2em] text-app-muted">Match</p>
+          <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.2em] text-app-muted">{t("match")}</p>
           <h1 className="mt-2 text-[1.35rem] font-bold leading-snug tracking-tight text-app-text sm:text-2xl">
-            Passez au réel
+            {t("move_to_real")}
           </h1>
           {partnerName && (
             <p className="mt-2 text-[15px] font-medium text-app-text">
-              Avec {partnerName}
+              {t("chat_with")} {partnerName}
               {sharedSports.length > 0 ? (
                 <span className="block pt-1 text-[13px] font-semibold text-[#FF1E2D]">
                   {sharedSports.slice(0, 3).join(" · ")}
@@ -160,15 +162,15 @@ export default function Match() {
             </p>
           )}
           <p className="mt-5 rounded-xl border border-app-accent/25 bg-app-bg/80 px-3 py-3 text-[14px] font-medium leading-relaxed text-app-text">
-            Point d’élan — {momentum}
+            {t("momentum_point")} - {momentum}
           </p>
           <p className="mt-4 text-[13px] leading-relaxed text-app-muted">{COPY_BANNER_48H}</p>
           <p className="mt-1.5 text-sm leading-relaxed text-app-muted">
-            Pas besoin d’écrire un roman — un créneau suffit pour lancer le mouvement.
+            {t("no_novel_needed")}
           </p>
           {activeProposalStatus && (
             <p className="mt-3 inline-flex rounded-full bg-[#FF1E2D]/10 px-3 py-1 text-[12px] font-semibold text-[#FF1E2D]">
-              Proposition d’activité en cours
+              {t("activity_proposal_in_progress")}
             </p>
           )}
 
@@ -179,14 +181,14 @@ export default function Match() {
               className="w-full rounded-2xl py-3.5 text-[15px] font-bold shadow-md transition hover:opacity-95"
               style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              Proposer une activité
+              {t("propose_activity")}
             </button>
             <button
               type="button"
               onClick={goChat}
               className="w-full rounded-2xl border border-app-border bg-app-card py-3.5 text-[15px] font-semibold text-app-text hover:bg-app-border"
             >
-              Envoyer un message
+              {t("send_message")}
             </button>
           </div>
           {!BETA_MODE ? (

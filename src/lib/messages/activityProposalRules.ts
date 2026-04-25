@@ -129,10 +129,10 @@ export function getBlockedActionReason(
   action: ProposalActionKind,
   ctx: ProposalRulesContext,
 ): string | null {
-  if (!ctx.dataReliable) return "Données de proposition insuffisantes.";
-  if (!ctx.conversationReady) return "Session non prête.";
-  if (ctx.pairBlocked) return "Échange impossible avec ce profil.";
-  if (!ctx.currentUserId) return "Non connecté.";
+  if (!ctx.dataReliable) return "proposal_error_data_insufficient";
+  if (!ctx.conversationReady) return "proposal_error_session_not_ready";
+  if (ctx.pairBlocked) return "proposal_error_exchange_blocked";
+  if (!ctx.currentUserId) return "proposal_error_not_connected";
 
   const allowed =
     action === "accept"
@@ -144,18 +144,18 @@ export function getBlockedActionReason(
           : canCancelProposal(ctx);
   if (allowed) return null;
 
-  if (isProposalClosed(ctx.payload, ctx.proposal)) return "Cette proposition n’est plus modifiable.";
+  if (isProposalClosed(ctx.payload, ctx.proposal)) return "proposal_error_no_longer_editable";
 
   if (action === "cancel") {
-    if (!isProposalOwnedByCurrentUser(ctx.payload, ctx.currentUserId)) return "Seul l’auteur peut annuler.";
-    return "Annulation impossible pour cet état.";
+    if (!isProposalOwnedByCurrentUser(ctx.payload, ctx.currentUserId)) return "proposal_error_only_author_cancel";
+    return "proposal_error_cancel_state";
   }
 
   if (isProposalOwnedByCurrentUser(ctx.payload, ctx.currentUserId)) {
-    return "Vous ne pouvez pas répondre à votre propre créneau.";
+    return "proposal_error_own_proposal";
   }
 
-  return "Action non autorisée.";
+  return "proposal_error_action_forbidden";
 }
 
 /** Contexte à partir d’une ligne fusionnée affichée dans le fil. */
