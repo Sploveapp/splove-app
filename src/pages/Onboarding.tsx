@@ -36,17 +36,55 @@ import { photoModerationHeadline, photoModerationRejectedDetail } from "../lib/p
 import { invokeModeratePhoto } from "../services/photoModeration.service";
 import type { PhotoModerationStatus } from "../types/photoModeration.types";
 
-const GENDER_OPTIONS = [
-  { value: "Femme", label: "Femme" },
-  { value: "Homme", label: "Homme" },
-  { value: "Non-binaire", label: "Non-binaire" },
-] as const;
+const genderOptions = [
+  { value: "female", label: "Femme" },
+  { value: "male", label: "Homme" },
+  { value: "trans_female", label: "Femme trans" },
+  { value: "trans_male", label: "Homme trans" },
+  { value: "non_binary", label: "Non-binaire" },
+];
 
 const INTERESTED_IN_OPTIONS = [
-  { value: "Homme", label: "Homme" },
-  { value: "Femme", label: "Femme" },
-  { value: "Tous", label: "Tous" },
+  { value: "women", label: "Femmes" },
+  { value: "men", label: "Hommes" },
+  { value: "trans_women", label: "Femmes trans" },
+  { value: "trans_men", label: "Hommes trans" },
+  { value: "non_binary", label: "Non-binaires" },
+  { value: "all", label: "Tous" },
 ] as const;
+const INTERESTED_IN_ALL_VALUE = "all";
+type InterestedInValue = (typeof INTERESTED_IN_OPTIONS)[number]["value"];
+
+function normalizeInterestedInValues(raw: unknown): InterestedInValue[] {
+  const mapLegacy = (v: string): InterestedInValue | "" => {
+    const n = v.trim().toLowerCase();
+    if (n === "femme" || n === "femmes" || n === "women") return "women";
+    if (n === "homme" || n === "hommes" || n === "men") return "men";
+    if (n === "femme trans" || n === "femmes trans" || n === "trans_women") return "trans_women";
+    if (n === "homme trans" || n === "hommes trans" || n === "trans_men") return "trans_men";
+    if (n === "non-binaire" || n === "non binaires" || n === "non_binary") return "non_binary";
+    if (n === "tous" || n === "all") return "all";
+    return "";
+  };
+  const source = Array.isArray(raw)
+    ? raw.map((x) => String(x ?? ""))
+    : typeof raw === "string"
+      ? raw.split(",")
+      : [];
+  const out: InterestedInValue[] = [];
+  for (const item of source) {
+    const mapped = mapLegacy(item);
+    if (mapped && !out.includes(mapped)) out.push(mapped);
+  }
+  if (out.includes(INTERESTED_IN_ALL_VALUE)) return [INTERESTED_IN_ALL_VALUE];
+  return out;
+}
+
+function serializeInterestedInValues(values: InterestedInValue[]): string | null {
+  if (values.length === 0) return null;
+  // TODO(db): if `profiles.looking_for` becomes text[]/jsonb, store this array directly.
+  return values.join(",");
+}
 
 /** Préférence horaire onboarding (tap) — stockée dans `sport_time`. */
 const ONBOARDING_TIME_QUICK_OPTIONS = [
@@ -231,87 +269,16 @@ function dbIntentFromUiIntent(uiValue: string): string {
   return "";
 }
 
-type SportOption = { id: string | number; name: string; slug?: string };
+type SportOption = {
+  id: string | number;
+  name: string;
+  category?: string | null;
+  active?: boolean;
+  is_featured?: boolean;
+};
 
-/** Clé de comparaison insensible aux accents / casse / ponctuation (fallback si slug BDD ≠ catalogues). */
-function normCompact(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{M}/gu, "")
-    .replace(/[^a-z0-9]+/g, "");
-}
-
-/**
- * Sports majeurs affichés par défaut : ordre fixe, plusieurs slugs possibles par slot
- * (schéma 034 vs 042 : lignes séparées ou lignes combinées).
- * `featuredKey` garantit une clé React stable si deux slots pointent vers la même ligne BDD.
- * `chipLabel` : libellé produit affiché sur le chip (indépendant du label BDD une fois l’id résolu).
- * `matchNormCompacts` : formes `normCompact(label)` pour retrouver une ligne même si le slug est générique.
- */
-const FEATURED_SPORT_SLOTS: {
-  featuredKey: string;
-  matchSlugs: string[];
-  chipLabel: string;
-  matchNormCompacts: string[];
-}[] = [
-  {
-    featuredKey: "course-a-pied",
-    matchSlugs: ["course-a-pied", "running"],
-    chipLabel: "Course à pied",
-    matchNormCompacts: ["courseapied", "running"],
-  },
-  {
-    featuredKey: "marche",
-    matchSlugs: ["marche", "marche-randonnee"],
-    chipLabel: "Marche",
-    matchNormCompacts: ["marche", "marcherandonnee"],
-  },
-  {
-    featuredKey: "randonnee",
-    matchSlugs: ["randonnee", "marche-randonnee"],
-    chipLabel: "Randonnée",
-    matchNormCompacts: ["randonnee", "marcherandonnee"],
-  },
-  { featuredKey: "tennis", matchSlugs: ["tennis"], chipLabel: "Tennis", matchNormCompacts: ["tennis"] },
-  { featuredKey: "padel", matchSlugs: ["padel"], chipLabel: "Padel", matchNormCompacts: ["padel"] },
-  {
-    featuredKey: "fitness",
-    matchSlugs: ["fitness", "fitness-musculation"],
-    chipLabel: "Fitness",
-    matchNormCompacts: ["fitness", "fitnessmusculation"],
-  },
-  {
-    featuredKey: "musculation",
-    matchSlugs: ["musculation", "fitness-musculation"],
-    chipLabel: "Musculation",
-    matchNormCompacts: ["musculation", "fitnessmusculation"],
-  },
-  { featuredKey: "skate", matchSlugs: ["skate"], chipLabel: "Skate", matchNormCompacts: ["skate"] },
-  { featuredKey: "velo", matchSlugs: ["velo"], chipLabel: "Vélo", matchNormCompacts: ["velo"] },
-  {
-    featuredKey: "natation",
-    matchSlugs: ["natation"],
-    chipLabel: "Natation",
-    matchNormCompacts: ["natation"],
-  },
-];
-
-const DEFAULT_SPORT_FALLBACK: SportOption[] = [
-  { id: "fallback-0", name: "Course à pied", slug: "course-a-pied" },
-  { id: "fallback-1", name: "Marche", slug: "marche" },
-  { id: "fallback-2", name: "Randonnée", slug: "randonnee" },
-  { id: "fallback-3", name: "Tennis", slug: "tennis" },
-  { id: "fallback-4", name: "Padel", slug: "padel" },
-  { id: "fallback-5", name: "Fitness", slug: "fitness" },
-  { id: "fallback-6", name: "Musculation", slug: "musculation" },
-  { id: "fallback-7", name: "Skate", slug: "skate" },
-  { id: "fallback-8", name: "Vélo", slug: "velo" },
-  { id: "fallback-9", name: "Natation", slug: "natation" },
-];
-
-/** 9 étapes formulaire ; écran succès séparé (`postOnboarding`). */
-const TOTAL_STEPS = 9;
+/** 11 étapes formulaire ; écran succès séparé (`postOnboarding`). */
+const TOTAL_STEPS = 11;
 
 const ONBOARDING_RADIUS_KM_OPTIONS = [10, 25, 50, 100] as const;
 const PHOTO_BUCKET = "profile-photos";
@@ -321,43 +288,83 @@ const PHOTO_ACCEPT_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 async function uploadOnboardingPhoto(
   userId: string,
   file: File,
-  kind: "portrait" | "full"
-): Promise<string> {
-  const ext =
-    file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
-  const path = `${userId}/${kind}-${Date.now()}.${ext}`;
-  console.log("[Onboarding submit] sending data:", {
-    step: `upload photo ${kind}`,
-    bucket: PHOTO_BUCKET,
-    path,
-    mimeType: file.type || `image/${ext}`,
-    sizeBytes: file.size,
-  });
-  const { error } = await supabase.storage.from(PHOTO_BUCKET).upload(path, file, {
-    upsert: true,
-    contentType: file.type || `image/${ext}`,
-  });
-  if (error) {
-    console.error("[Onboarding submit] error:", {
-      step: `upload photo ${kind}`,
+  kind: "portrait" | "activity"
+): Promise<string | null> {
+  try {
+    if (!(file instanceof File)) {
+      console.error("UPLOAD_FAILED", new Error("Invalid file object"));
+      return null;
+    }
+
+    console.log("UPLOAD_START", file);
+    console.log("FILE_TYPE", file.type);
+    console.log("FILE_SIZE", file.size);
+
+    const fileExtFromName = file.name.split(".").pop()?.trim().toLowerCase();
+    const fileExt =
+      fileExtFromName && /^[a-z0-9]+$/.test(fileExtFromName)
+        ? fileExtFromName
+        : file.type === "image/png"
+          ? "png"
+          : file.type === "image/webp"
+            ? "webp"
+            : "jpg";
+
+    const fileName = `${kind}_${Date.now()}.${fileExt}`;
+    const filePath = `${userId}/${fileName}`;
+
+    console.log("PHOTO_UPLOAD_START", {
+      userId,
+      fileName: file.name,
+      fileType: file.type || `image/${fileExt}`,
+      fileSize: file.size,
       bucket: PHOTO_BUCKET,
-      path,
-      message: error.message,
-      code: (error as { code?: string }).code,
-      details: (error as { details?: string }).details,
-      hint: (error as { hint?: string }).hint,
-      error,
+      path: filePath,
     });
-    throw error;
+
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from(PHOTO_BUCKET)
+      .upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error("UPLOAD_ERROR", uploadError);
+      console.error("PHOTO_STORAGE_UPLOAD_ERROR", uploadError);
+      const msg = `${uploadError.message ?? ""} ${(uploadError as { code?: string }).code ?? ""}`.toLowerCase();
+      if (
+        msg.includes("bucket") ||
+        msg.includes("policy") ||
+        msg.includes("permission") ||
+        msg.includes("not found") ||
+        msg.includes("403") ||
+        msg.includes("404")
+      ) {
+        console.error("STORAGE_BUCKET_OR_POLICY_PROBLEM");
+      }
+      throw uploadError;
+    }
+
+    console.log("UPLOAD_SUCCESS", uploadData);
+    console.log("PHOTO_STORAGE_UPLOAD_SUCCESS", uploadData);
+    const { data: publicUrlData } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(filePath);
+    return publicUrlData.publicUrl;
+  } catch (err) {
+    console.error("UPLOAD_FAILED", err);
+    return null;
   }
-  console.log("[Onboarding submit] result:", {
-    step: `upload photo ${kind}`,
-    ok: true,
-    bucket: PHOTO_BUCKET,
-    path,
-  });
+}
+
+function toStoragePublicUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const bucketPrefix = `${PHOTO_BUCKET}/`;
+  const path = raw.startsWith(bucketPrefix) ? raw.slice(bucketPrefix.length) : raw;
   const { data } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
-  return data.publicUrl;
+  return data.publicUrl ?? null;
 }
 
 const BIRTH_YEAR_MIN = 1900;
@@ -402,53 +409,6 @@ function tryParseBirthIso(digits: string): string | null {
   return `${yyyy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
 }
 
-type SportOptionFeatured = SportOption & { featuredKey: string };
-
-function getFeaturedSportsFromList(all: SportOption[]): SportOptionFeatured[] {
-  if (!all.length) return [];
-
-  const bySlug = new Map<string, SportOption>();
-  const byNormName = new Map<string, SportOption>();
-  for (const x of all) {
-    const rawSlug = x.slug != null ? String(x.slug).trim() : "";
-    if (rawSlug !== "") {
-      bySlug.set(rawSlug.toLowerCase(), x);
-    }
-    const nk = normCompact(x.name);
-    if (nk !== "" && !byNormName.has(nk)) {
-      byNormName.set(nk, x);
-    }
-  }
-
-  const out: SportOptionFeatured[] = [];
-  for (const slot of FEATURED_SPORT_SLOTS) {
-    let found: SportOption | null = null;
-    for (const slug of slot.matchSlugs) {
-      const hit = bySlug.get(slug.toLowerCase().trim());
-      if (hit) {
-        found = hit;
-        break;
-      }
-    }
-    if (!found) {
-      for (const compact of slot.matchNormCompacts) {
-        const hit = byNormName.get(compact);
-        if (hit) {
-          found = hit;
-          break;
-        }
-      }
-    }
-    if (!found) continue;
-    out.push({
-      ...found,
-      name: slot.chipLabel,
-      featuredKey: slot.featuredKey,
-    });
-  }
-  return out;
-}
-
 const inputClassName =
   "w-full box-border rounded-xl border border-app-border bg-app-bg py-2.5 px-3 text-base text-app-text placeholder:text-app-muted outline-none transition-[border-color,box-shadow] focus:border-app-accent/45 focus:ring-2 focus:ring-app-accent/15";
 
@@ -482,7 +442,7 @@ export default function Onboarding() {
   /** ISO `YYYY-MM-DD` uniquement si la date est complète et valide. */
   const [birthDate, setBirthDate] = useState("");
   const [gender, setGender] = useState("");
-  const [interestedIn, setInterestedIn] = useState("");
+  const [interestedIn, setInterestedIn] = useState<InterestedInValue[]>([]);
   const [intent, setIntent] = useState<OnboardingIntentUiValue | "">("");
   const [obLocCity, setObLocCity] = useState("");
   const [obLocRadiusKm, setObLocRadiusKm] = useState<number>(25);
@@ -490,8 +450,9 @@ export default function Onboarding() {
   const [obLocLng, setObLocLng] = useState<number | null>(null);
   const [obLocSource, setObLocSource] = useState<"manual" | "device" | null>(null);
   const [obLocGeoLoading, setObLocGeoLoading] = useState(false);
-  const [sportOptions, setSportOptions] = useState<SportOption[]>([]);
+  const [sportsCatalog, setSportsCatalog] = useState<SportOption[]>([]);
   const [selectedSportIds, setSelectedSportIds] = useState<(string | number)[]>([]);
+  const [selectedSports, setSelectedSports] = useState<SportOption[]>([]);
   const [sportLevelsById, setSportLevelsById] = useState<Record<string, string>>({});
   const [sportTime, setSportTime] = useState("");
   const [sportMotivations, setSportMotivations] = useState<string[]>([]);
@@ -501,6 +462,9 @@ export default function Onboarding() {
   const [postOnboarding, setPostOnboarding] = useState(false);
   const [portraitFile, setPortraitFile] = useState<File | null>(null);
   const [bodyFile, setBodyFile] = useState<File | null>(null);
+  const [portraitSavedUrl, setPortraitSavedUrl] = useState("");
+  const [bodySavedUrl, setBodySavedUrl] = useState("");
+  const [photoUploadingKind, setPhotoUploadingKind] = useState<null | "portrait" | "body">(null);
   const [practicePreferences, setPracticePreferences] = useState<string[]>([]);
   const [confirm18, setConfirm18] = useState(false);
   const [acceptTerms, setAcceptTerms] = useState(false);
@@ -536,12 +500,25 @@ export default function Onboarding() {
     });
   }
 
-  const SPORTS_FETCH_TIMEOUT_MS = 10_000;
+  const SPORTS_FETCH_TIMEOUT_MS = 2_000;
 
   async function saveOnboardingDraft(currentStep: number): Promise<void> {
     if (!user?.id) return;
     const userId = user.id;
     try {
+      const formDataSnapshot = {
+        first_name: firstName.trim() || null,
+        birth_date: birthDate || null,
+        gender: gender || null,
+        looking_for: serializeInterestedInValues(interestedIn),
+        meet_pref: intent ? dbIntentFromUiIntent(intent) : null,
+        intent: intent ? dbIntentFromUiIntent(intent) : null,
+        city: obLocCity.trim() || null,
+        selectedSports: selectedSports.map((s) => s.name),
+        portrait_url: portraitSavedUrl || null,
+        fullbody_url: bodySavedUrl || null,
+      };
+      console.log("STEP_SAVE_START", currentStep, formDataSnapshot);
       const nowIso = new Date().toISOString();
       const payload: Record<string, unknown> = {
         id: userId,
@@ -551,10 +528,12 @@ export default function Onboarding() {
         payload.first_name = firstName.trim() || null;
         payload.birth_date = birthDate || null;
         payload.gender = gender || null;
-        payload.looking_for = interestedIn || null;
+        payload.looking_for = serializeInterestedInValues(interestedIn);
       }
       if (currentStep >= 4) {
-        payload.intent = intent ? dbIntentFromUiIntent(intent) : null;
+        const dbIntent = intent ? dbIntentFromUiIntent(intent) : null;
+        payload.intent = dbIntent;
+        payload.meet_pref = dbIntent;
       }
       if (currentStep >= 2) {
         payload.city = obLocCity.trim() || null;
@@ -576,10 +555,14 @@ export default function Onboarding() {
       }
       if (currentStep >= 8) {
         payload.sport_phrase = sportPhraseOptional.trim() || null;
+        payload.portrait_url = portraitSavedUrl.trim() || null;
+        payload.fullbody_url = bodySavedUrl.trim() || null;
+        payload.main_photo_url = portraitSavedUrl.trim() || bodySavedUrl.trim() || null;
       }
       if (currentStep >= 9) payload.practice_preferences = practicePreferences;
       payload.onboarding_sports_count = selectedSportIds.length;
       payload.onboarding_sports_with_level_count = selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length;
+      console.log("PROFILE_UPDATE_PAYLOAD", payload);
 
       let { error: upsertError } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
       if (upsertError) {
@@ -601,19 +584,20 @@ export default function Onboarding() {
       }
       if (upsertError) {
         console.warn("[Onboarding draft] save failed", upsertError);
+        console.error("ONBOARDING_SAVE_ERROR", upsertError);
       }
 
       if (currentStep >= 3) {
-        const validSportIds = selectedSportIds.filter(
-          (id) => typeof id === "number" || (typeof id === "string" && !String(id).startsWith("fallback-"))
-        );
+        const validSportIds = await resolveSelectedSportIdsForPersistence();
+        console.log("SPORTS_PERSIST_START", selectedSports.map((s) => s.name));
         const { error: delErr } = await supabase.from("profile_sports").delete().eq("profile_id", userId);
         if (delErr) {
           console.warn("[Onboarding draft] profile_sports delete failed", delErr);
+          console.error("ONBOARDING_SAVE_ERROR", delErr);
           return;
         }
         if (validSportIds.length > 0) {
-          const { error: insErr } = await supabase
+          const { error: insErr, data: insData } = await supabase
             .from("profile_sports")
             .insert(
               validSportIds.map((sportId) => ({
@@ -621,12 +605,24 @@ export default function Onboarding() {
                 sport_id: sportId,
                 level: sportLevelsById[String(sportId)] ?? null,
               }))
-            );
-          if (insErr) console.warn("[Onboarding draft] profile_sports insert failed", insErr);
+            )
+            .select("sport_id");
+          if (insErr) {
+            console.warn("[Onboarding draft] profile_sports insert failed", insErr);
+            console.error("ONBOARDING_SAVE_ERROR", insErr);
+          }
+          console.log("SPORTS_PERSIST_RESULT", {
+            inserted: insData?.length ?? 0,
+            ids: validSportIds,
+            error: insErr?.message ?? null,
+          });
+        } else {
+          console.log("SPORTS_PERSIST_RESULT", { inserted: 0, ids: [], error: null });
         }
       }
     } catch (draftErr) {
       console.warn("[Onboarding draft] unexpected save error", draftErr);
+      console.error("ONBOARDING_SAVE_ERROR", draftErr);
     }
   }
 
@@ -643,18 +639,11 @@ export default function Onboarding() {
         });
 
         const queryPromise = (async () => {
-          let res = await supabase
+          const res = await supabase
             .from("sports")
-            .select("id, label, slug")
+            .select("id, label, category, active, is_featured")
             .eq("active", true)
             .order("label", { ascending: true });
-          if (res.error) {
-            console.warn("[Onboarding sports] fetch with active=true failed, retry without filter:", res.error.message);
-            res = await supabase
-              .from("sports")
-              .select("id, label, slug")
-              .order("label", { ascending: true });
-          }
           return res;
         })();
 
@@ -667,10 +656,8 @@ export default function Onboarding() {
 
         if (raced.kind === "timeout") {
           console.warn("[Onboarding sports] fetch result: timeout");
-          setSportOptions(DEFAULT_SPORT_FALLBACK);
-          setSportsLoadError(
-            "Le catalogue sport met trop de temps à répondre. Suggestions locales affichées — vous pourrez actualiser après l’inscription.",
-          );
+          setSportsCatalog([]);
+          setSportsLoadError("Catalogue sport indisponible. Aucun sport sélectionnable pour le moment.");
           return;
         }
 
@@ -679,25 +666,31 @@ export default function Onboarding() {
 
         if (e) {
           console.error("[Onboarding sports]", e);
-          setSportOptions(DEFAULT_SPORT_FALLBACK);
-          setSportsLoadError(e.message || "Chargement du catalogue impossible. Suggestions locales affichées.");
+          setSportsCatalog([]);
+          setSportsLoadError(e.message || "Chargement du catalogue impossible.");
           return;
         }
 
         const list = (data ?? []).map((r) => {
           const label = String((r.label as string | null) ?? "").trim();
-          const slug = (r.slug as string | null) ?? undefined;
-          return { id: r.id, name: label, slug };
+          return {
+            id: r.id,
+            name: label,
+            category: (r.category as string | null) ?? null,
+            active: r.active === true,
+            is_featured: r.is_featured === true,
+          };
         });
-        const finalList = list.length > 0 ? list : DEFAULT_SPORT_FALLBACK;
-        setSportOptions(finalList);
-        console.log("[Onboarding sports] sports count:", finalList.length);
-        if (!list.length) {
-          setSportsLoadError("Aucun sport renvoyé par le serveur. Suggestions locales affichées.");
-        }
+        setSportsCatalog(list);
+        console.log("[Onboarding sports] sports count:", list.length);
+        setSportsLoadError(
+          list.length > 0
+            ? null
+            : "Catalogue sport indisponible. Aucun sport sélectionnable pour le moment.",
+        );
       } catch (err) {
         console.error("[Onboarding sports] unexpected", err);
-        setSportOptions(DEFAULT_SPORT_FALLBACK);
+        setSportsCatalog([]);
         setSportsLoadError("Erreur inattendue lors du chargement des sports.");
       } finally {
         if (!cancelled) {
@@ -721,11 +714,11 @@ export default function Onboarding() {
   useEffect(() => {
     if (step !== 3) return;
     console.log("[Onboarding sports] loading:", loadingSports);
-    console.log("[Onboarding sports] sports count:", sportOptions.length);
+    console.log("[Onboarding sports] sports count:", sportsCatalog.length);
     console.log("[Onboarding sports] input disabled:", false);
     console.log("[Onboarding sports] selected sports:", selectedSportIds);
     console.log("[Onboarding sports] error:", sportsLoadError ?? error ?? null);
-  }, [step, loadingSports, sportOptions.length, selectedSportIds, sportsLoadError, error]);
+  }, [step, loadingSports, sportsCatalog.length, selectedSportIds, sportsLoadError, error]);
 
   useEffect(() => {
     if (!user?.id || authLoading || isProfileComplete || hydratedDraftRef.current) return;
@@ -755,7 +748,7 @@ export default function Onboarding() {
           setBirthInput(`${d}/${m}/${y}`);
         }
         setGender(String(row.gender ?? ""));
-        setInterestedIn(String(row.looking_for ?? ""));
+        setInterestedIn(normalizeInterestedInValues(row.looking_for));
         setIntent(uiIntentFromDbIntent(row.intent));
         setObLocCity(String(row.city ?? ""));
         setObLocLat(typeof row.latitude === "number" ? row.latitude : null);
@@ -777,6 +770,18 @@ export default function Onboarding() {
         setPracticePreferences(Array.isArray(row.practice_preferences) ? (row.practice_preferences as string[]) : []);
         const sp = row.sport_phrase;
         setSportPhraseOptional(typeof sp === "string" ? sp : "");
+        const hydratedPortrait =
+          toStoragePublicUrl(row.portrait_url) ??
+          toStoragePublicUrl(row.main_photo_url) ??
+          toStoragePublicUrl(row.avatar_url) ??
+          toStoragePublicUrl(row.portrait_path);
+        const hydratedBody =
+          toStoragePublicUrl(row.fullbody_url) ??
+          toStoragePublicUrl(row.activity_photo_path) ??
+          toStoragePublicUrl(row.fullbody_path) ??
+          toStoragePublicUrl(row.photo2_path);
+        setPortraitSavedUrl(hydratedPortrait ?? "");
+        setBodySavedUrl(hydratedBody ?? "");
 
         const { data: ps, error: sportErr } = await supabase
           .from("profile_sports")
@@ -830,34 +835,46 @@ export default function Onboarding() {
     }
   }, [postOnboarding, isProfileComplete, authLoading, isAuthInitialized, loading, navigate, user?.id]);
 
-  const featuredSports = useMemo(
-    () => getFeaturedSportsFromList(sportOptions),
-    [sportOptions]
-  );
+  const featuredSports = useMemo(() => {
+    return [...sportsCatalog]
+      .filter((s) => s.is_featured === true)
+      .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  }, [sportsCatalog]);
 
-  const featuredNameBySportId = useMemo(() => {
-    const m = new Map<string | number, string>();
-    for (const f of featuredSports) {
-      m.set(f.id, f.name);
-    }
-    return m;
-  }, [featuredSports]);
+  const otherSports = useMemo(() => {
+    return [...sportsCatalog]
+      .filter((s) => s.is_featured !== true)
+      .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  }, [sportsCatalog]);
 
   const searchMatches = useMemo(() => {
     const q = sportSearch.trim().toLowerCase();
-    if (q.length < 3) return [];
-    return sportOptions
+    if (q.length < 2) return [];
+    return sportsCatalog
       .filter((s) => {
-        const hay = `${s.name} ${s.slug ?? ""}`.toLowerCase();
+        const hay = `${s.name} ${s.category ?? ""}`.toLowerCase();
         return hay.includes(q) && !selectedSportIds.includes(s.id);
       })
       .slice(0, 10);
-  }, [sportSearch, sportOptions, selectedSportIds]);
+  }, [sportSearch, sportsCatalog, selectedSportIds]);
 
-  const selectedSports = useMemo(
-    () => sportOptions.filter((s) => selectedSportIds.includes(s.id)),
-    [sportOptions, selectedSportIds]
-  );
+  function toggleSportById(sportId: string | number): void {
+    const sportKey = String(sportId);
+    setSelectedSportIds((prev) => {
+      if (prev.some((id) => String(id) === sportKey)) {
+        return prev.filter((id) => String(id) !== sportKey);
+      }
+      if (prev.length >= 3) return prev;
+      return [...prev, sportId];
+    });
+  }
+
+  function addTypedSport(): void {
+    const firstMatch = searchMatches[0];
+    if (!firstMatch) return;
+    toggleSportById(firstMatch.id);
+    setSportSearch("");
+  }
 
   const portraitPreviewUrl = useMemo(
     () => (portraitFile ? URL.createObjectURL(portraitFile) : null),
@@ -867,6 +884,8 @@ export default function Onboarding() {
     () => (bodyFile ? URL.createObjectURL(bodyFile) : null),
     [bodyFile]
   );
+  const portraitDisplayUrl = portraitPreviewUrl || portraitSavedUrl || null;
+  const bodyDisplayUrl = bodyPreviewUrl || bodySavedUrl || null;
 
   useEffect(() => {
     return () => {
@@ -902,6 +921,21 @@ export default function Onboarding() {
       return changed ? next : prev;
     });
   }, [selectedSportIds]);
+
+  useEffect(() => {
+    const next = selectedSportIds
+      .map((id) => {
+        const fromCatalog = sportsCatalog.find((s) => String(s.id) === String(id));
+        if (fromCatalog) return fromCatalog;
+        return null;
+      })
+      .filter((s): s is SportOption => Boolean(s));
+    setSelectedSports(next);
+  }, [selectedSportIds, sportsCatalog]);
+
+  useEffect(() => {
+    console.log("SELECTED_SPORTS", selectedSports.map((s) => s.name));
+  }, [selectedSports]);
 
   if (authLoading) {
     return <SplashScreen />;
@@ -981,7 +1015,7 @@ export default function Onboarding() {
     birthDate !== "" &&
     isAdultFromBirthIso(birthDate) &&
     gender !== "" &&
-    interestedIn !== "" &&
+    interestedIn.length > 0 &&
     intent !== "" &&
     locationReady &&
     selectedSportIds.length >= 1 &&
@@ -990,8 +1024,8 @@ export default function Onboarding() {
     (sportTime === "Matin" || sportTime === "Soir") &&
     (sportIntensity === "chill" || sportIntensity === "intense") &&
     (planningStyle === "spontaneous" || planningStyle === "planned") &&
-    portraitFile != null &&
-    bodyFile != null &&
+    (portraitSavedUrl.trim() !== "" || portraitFile != null) &&
+    (bodySavedUrl.trim() !== "" || bodyFile != null) &&
     confirm18 &&
     acceptTerms;
 
@@ -1001,7 +1035,7 @@ export default function Onboarding() {
     if (birthDate === "") return "Indiquez une date de naissance complète (JJ/MM/AAAA).";
     if (!isAdultFromBirthIso(birthDate)) return "Vous devez avoir au moins 18 ans.";
     if (gender === "") return "Choisissez votre genre.";
-    if (interestedIn === "") return "Indiquez qui vous intéresse.";
+    if (interestedIn.length === 0) return "Indiquez qui vous intéresse.";
     if (intent === "") return "Choisissez un type de rencontre.";
     if (!locationReady) {
       if (![10, 25, 50, 100].includes(obLocRadiusKm)) return "Choisis un rayon de recherche.";
@@ -1021,8 +1055,10 @@ export default function Onboarding() {
     if (planningStyle !== "spontaneous" && planningStyle !== "planned") {
       return "Choisis plutôt spontané ou planifié.";
     }
-    if (portraitFile == null) return "Ajoute tes deux photos (étape Montre qui tu es).";
-    if (bodyFile == null) return "Ajoute tes deux photos (étape Montre qui tu es).";
+    if (portraitSavedUrl.trim() === "" && portraitFile == null)
+      return "Ajoute tes deux photos (étape Montre qui tu es).";
+    if (bodySavedUrl.trim() === "" && bodyFile == null)
+      return "Ajoute tes deux photos (étape Montre qui tu es).";
     if (!confirm18) return "Coche la confirmation « 18 ans ou plus ».";
     if (!acceptTerms) return "Accepte les conditions d’utilisation et la politique de confidentialité.";
     return null;
@@ -1031,10 +1067,60 @@ export default function Onboarding() {
   const finalStepBlockReason =
     step === TOTAL_STEPS && !canSubmit && !loading ? getCanSubmitBlockReason() : null;
 
-  function assignPhotoFile(
+  function toggleInterestedInOption(value: InterestedInValue): void {
+    setInterestedIn((prev) => {
+      if (value === INTERESTED_IN_ALL_VALUE) {
+        return prev.includes(INTERESTED_IN_ALL_VALUE) ? [] : [INTERESTED_IN_ALL_VALUE];
+      }
+      const withoutAll = prev.filter((v) => v !== INTERESTED_IN_ALL_VALUE);
+      if (withoutAll.includes(value)) {
+        return withoutAll.filter((v) => v !== value);
+      }
+      return [...withoutAll, value];
+    });
+  }
+
+  async function persistOnboardingPhotoInProfile(
+    userId: string,
+    kind: "portrait" | "body",
+    publicUrl: string
+  ): Promise<void> {
+    const payload: Record<string, unknown> = {
+      id: userId,
+      updated_at: new Date().toISOString(),
+      ...(kind === "portrait"
+        ? {
+            portrait_url: publicUrl,
+            avatar_url: publicUrl,
+          }
+        : {
+            fullbody_url: publicUrl,
+          }),
+    };
+
+    if (kind === "portrait") {
+      payload.main_photo_url = publicUrl;
+    } else if (!portraitSavedUrl.trim()) {
+      payload.main_photo_url = publicUrl;
+    }
+
+    const { data: profileUpdateData, error: profileUpdateError } = await supabase
+      .from("profiles")
+      .upsert(payload, { onConflict: "id" })
+      .select("id, portrait_url, fullbody_url, main_photo_url")
+      .maybeSingle();
+
+    if (profileUpdateError) {
+      console.error("PHOTO_PROFILE_UPDATE_ERROR", profileUpdateError);
+      throw profileUpdateError;
+    }
+    console.log("PHOTO_PROFILE_UPDATE_SUCCESS", profileUpdateData);
+  }
+
+  async function assignPhotoFile(
     file: File | null | undefined,
     kind: "portrait" | "body"
-  ): void {
+  ): Promise<void> {
     if (!file) return;
     setStepHint(null);
     setPhotoStepError(null);
@@ -1047,17 +1133,52 @@ export default function Onboarding() {
       setPhotoStepError("Chaque photo doit faire 5 Mo maximum.");
       return;
     }
+    if (!user?.id) {
+      setPhotoStepError("Photo non enregistrée. Réessaie.");
+      return;
+    }
+
     if (kind === "portrait") setPortraitFile(file);
     else setBodyFile(file);
+    setPhotoUploadingKind(kind);
+
+    try {
+      const uploadedUrl = await uploadOnboardingPhoto(
+        user.id,
+        file,
+        kind === "portrait" ? "portrait" : "activity"
+      );
+      if (!uploadedUrl) {
+        setPhotoStepError("Photo non enregistrée. Réessaie.");
+        return;
+      }
+      await persistOnboardingPhotoInProfile(user.id, kind, uploadedUrl);
+      if (kind === "portrait") {
+        setPortraitSavedUrl(uploadedUrl);
+        setPortraitFile(null);
+      } else {
+        setBodySavedUrl(uploadedUrl);
+        setBodyFile(null);
+      }
+      await saveOnboardingDraft(step);
+    } catch (uploadErr) {
+      logDetailedError("onboarding immediate photo upload", uploadErr, { kind });
+      setPhotoStepError("Photo non enregistrée. Réessaie.");
+    } finally {
+      setPhotoUploadingKind(null);
+    }
   }
 
-  const toggleSport = (id: string | number) => {
-    setSelectedSportIds((prev) => {
-      if (prev.includes(id)) return prev.filter((s) => s !== id);
-      if (prev.length >= 3) return prev;
-      return [...prev, id];
-    });
-  };
+  async function resolveSelectedSportIdsForPersistence(): Promise<(string | number)[]> {
+    const catalogById = new Map(sportsCatalog.map((s) => [String(s.id), s.id]));
+    const out: (string | number)[] = [];
+    for (const rawId of selectedSportIds) {
+      const id = catalogById.get(String(rawId));
+      if (id == null) continue;
+      if (!out.some((x) => String(x) === String(id))) out.push(id);
+    }
+    return out;
+  }
 
   function handleBirthInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const digits = birthDigitsFromRaw(e.target.value);
@@ -1085,17 +1206,23 @@ export default function Onboarding() {
         setStepHint("Vous devez avoir au moins 18 ans.");
         return false;
       }
+      return true;
+    }
+    if (current === 2) {
       if (!gender) {
         setStepHint("Choisissez votre genre.");
         return false;
       }
-      if (!interestedIn) {
+      return true;
+    }
+    if (current === 3) {
+      if (interestedIn.length === 0) {
         setStepHint("Indiquez qui vous intéresse.");
         return false;
       }
       return true;
     }
-    if (current === 2) {
+    if (current === 4) {
       const cityOk = obLocCity.trim().length >= 2;
       const coordsOk = obLocLat != null && obLocLng != null;
       if (!cityOk && !coordsOk) {
@@ -1108,7 +1235,7 @@ export default function Onboarding() {
       }
       return true;
     }
-    if (current === 3) {
+    if (current === 5) {
       if (selectedSportIds.length < 1) {
         setStepHint("Sélectionnez au moins 1 sport.");
         return false;
@@ -1123,29 +1250,33 @@ export default function Onboarding() {
       }
       return true;
     }
-    if (current === 4) {
+    if (current === 6) {
       if (!intent) {
         setStepHint("Choisis une intention.");
         return false;
       }
       return true;
     }
-    if (current === 5) {
+    if (current === 7) {
       return true;
     }
-    if (current === 6) {
-      if (!portraitFile) {
+    if (current === 8) {
+      if (photoUploadingKind !== null) {
+        setPhotoStepError("Enregistrement photo en cours…");
+        return false;
+      }
+      if (!portraitFile && portraitSavedUrl.trim() === "") {
         setPhotoStepError(ONBOARDING_AVATAR_REQUIRED);
         return false;
       }
-      if (!bodyFile) {
+      if (!bodyFile && bodySavedUrl.trim() === "") {
         setPhotoStepError(ONBOARDING_FULLBODY_REQUIRED);
         return false;
       }
       setPhotoStepError(null);
       return true;
     }
-    if (current === 7) {
+    if (current === 9) {
       if (sportTime !== "Matin" && sportTime !== "Soir") {
         setStepHint("Choisis un moment : matin ou soir.");
         return false;
@@ -1160,10 +1291,10 @@ export default function Onboarding() {
       }
       return true;
     }
-    if (current === 8) {
+    if (current === 10) {
       return true;
     }
-    if (current === 9) {
+    if (current === 11) {
       if (!confirm18) {
         setStepHint("Coche « J’ai 18 ans ou plus ».");
         return false;
@@ -1185,12 +1316,16 @@ export default function Onboarding() {
       return;
     }
     if (!validateStep(step)) return;
-    if (step === 2 && obLocSource === null && obLocCity.trim().length >= 2) {
+    if (step === 8 && photoUploadingKind !== null) {
+      setPhotoStepError("Enregistrement photo en cours…");
+      return;
+    }
+    if (step === 4 && obLocSource === null && obLocCity.trim().length >= 2) {
       setObLocSource("manual");
     }
     setError(null);
     setOptionalProfileWarning(null);
-    if (step !== 6) setPhotoStepError(null);
+    if (step !== 8) setPhotoStepError(null);
     setModerationSuccessNote(null);
     await saveOnboardingDraft(step);
     setStep((s) => Math.min(TOTAL_STEPS, s + 1));
@@ -1258,17 +1393,17 @@ export default function Onboarding() {
       console.error("[Onboarding submit] blocked: canSubmit false", { reason: hint });
       return;
     }
-    for (let s = 1; s <= 9; s++) {
+    for (let s = 1; s <= 11; s++) {
       if (!validateStep(s)) {
         setStep(s);
         return;
       }
     }
-    if (!portraitFile || !bodyFile) {
+    if ((portraitSavedUrl.trim() === "" && !portraitFile) || (bodySavedUrl.trim() === "" && !bodyFile)) {
       setPhotoStepError(
-        !portraitFile ? ONBOARDING_AVATAR_REQUIRED : ONBOARDING_FULLBODY_REQUIRED
+        portraitSavedUrl.trim() === "" && !portraitFile ? ONBOARDING_AVATAR_REQUIRED : ONBOARDING_FULLBODY_REQUIRED
       );
-      setStep(6);
+      setStep(8);
       return;
     }
 
@@ -1293,22 +1428,26 @@ export default function Onboarding() {
         selectedSportsCount: selectedSportIds.length,
       });
 
-      let portraitUrl: string;
-      let fullbodyUrl: string;
+      let portraitUrl: string = portraitSavedUrl.trim();
+      let fullbodyUrl: string = bodySavedUrl.trim();
       try {
-        console.log("[Onboarding submit] start: upload photo portrait");
-        portraitUrl = await uploadOnboardingPhoto(authUserId, portraitFile, "portrait");
-        console.log("[Onboarding submit] result: upload photo portrait", { portraitUrl });
-        console.log("[Onboarding submit] start: upload photo fullbody");
-        fullbodyUrl = await uploadOnboardingPhoto(authUserId, bodyFile, "full");
-        console.log("[Onboarding submit] result: upload photo fullbody", { fullbodyUrl });
+        if (portraitFile) {
+          console.log("[Onboarding submit] start: upload photo portrait");
+          const uploadedPortraitUrl = await uploadOnboardingPhoto(authUserId, portraitFile, "portrait");
+          if (!uploadedPortraitUrl) throw new Error("portrait upload failed");
+          portraitUrl = uploadedPortraitUrl;
+          console.log("[Onboarding submit] result: upload photo portrait", { portraitUrl });
+        }
+        if (bodyFile) {
+          console.log("[Onboarding submit] start: upload photo fullbody");
+          const uploadedBodyUrl = await uploadOnboardingPhoto(authUserId, bodyFile, "activity");
+          if (!uploadedBodyUrl) throw new Error("fullbody upload failed");
+          fullbodyUrl = uploadedBodyUrl;
+          console.log("[Onboarding submit] result: upload photo fullbody", { fullbodyUrl });
+        }
       } catch (uploadErr) {
         logDetailedError("upload photos", uploadErr);
-        setError(
-          uploadErr instanceof Error
-            ? "Impossible d’envoyer les photos. Réessayez."
-            : "Impossible d’envoyer les photos. Réessayez."
-        );
+        setError("Photo non enregistrée. Réessaie.");
         return;
       }
 
@@ -1379,7 +1518,7 @@ export default function Onboarding() {
         first_name: firstName.trim(),
         birth_date: birthDate,
         gender,
-        looking_for: interestedIn,
+        looking_for: serializeInterestedInValues(interestedIn),
         intent: dbIntentFromUiIntent(intent),
         city: obLocCity.trim() || null,
         latitude: obLocLat,
@@ -1394,20 +1533,24 @@ export default function Onboarding() {
         onboarding_sports_with_level_count: selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length,
       });
       const completionFlag = moderationAllowsComplete && completionFromData;
+      const nowIso = new Date().toISOString();
+      const intentDbValue = dbIntentFromUiIntent(intent);
+      const finalizedCompletionFlag = completionFlag;
 
       const profilePayload: Record<string, unknown> = {
         id: authUserId,
         first_name: firstName.trim(),
         birth_date: birthDate,
         gender,
-        looking_for: interestedIn,
-        intent: dbIntentFromUiIntent(intent),
+        looking_for: serializeInterestedInValues(interestedIn),
+        intent: intentDbValue,
+        meet_pref: intentDbValue,
         city: obLocCity.trim() || null,
         latitude: obLocLat,
         longitude: obLocLng,
         discovery_radius_km: obLocRadiusKm,
         location_source: locSourceResolved,
-        location_updated_at: new Date().toISOString(),
+        location_updated_at: nowIso,
         sport_time: sportTime || null,
         sport_intensity: sportIntensity || null,
         meet_vibe: null,
@@ -1420,9 +1563,11 @@ export default function Onboarding() {
         portrait_url: portraitUrl,
         fullbody_url: fullbodyUrl,
         main_photo_url: portraitUrl || fullbodyUrl,
-        profile_completed: completionFlag,
-        onboarding_completed: completionFlag,
-        updated_at: new Date().toISOString(),
+        profile_completed: finalizedCompletionFlag,
+        onboarding_completed: finalizedCompletionFlag,
+        accepted_terms_at: acceptTerms ? nowIso : null,
+        accepted_privacy_at: acceptTerms ? nowIso : null,
+        updated_at: nowIso,
       };
 
       if (PHOTO_VERIFICATION_PLACEHOLDER) {
@@ -1437,7 +1582,7 @@ export default function Onboarding() {
             ? `${photoModerationHeadline("rejected")} — ${detail}.`
             : photoModerationHeadline("rejected"),
         );
-        setStep(6);
+        setStep(8);
         const failPayload: Record<string, unknown> = {
           ...profilePayload,
           profile_completed: false,
@@ -1471,7 +1616,7 @@ export default function Onboarding() {
       }
 
       const prodSanitizeCtx: ProdPayloadSanitizeContext = {
-        interestedIn,
+        interestedIn: serializeInterestedInValues(interestedIn) ?? "",
         sportTime,
         practicePreferences,
         portraitUrl: portraitUrl,
@@ -1484,6 +1629,7 @@ export default function Onboarding() {
       let profileError: { message?: string; code?: string | number } | null = null;
       let upsertRow: unknown = null;
       let aggressivePhase = 0;
+      console.log("PROFILE_UPDATE_PAYLOAD", payloadForUpsert);
 
       for (let attempt = 0; attempt < 24; attempt++) {
         console.log("[Onboarding submit] sending data:", {
@@ -1638,10 +1784,8 @@ export default function Onboarding() {
 
       
 
-      const validSportIds = selectedSportIds.filter(
-        (id) =>
-          typeof id === "number" || (typeof id === "string" && !String(id).startsWith("fallback-"))
-      );
+      const validSportIds = await resolveSelectedSportIdsForPersistence();
+      console.log("SPORTS_PERSIST_START", selectedSports.map((s) => s.name));
 
       if (validSportIds.length > 0) {
         console.log("[Onboarding submit] sending data:", {
@@ -1684,16 +1828,44 @@ export default function Onboarding() {
 
         if (sportsError) {
           logDetailedError("profile_sports insert", sportsError, { rows });
+          console.error("ONBOARDING_SAVE_ERROR", sportsError);
           setError("Impossible d’enregistrer vos sports pour le moment.");
           return;
         }
+        console.log("SPORTS_PERSIST_RESULT", {
+          inserted: sportsData?.length ?? 0,
+          ids: validSportIds,
+          error: null,
+        });
+      } else {
+        console.log("SPORTS_PERSIST_RESULT", { inserted: 0, ids: [], error: null });
+      }
+
+      const { data: profileReloadRow, error: profileReloadError } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", authUserId)
+        .single();
+      if (profileReloadError) {
+        logDetailedError("profiles reload after submit", profileReloadError, { userId: authUserId });
       }
 
       console.log("[Onboarding submit] start: refetchProfile");
-      await refetchProfile();
-      console.log("[Onboarding submit] result: refetchProfile done");
+      const refreshedProfile = await refetchProfile();
+      console.log("[Onboarding submit] result: refetchProfile done", {
+        hasProfile: Boolean(refreshedProfile),
+        profile_completed: refreshedProfile?.profile_completed ?? null,
+        onboarding_completed:
+          (refreshedProfile as { onboarding_completed?: unknown } | null)?.onboarding_completed ?? null,
+      });
 
-      const gateOk = Boolean(upsertRow.profile_completed) || completionFlag;
+      const gateOk =
+        Boolean((profileReloadRow as { profile_completed?: unknown } | null)?.profile_completed === true) ||
+        Boolean((profileReloadRow as { onboarding_completed?: unknown } | null)?.onboarding_completed === true) ||
+        Boolean(refreshedProfile?.profile_completed) ||
+        (refreshedProfile as { onboarding_completed?: unknown } | null)?.onboarding_completed === true ||
+        Boolean(upsertRow.profile_completed) ||
+        finalizedCompletionFlag;
       if (!gateOk) {
         console.error("[Onboarding submit] verdict: upsert OK + select OK but gating KO");
         console.error("[Onboarding submit] gating incomplet après upsert", {
@@ -1717,7 +1889,9 @@ export default function Onboarding() {
         return;
       }
 
-      commitProfileRow(upsertRow);
+      if (profileReloadRow) commitProfileRow(profileReloadRow);
+      else if (refreshedProfile) commitProfileRow(refreshedProfile);
+      else commitProfileRow(upsertRow);
 
       if (moderationBanner) {
         await new Promise((r) => window.setTimeout(r, 1400));
@@ -1726,6 +1900,7 @@ export default function Onboarding() {
       setPostOnboarding(true);
     } catch (err) {
       logDetailedError("handleSubmit catch", err);
+      console.error("ONBOARDING_SAVE_ERROR", err);
       setError("Une erreur est survenue. Réessayez.");
     } finally {
       onboardingSubmitInFlightRef.current = false;
@@ -1776,7 +1951,7 @@ export default function Onboarding() {
                   SPLove
                 </p>
               </div>
-              {step === 1 ? (
+              {step <= 3 ? (
                 <p className="mt-1 max-w-[280px] text-center text-xs leading-snug text-app-muted sm:text-sm">
                   Le sport comme point de départ. Le reste vient en vrai.
                 </p>
@@ -1789,26 +1964,30 @@ export default function Onboarding() {
 
             <h1 className="mt-2.5 text-center text-base font-bold leading-snug text-app-text sm:text-lg">
               {step === 1 && "Parlons de toi"}
-              {step === 2 && "Où veux-tu rencontrer du monde ?"}
-              {step === 3 && "Quels sports te font vibrer ?"}
-              {step === 4 && "Tu es là pour quoi ?"}
-              {step === 5 && "Sur SPLove, les femmes font le premier pas."}
-              {step === 6 && "Montre qui tu es"}
-              {step === 7 && "Ton style"}
-              {step === 8 && "Ajoute une touche perso"}
-              {step === 9 && "Derniers détails"}
+              {step === 2 && "Tu es ?"}
+              {step === 3 && "Qui aimerais-tu rencontrer ?"}
+              {step === 4 && "Où veux-tu rencontrer du monde ?"}
+              {step === 5 && "Quels sports te font vibrer ?"}
+              {step === 6 && "Tu es là pour quoi ?"}
+              {step === 7 && "Sur SPLove, les femmes font le premier pas."}
+              {step === 8 && "Montre qui tu es"}
+              {step === 9 && "Ton style"}
+              {step === 10 && "Ajoute une touche perso"}
+              {step === 11 && "Derniers détails"}
             </h1>
             <p className="mt-0.5 text-center text-xs leading-snug text-app-muted sm:text-sm">
-              {step === 1 && "Prénom, date de naissance, genre et qui t’intéresse."}
-              {step === 2 && "On te montre des profils autour de ta zone, sans afficher ton adresse exacte."}
-              {step === 3 && "Choisis jusqu’à 3 sports"}
-              {step === 4 && "Un choix, c’est tout."}
-              {step === 5 &&
+              {step === 1 && "Ton prénom et ta date de naissance."}
+              {step === 2 && "On utilise cette info pour te proposer des profils cohérents."}
+              {step === 3 && "Tu peux choisir plusieurs options."}
+              {step === 4 && "On te montre des profils autour de ta zone, sans afficher ton adresse exacte."}
+              {step === 5 && "Choisis jusqu’à 3 sports"}
+              {step === 6 && "Un choix, c’est tout."}
+              {step === 7 &&
                 "Dans les matchs amoureux femme-homme, c’est la femme qui envoie le premier message. Pour les autres matchs, la personne qui valide le match peut écrire."}
-              {step === 6 && "2 photos suffisent pour commencer"}
-              {step === 7 && "Trois réglages rapides."}
-              {step === 8 && "Optionnel"}
-              {step === 9 && "Dernière ligne droite."}
+              {step === 8 && "2 photos suffisent pour commencer"}
+              {step === 9 && "Trois réglages rapides."}
+              {step === 10 && "Optionnel"}
+              {step === 11 && "Dernière ligne droite."}
             </p>
           </div>
 
@@ -1818,7 +1997,7 @@ export default function Onboarding() {
           >
             <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2.5 sm:px-4 sm:py-3">
               {step === 1 && (
-                <div className="space-y-3">
+                <div className="space-y-2.5 pb-2">
                   <div>
                     <label className={labelClassName} htmlFor="ob-first">
                       Prénom *
@@ -1857,46 +2036,66 @@ export default function Onboarding() {
                       <p className="mt-1 text-xs text-red-600">Vous devez avoir au moins 18 ans.</p>
                     )}
                   </div>
-                  <div>
-                    <label className={labelClassName} htmlFor="ob-gender">
-                      Genre *
-                    </label>
-                    <select
-                      id="ob-gender"
-                      value={gender}
-                      onChange={(e) => setGender(e.target.value)}
-                      className={inputClassName}
-                    >
-                      <option value="">Choisir</option>
-                      {GENDER_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className={labelClassName} htmlFor="ob-look">
-                      Intéressé(e) par *
-                    </label>
-                    <select
-                      id="ob-look"
-                      value={interestedIn}
-                      onChange={(e) => setInterestedIn(e.target.value)}
-                      className={inputClassName}
-                    >
-                      <option value="">Choisir</option>
-                      {INTERESTED_IN_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
                 </div>
               )}
 
               {step === 2 && (
+                <div className="space-y-3 pb-2">
+                  <span className={labelClassName}>Genre *</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {genderOptions.map((o) => {
+                      const active = gender === o.value;
+                      return (
+                        <button
+                          key={o.value}
+                          type="button"
+                          onClick={() => setGender(o.value)}
+                          className="min-h-[44px] rounded-xl border-2 px-2 py-2 text-sm font-semibold transition-all"
+                          style={{
+                            borderColor: active ? BRAND_BG : APP_BORDER,
+                            background: active ? BRAND_BG : APP_CARD,
+                            color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                          }}
+                          aria-pressed={active}
+                        >
+                          {o.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {step === 3 && (
+                <div className="space-y-3 pb-2">
+                  <span className={labelClassName}>Intéressé(e) par *</span>
+                  <div
+                    id="ob-look"
+                    className="grid max-h-44 grid-cols-2 gap-1.5 overflow-y-auto pr-1"
+                    role="group"
+                    aria-label="Intéressé(e) par"
+                  >
+                    {INTERESTED_IN_OPTIONS.map((o) => (
+                      <button
+                        key={o.value}
+                        type="button"
+                        onClick={() => toggleInterestedInOption(o.value)}
+                        className="min-h-[42px] rounded-xl border-2 px-2 py-1.5 text-[13px] font-semibold transition-all"
+                        style={{
+                          borderColor: interestedIn.includes(o.value) ? BRAND_BG : APP_BORDER,
+                          background: interestedIn.includes(o.value) ? BRAND_BG : APP_CARD,
+                          color: interestedIn.includes(o.value) ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                        }}
+                        aria-pressed={interestedIn.includes(o.value)}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {step === 4 && (
                 <div className="space-y-4">
                   <div>
                     <label className={labelClassName} htmlFor="ob-loc-city">
@@ -1943,7 +2142,7 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 3 && (
+              {step === 5 && (
                 <div className="space-y-2.5">
                   <p className="text-xs text-app-muted">Jusqu’à 3 sports · recherche ci-dessous</p>
 
@@ -1959,7 +2158,7 @@ export default function Onboarding() {
                         <button
                           key={String(s.id)}
                           type="button"
-                          onClick={() => toggleSport(s.id)}
+                          onClick={() => toggleSportById(s.id)}
                           className="rounded-full border px-2.5 py-1 text-xs font-semibold"
                           style={{
                             borderColor: BRAND_BG,
@@ -1967,27 +2166,23 @@ export default function Onboarding() {
                             color: TEXT_ON_BRAND,
                           }}
                         >
-                          {featuredNameBySportId.get(s.id) ?? s.name} ×
+                          {s.name} ×
                         </button>
                       ))}
                     </div>
                   )}
-                  {featuredSports.length > 0 && (
+                  {featuredSports.length > 0 ? (
                     <div>
-                      <span className="mb-1.5 block text-xs font-medium text-app-muted">
-                        Suggestions{loadingSports ? " (aperçu)" : ""}
-                      </span>
+                      <span className="mb-1.5 block text-xs font-medium text-app-muted">Les plus pratiqués</span>
                       <div className="flex flex-wrap gap-1.5">
                         {featuredSports.map((sport) => {
-                          const isSelected = selectedSportIds.includes(sport.id);
-                          const isDisabled = !isSelected && selectedSportIds.length >= 3;
+                          const isSelected = selectedSportIds.some((id) => String(id) === String(sport.id));
                           return (
                             <button
-                              key={sport.featuredKey}
+                              key={String(sport.id)}
                               type="button"
-                              onClick={() => toggleSport(sport.id)}
-                              disabled={isDisabled}
-                              className="rounded-xl border-2 py-2 px-3 text-xs font-semibold transition-opacity disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm"
+                              onClick={() => toggleSportById(sport.id)}
+                              className="rounded-xl border-2 py-2 px-3 text-xs font-semibold transition-opacity sm:text-sm"
                               style={{
                                 borderColor: isSelected ? BRAND_BG : APP_BORDER,
                                 background: isSelected ? BRAND_BG : APP_CARD,
@@ -2000,7 +2195,33 @@ export default function Onboarding() {
                         })}
                       </div>
                     </div>
-                  )}
+                  ) : null}
+
+                  {otherSports.length > 0 ? (
+                    <div>
+                      <span className="mb-1.5 block text-xs font-medium text-app-muted">Tous les sports</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {otherSports.map((sport) => {
+                          const isSelected = selectedSportIds.some((id) => String(id) === String(sport.id));
+                          return (
+                            <button
+                              key={String(sport.id)}
+                              type="button"
+                              onClick={() => toggleSportById(sport.id)}
+                              className="rounded-xl border-2 py-2 px-3 text-xs font-semibold transition-opacity sm:text-sm"
+                              style={{
+                                borderColor: isSelected ? BRAND_BG : APP_BORDER,
+                                background: isSelected ? BRAND_BG : APP_CARD,
+                                color: isSelected ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                              }}
+                            >
+                              {sport.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div>
                     <label className={labelClassName} htmlFor="ob-sport-search">
@@ -2013,10 +2234,16 @@ export default function Onboarding() {
                       placeholder="Rechercher un sport"
                       value={sportSearch}
                       onChange={(e) => setSportSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          addTypedSport();
+                        }
+                      }}
                       className={inputClassName}
                     />
-                    {sportSearch.trim().length > 0 && sportSearch.trim().length < 3 && (
-                      <p className="mt-1 text-xs text-app-muted">Encore {3 - sportSearch.trim().length} lettre(s).</p>
+                    {sportSearch.trim().length > 0 && sportSearch.trim().length < 2 && (
+                      <p className="mt-1 text-xs text-app-muted">Encore {2 - sportSearch.trim().length} lettre(s).</p>
                     )}
                     {searchMatches.length > 0 && (
                       <ul
@@ -2029,7 +2256,7 @@ export default function Onboarding() {
                               type="button"
                               className="w-full px-3 py-2 text-left hover:bg-app-border"
                               onClick={() => {
-                                toggleSport(s.id);
+                                toggleSportById(s.id);
                                 setSportSearch("");
                               }}
                             >
@@ -2047,7 +2274,7 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 4 && (
+              {step === 6 && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-1 gap-2.5">
                     {ONBOARDING_INTENT_CARDS.map((card) => {
@@ -2080,9 +2307,9 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 5 && <div className="min-h-[48px]" aria-hidden />}
+              {step === 7 && <div className="min-h-[48px]" aria-hidden />}
 
-              {step === 6 && (
+              {step === 8 && (
                 <div className="space-y-4">
                   {photoStepError && (
                     <p className="rounded-lg border border-red-100 bg-red-50/90 px-3 py-2 text-sm text-red-700" role="alert">
@@ -2101,7 +2328,7 @@ export default function Onboarding() {
                         accept="image/jpeg,image/png,image/webp"
                         className="sr-only"
                         onChange={(e) => {
-                          assignPhotoFile(e.target.files?.[0], "portrait");
+                          void assignPhotoFile(e.target.files?.[0], "portrait");
                           e.target.value = "";
                         }}
                       />
@@ -2109,9 +2336,9 @@ export default function Onboarding() {
                         htmlFor="ob-photo-portrait"
                         className="flex cursor-pointer flex-col overflow-hidden rounded-2xl border-2 border-dashed border-app-border bg-app-bg/80 text-center transition hover:border-app-border"
                       >
-                        {portraitPreviewUrl ? (
+                        {portraitDisplayUrl ? (
                           <img
-                            src={portraitPreviewUrl}
+                            src={portraitDisplayUrl}
                             alt="Aperçu photo visage"
                             className="aspect-[3/4] w-full max-w-[280px] mx-auto object-cover"
                           />
@@ -2122,7 +2349,7 @@ export default function Onboarding() {
                           </span>
                         )}
                       </label>
-                      {portraitPreviewUrl ? (
+                      {portraitDisplayUrl ? (
                         <button
                           type="button"
                           onClick={() => portraitInputRef.current?.click()}
@@ -2130,6 +2357,9 @@ export default function Onboarding() {
                         >
                           Remplacer
                         </button>
+                      ) : null}
+                      {photoUploadingKind === "portrait" ? (
+                        <p className="mt-1 text-center text-[11px] text-app-muted">Enregistrement…</p>
                       ) : null}
                     </div>
 
@@ -2143,7 +2373,7 @@ export default function Onboarding() {
                         accept="image/jpeg,image/png,image/webp"
                         className="sr-only"
                         onChange={(e) => {
-                          assignPhotoFile(e.target.files?.[0], "body");
+                          void assignPhotoFile(e.target.files?.[0], "body");
                           e.target.value = "";
                         }}
                       />
@@ -2151,9 +2381,9 @@ export default function Onboarding() {
                         htmlFor="ob-photo-body"
                         className="flex cursor-pointer flex-col overflow-hidden rounded-2xl border-2 border-dashed border-app-border bg-app-bg/80 text-center transition hover:border-app-border"
                       >
-                        {bodyPreviewUrl ? (
+                        {bodyDisplayUrl ? (
                           <img
-                            src={bodyPreviewUrl}
+                            src={bodyDisplayUrl}
                             alt="Aperçu photo activité"
                             className="aspect-[3/4] w-full max-w-[280px] mx-auto object-cover"
                           />
@@ -2164,7 +2394,7 @@ export default function Onboarding() {
                           </span>
                         )}
                       </label>
-                      {bodyPreviewUrl ? (
+                      {bodyDisplayUrl ? (
                         <button
                           type="button"
                           onClick={() => bodyInputRef.current?.click()}
@@ -2173,12 +2403,15 @@ export default function Onboarding() {
                           Remplacer
                         </button>
                       ) : null}
+                      {photoUploadingKind === "body" ? (
+                        <p className="mt-1 text-center text-[11px] text-app-muted">Enregistrement…</p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
               )}
 
-              {step === 7 && (
+              {step === 9 && (
                 <div className="space-y-5">
                   <div>
                     <span className={labelClassName}>Tu préfères</span>
@@ -2257,7 +2490,7 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 8 && (
+              {step === 10 && (
                 <div className="space-y-3">
                   <label className={labelClassName} htmlFor="ob-sport-phrase">
                     Ta phrase (optionnel)
@@ -2281,7 +2514,7 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 9 && (
+              {step === 11 && (
                 <div className="space-y-4">
                   <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-app-border bg-app-bg/60 px-3 py-3 text-sm text-app-text">
                     <input
@@ -2304,7 +2537,7 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {stepHint && step !== 6 && (
+              {stepHint && step !== 8 && (
                 <p className="mt-3 text-sm text-red-600">{stepHint}</p>
               )}
               {finalStepBlockReason && (
@@ -2340,13 +2573,13 @@ export default function Onboarding() {
                     className="flex-1 rounded-xl py-3 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-70"
                     style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
                   >
-                    {step === 2
+                    {step === 4
                       ? "Enregistrer ma localisation"
-                      : step === 3
+                      : step === 5
                         ? "Continuer"
-                        : step === 5
+                        : step === 7
                           ? "J’ai compris"
-                          : step === 8
+                          : step === 10
                             ? "Continuer"
                             : "Suivant"}
                   </button>

@@ -5,7 +5,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const PROFILE_COLUMNS_CORE =
-  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, is_photo_verified, photo_status, needs_adapted_activities, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, photo1_status, photo2_status, photo_moderation_overall, is_under_review, moderation_strikes_count";
+  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, is_photo_verified, photo_status, needs_adapted_activities, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, photo1_status, photo2_status, photo_moderation_overall, is_under_review, moderation_strikes_count";
 
 export const PROFILE_SELECT_CORE = PROFILE_COLUMNS_CORE;
 
@@ -27,18 +27,22 @@ const PROFILE_SELECT_CORE_IDENTITY_GEO =
  * Noyau stable typique pour la décision auth / routing.
  */
 export const PROFILE_SELECT_GATE =
-  "id, first_name, birth_date, gender, looking_for, intent, profile_completed, onboarding_completed";
+  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed";
 
-const PROFILE_SELECT_GATE_FLAGS_NAMES = "id, first_name, birth_date, profile_completed, onboarding_completed";
+const PROFILE_SELECT_GATE_FLAGS_NAMES =
+  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed";
 
 export const PROFILE_SELECT_MINIMAL =
-  "id, first_name, birth_date, profile_completed, onboarding_completed";
+  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed";
 
-const PROFILE_SELECT_MINIMAL_NO_ONBOARDING = "id, first_name, birth_date, profile_completed";
+const PROFILE_SELECT_MINIMAL_NO_ONBOARDING =
+  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed";
 
-const PROFILE_SELECT_ULTRA = "id, profile_completed, onboarding_completed";
+const PROFILE_SELECT_ULTRA =
+  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed";
 
-const PROFILE_SELECT_ULTRA_FLAGS = "id, profile_completed";
+const PROFILE_SELECT_ULTRA_FLAGS =
+  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed";
 
 /**
  * Ordre : large → strict. Le premier `select` qui réussit sert d’autoroute ; les échecs
@@ -59,26 +63,28 @@ export const PROFILE_LOAD_TIERS_FOR_AUTH: string[] = [
 ];
 
 const ONBOARDING_HYDRATE_FULL =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, practice_preferences";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_NO_PRACTICE_PREFS =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_NO_LOC_SOURCE =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, practice_preferences";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_NO_MEET_VIBE =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, planning_style, sport_motivation, sport_phrase, practice_preferences";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, planning_style, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_COMPACT =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, planning_style, sport_phrase";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, planning_style, sport_phrase, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_BASE =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
-const ONBOARDING_HYDRATE_MIN = "id, first_name, birth_date, gender, looking_for, intent, city";
+const ONBOARDING_HYDRATE_MIN =
+  "id, first_name, birth_date, gender, looking_for, intent, city, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
-const ONBOARDING_HYDRATE_TINY = "id, first_name, birth_date, gender, looking_for, intent";
+const ONBOARDING_HYDRATE_TINY =
+  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 /**
  * Reprise draft onboarding : requêtes successives en cas de colonne absente.

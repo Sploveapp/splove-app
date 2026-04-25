@@ -9,9 +9,11 @@ import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { IconSend } from "../components/ui/Icon";
 import { ProposalCard } from "../components/ProposalCard";
 import { ActivityResponseBubble } from "../components/chat/ActivityResponseBubble";
+import { ActivityProposalBubble } from "../components/chat/ActivityProposalBubble";
 import { ProposalComposerModal } from "../components/ProposalComposerModal";
 import { ChatEmojiPicker } from "../components/ChatEmojiPicker";
 import { ChatPostMatchPanel } from "../components/ChatPostMatchPanel";
+import { PriorityProposalUpsell } from "../components/PriorityProposalUpsell";
 import type { ActivityPayload } from "../lib/chatActivity";
 import {
   computeProposalSchedule,
@@ -23,6 +25,7 @@ import { isPendingProposalStatus, normalizeActivityProposalStatus } from "../lib
 import { buildActivityProposalRowForRender } from "../lib/messages/activityMessageParser";
 import {
   acceptConversationProposal,
+  cancelConversationProposal,
   createConversationProposal,
   declineConversationProposal,
   getLatestProposalForConversation,
@@ -47,6 +50,12 @@ import { ReportModal } from "../components/ReportModal";
 import { VerifiedBadge } from "../components/VerifiedBadge";
 import { messageContainsDisallowedContent } from "../lib/chatMessagePolicy";
 import { CHAT_BUBBLE_COLOR_ORDER, getChatBubbleColorDef } from "../constants/chatBubbleColors";
+import { usePremium } from "../hooks/usePremium";
+import {
+  getSplovePlusState,
+  hasAutoRelanceBeenSent,
+  markAutoRelanceSent,
+} from "../services/splovePlus.service";
 import {
   getOwnMessageBubbleClassName,
   loadConversationMessageBubbleThemeFromStorage,
@@ -121,10 +130,64 @@ type ChatTimelineItem =
   | { kind: "message"; sortKey: string; createdMs: number; message: TextMessageRow }
   | { kind: "proposal"; sortKey: string; createdMs: number; proposal: ProposalRow };
 
+type AvailabilitySlot = {
+  user_id: string;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
+};
+
 function parseCreatedMs(iso: string | null | undefined): number {
   if (!iso) return 0;
   const n = new Date(iso).getTime();
   return Number.isNaN(n) ? 0 : n;
+}
+
+function timeToMinutes(value: string): number {
+  const parts = value.split(":");
+  if (parts.length < 2) return 0;
+  const hh = Number(parts[0] ?? 0);
+  const mm = Number(parts[1] ?? 0);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return 0;
+  return hh * 60 + mm;
+}
+
+function buildOverlapSlotSuggestions(
+  currentUserId: string,
+  partnerId: string,
+  rows: AvailabilitySlot[],
+): string[] {
+  const mine = rows.filter((r) => r.user_id === currentUserId);
+  const partner = rows.filter((r) => r.user_id === partnerId);
+  if (mine.length === 0 || partner.length === 0) return [];
+
+  const now = new Date();
+  const suggestions: string[] = [];
+  for (const m of mine) {
+    for (const p of partner) {
+      if (m.day_of_week !== p.day_of_week) continue;
+      const startMin = Math.max(timeToMinutes(m.start_time), timeToMinutes(p.start_time));
+      const endMin = Math.min(timeToMinutes(m.end_time), timeToMinutes(p.end_time));
+      if (endMin - startMin < 30) continue;
+
+      for (let offset = 0; offset < 14; offset += 1) {
+        const candidate = new Date(now);
+        candidate.setHours(0, 0, 0, 0);
+        candidate.setDate(now.getDate() + offset);
+        if (candidate.getDay() !== m.day_of_week) continue;
+        const h = Math.floor(startMin / 60);
+        const mm = startMin % 60;
+        candidate.setHours(h, mm, 0, 0);
+        if (candidate.getTime() <= now.getTime() + 30 * 60 * 1000) continue;
+        suggestions.push(candidate.toISOString());
+        break;
+      }
+      if (suggestions.length >= 2) {
+        return suggestions.slice(0, 2);
+      }
+    }
+  }
+  return suggestions.slice(0, 2);
 }
 
 function formatProposalWhenLine(p: ProposalRow): string {
@@ -206,6 +269,7 @@ export default function Chat() {
   const [reportOpen, setReportOpen] = useState(false);
   const [partnerPhotoVerified, setPartnerPhotoVerified] = useState(false);
   const [chatMatchId, setChatMatchId] = useState<string | null>(null);
+  const [suggestedSlots, setSuggestedSlots] = useState<string[]>([]);
   const [chatAccentTheme, setChatAccentTheme] = useState<MessageBubbleTheme>(CHAT_DEFAULT_ACCENT);
   const [chatOptionsOpen, setChatOptionsOpen] = useState(false);
   const [chatStyleOpen, setChatStyleOpen] = useState(false);
@@ -225,6 +289,9 @@ export default function Chat() {
     partnerGender: string | null;
     partnerIntent: unknown;
   } | null>(null);
+  const [autoRelanceEnabled, setAutoRelanceEnabled] = useState(false);
+  const [autoRelanceRunning, setAutoRelanceRunning] = useState(false);
+  const { hasPlus } = usePremium(user?.id ?? null);
 
   const appendEmojiToDraft = useCallback((emoji: string) => {
     setDraftMessage((d) => d + emoji);
@@ -268,6 +335,47 @@ export default function Chat() {
   useEffect(() => {
     if (conversationId) touchMatchOpenedAt(conversationId);
   }, [conversationId]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    void (async () => {
+      const state = await getSplovePlusState(user.id);
+      if (cancelled) return;
+      setAutoRelanceEnabled(state.autoRelanceEnabled);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!modalOpen || !user?.id || !partnerUserId) {
+      setSuggestedSlots([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const { data, error } = await supabase
+        .from("user_availability")
+        .select("user_id, day_of_week, start_time, end_time")
+        .in("user_id", [user.id, partnerUserId]);
+      if (cancelled) return;
+      if (error) {
+        console.error("[Chat] user_availability fetch error:", error);
+        setSuggestedSlots([]);
+        return;
+      }
+      const rows = ((data ?? []) as AvailabilitySlot[]).filter(
+        (r) => typeof r?.user_id === "string" && typeof r?.start_time === "string" && typeof r?.end_time === "string",
+      );
+      const next = buildOverlapSlotSuggestions(user.id, partnerUserId, rows);
+      setSuggestedSlots(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [modalOpen, user?.id, partnerUserId]);
 
   useEffect(() => {
     if (authWatchdogRef.current != null) {
@@ -813,6 +921,21 @@ export default function Chat() {
     proposals.length,
   ]);
 
+  const proposalWindowRemainingLabel = useMemo(() => {
+    const baseExpiresAt =
+      windowExpiresAt ?? (matchOpenedAt != null ? matchOpenedAt + CHAT_WINDOW_HOURS_MS : null);
+    if (baseExpiresAt == null) return null;
+    const remainingMs = Math.max(0, baseExpiresAt - nowTick);
+    if (remainingMs <= 0) return "Fenêtre de proposition expirée";
+    const remainingHours = Math.max(1, Math.ceil(remainingMs / (60 * 60 * 1000)));
+    return `${remainingHours}h restantes pour proposer une activité`;
+  }, [windowExpiresAt, matchOpenedAt, nowTick]);
+
+  const sharedSportsLine = useMemo(() => {
+    if (sharedSports.length === 0) return "Sport en commun à définir";
+    return sharedSports.join(" • ");
+  }, [sharedSports]);
+
   const canSendChatText = useMemo(() => {
     if (!user?.id || !partnerUserId || !pairChatMeta) return true;
     return canUserSendChatTextMessage({
@@ -829,6 +952,12 @@ export default function Chat() {
     if (pendingProposal) return "Un créneau est déjà en attente";
     return null;
   }, [pendingProposal, hasAcceptedProposal]);
+  const pendingWithoutResponse = useMemo(() => {
+    if (!pendingProposal) return false;
+    const createdMs = parseCreatedMs(pendingProposal.created_at);
+    if (!createdMs) return false;
+    return Date.now() - createdMs >= 2 * 60 * 60 * 1000;
+  }, [pendingProposal]);
 
   /** Proposition la plus récente éligible au retour (créneau passé + délai), sans re-demander si déjà répondu. */
   const feedbackEligibleProposal = useMemo(() => {
@@ -918,7 +1047,8 @@ export default function Chat() {
     if (pairBlocked) throw new Error("Échange impossible avec ce profil.");
     if (proposalActionInFlightId !== null) throw new Error("Une action est déjà en cours.");
 
-    const note = payload.message.trim();
+    const notePrefix = hasPlus ? "[Proposition prioritaire SPLove+] " : "";
+    const note = `${notePrefix}${payload.message.trim()}`.trim();
     const pl = payload.place.trim();
     if (messageContainsDisallowedContent(note) || (pl.length > 0 && messageContainsDisallowedContent(pl))) {
       throw new Error(SAFETY_CONTENT_REFUSAL);
@@ -984,6 +1114,30 @@ export default function Chat() {
     } finally {
       setProposalActionInFlightId(null);
     }
+  }
+
+  async function handleAutoRelance() {
+    if (!user?.id || !conversationId || !pendingProposal || autoRelanceRunning) return;
+    if (!autoRelanceEnabled || !hasPlus) {
+      setMessagePolicyError("La relance automatique est reservee a SPLove+.");
+      return;
+    }
+    if (hasAutoRelanceBeenSent(user.id, pendingProposal.id)) return;
+
+    setAutoRelanceRunning(true);
+    const { error } = await supabase.from(CHAT_MESSAGES_TABLE).insert({
+      conversation_id: conversationId,
+      sender_id: user.id,
+      body: "Relance SPLove+ : je te remets la proposition en haut, dis-moi si ce creneau te va 🙂",
+    });
+    setAutoRelanceRunning(false);
+
+    if (error) {
+      setMessagePolicyError("Relance impossible pour le moment.");
+      return;
+    }
+    markAutoRelanceSent(user.id, pendingProposal.id);
+    await reloadChatMessages(conversationId);
   }
 
   async function submitActivityOutcome(proposalId: string, sentiment: ActivityFeedbackSentiment) {
@@ -1069,7 +1223,7 @@ export default function Chat() {
     void sendChatMessage();
   }
 
-  async function respondToProposal(proposalId: string, status: "accepted" | "declined") {
+  async function respondToProposal(proposalId: string, status: "accepted" | "declined" | "cancelled") {
     if (!user?.id || !conversationId) return;
     if (proposalActionInFlightId !== null) return;
 
@@ -1084,7 +1238,7 @@ export default function Chat() {
       conversationReady: Boolean(conversationId && user.id),
       pairBlocked,
     });
-    const action = status === "accepted" ? "accept" : "decline";
+    const action = status === "accepted" ? "accept" : status === "declined" ? "decline" : "cancel";
     const gate = assertProposalActionAllowed(action, ctx);
     if (!gate.ok) {
       if (import.meta.env.DEV) console.debug("[Chat] respondToProposal blocked", gate.reason);
@@ -1096,8 +1250,10 @@ export default function Chat() {
     try {
       if (status === "accepted") {
         await acceptConversationProposal(proposalId);
-      } else {
+      } else if (status === "declined") {
         await declineConversationProposal(proposalId);
+      } else {
+        await cancelConversationProposal(proposalId);
       }
       setProposalDetail(null);
       setMessagePolicyError(null);
@@ -1140,6 +1296,19 @@ export default function Chat() {
       return;
     }
     setWindowExpiresAt(new Date(newExp).getTime());
+  }
+
+  function handleProposeActivityClick() {
+    if (pairBlocked) return;
+    if (hasPendingProposal && pendingProposal) {
+      scrollToProposalCard(pendingProposal.id);
+      return;
+    }
+    if (hasAcceptedProposal) {
+      setMessagePolicyError("Une activité est déjà confirmée dans cette conversation.");
+      return;
+    }
+    setModalOpen(true);
   }
 
   if (!conversationId) {
@@ -1284,7 +1453,7 @@ export default function Chat() {
           ) : (
             <div className="h-11 w-11 shrink-0 rounded-full bg-app-border ring-2 ring-app-border" />
           )}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-app-muted">Session</p>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-lg font-bold text-app-text">
@@ -1292,7 +1461,20 @@ export default function Chat() {
               </h1>
               {partnerPhotoVerified ? <VerifiedBadge variant="compact" /> : null}
             </div>
+            <p className="mt-1 truncate text-[12px] text-app-muted">{sharedSportsLine}</p>
+            {proposalWindowRemainingLabel ? (
+              <p className="mt-0.5 text-[11px] font-medium text-app-muted">{proposalWindowRemainingLabel}</p>
+            ) : null}
           </div>
+          <button
+            type="button"
+            onClick={handleProposeActivityClick}
+            disabled={pairBlocked || hasAcceptedProposal}
+            className="rounded-xl px-3 py-2 text-[12px] font-semibold transition disabled:opacity-60"
+            style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
+          >
+            {hasPlus ? "+ Proposer (prioritaire)" : "+ Proposer"}
+          </button>
         </div>
         {partnerUserId && user?.id ? (
           <div className="mx-auto mt-1 flex max-w-md flex-wrap justify-end gap-x-4 gap-y-1 px-0">
@@ -1326,24 +1508,17 @@ export default function Chat() {
           <div className="mb-3 rounded-2xl border border-app-border/90 bg-app-bg/90 px-4 py-3 shadow-sm ring-1 ring-white/[0.05]">
             {chatSessionPhase === "new_match" ? (
               <>
-                <p className="text-[13px] font-semibold leading-snug text-app-text">Nouveau match</p>
+                <p className="text-[13px] font-semibold leading-snug text-app-text">Message système</p>
                 <p className="mt-1 text-[12px] leading-relaxed text-app-muted">
-                  Envoyez un message ou proposez une activité pour lancer la sortie.
+                  Vous avez matché 🎯 Vous avez 48h pour proposer une activité autour d’un sport en commun.
                 </p>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (hasPendingProposal && pendingProposal) {
-                      console.log("[Chat] active proposal clicked", pendingProposal.id);
-                      scrollToProposalCard(pendingProposal.id);
-                    } else {
-                      setModalOpen(true);
-                    }
-                  }}
+                  onClick={handleProposeActivityClick}
                   className="mt-3 w-full rounded-xl py-2.5 text-[13px] font-bold shadow-sm transition hover:opacity-95"
                   style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
                 >
-                  {hasPendingProposal ? "Proposition en cours" : "Proposer une activité"}
+                  Proposer une activité
                 </button>
               </>
             ) : chatSessionPhase === "active_chat" ? (
@@ -1357,6 +1532,51 @@ export default function Chat() {
                 ci-dessous.
               </p>
             )}
+          </div>
+        ) : null}
+        {!pairBlocked && chatSessionPhase === "new_match" && !hasPlus ? (
+          <PriorityProposalUpsell
+            onActivate={() => navigate("/splove-plus")}
+            onStayFree={() => {
+              // Upsell non bloquant.
+            }}
+          />
+        ) : null}
+        {!pairBlocked && pendingWithoutResponse ? (
+          <div className="mb-3 rounded-2xl border border-app-border/80 bg-app-card px-4 py-3 shadow-sm">
+            <p className="text-[12px] leading-snug text-app-muted">
+              Trigger inactivite : la proposition attend une reponse.{" "}
+              {hasPlus ? "Tu peux lancer une relance auto." : "SPLove+ peut relancer automatiquement."}
+            </p>
+            {hasPlus ? (
+              <button
+                type="button"
+                disabled={autoRelanceRunning || !autoRelanceEnabled}
+                onClick={() => void handleAutoRelance()}
+                className="mt-2 rounded-xl border border-app-border bg-app-bg px-3 py-2 text-[12px] font-semibold text-app-text disabled:opacity-50"
+              >
+                {autoRelanceRunning ? "Relance..." : "Relance automatique"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => navigate("/splove-plus")}
+                className="mt-2 rounded-xl border border-app-border bg-app-bg px-3 py-2 text-[12px] font-semibold text-app-text"
+              >
+                Decouvrir SPLove+
+              </button>
+            )}
+          </div>
+        ) : null}
+        {!pairBlocked && hasAcceptedProposal ? (
+          <div className="mb-3 rounded-2xl border border-emerald-400/20 bg-emerald-950/35 px-4 py-3 text-center shadow-sm ring-1 ring-emerald-400/10">
+            <p className="text-[13px] font-semibold text-emerald-100">Activité confirmée ✅</p>
+            <Link
+              to="/mes-rencontres"
+              className="mt-2 inline-flex rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-[12px] font-semibold text-emerald-100 transition hover:bg-emerald-300/20"
+            >
+              Voir dans Mes rencontres
+            </Link>
           </div>
         ) : null}
         <ChatPostMatchPanel
@@ -1436,7 +1656,7 @@ export default function Chat() {
                 });
                 setModalOpen(true);
               }}
-              onCancel={() => {}}
+              onCancel={() => void respondToProposal(latestProposal.id, "cancelled")}
             />
           </div>
         ) : (
@@ -1482,7 +1702,31 @@ export default function Chat() {
                     </div>
                   );
                 }
-                return null;
+                const p = item.proposal;
+                const mine = p.proposer_id === user?.id;
+                return (
+                  <ActivityProposalBubble
+                    key={item.sortKey}
+                    proposal={p}
+                    currentUserId={user?.id}
+                    conversationReady={Boolean(conversationId && user?.id)}
+                    pairBlocked={pairBlocked}
+                    mine={mine}
+                    proposalActionLocked={proposalActionBusy}
+                    onOpenDetail={() => setProposalDetail(p)}
+                    onAccept={() => void respondToProposal(p.id, "accepted")}
+                    onDecline={() => void respondToProposal(p.id, "declined")}
+                    onCounter={() => {
+                      setCounterReplaceProposalId(p.id);
+                      setCounterPrefill({
+                        sport: p.sport?.trim() || "",
+                        place: p.location?.trim() || "",
+                      });
+                      setModalOpen(true);
+                    }}
+                    onCancel={() => void respondToProposal(p.id, "cancelled")}
+                  />
+                );
               })}
             </div>
           )}
@@ -1757,6 +2001,7 @@ export default function Chat() {
         }
         initialSport={counterPrefill?.sport}
         initialPlace={counterPrefill?.place}
+        suggestedSlots={suggestedSlots}
         onSubmit={async (p) => {
           await sendActivity(p, counterReplaceProposalId);
           setCounterReplaceProposalId(null);

@@ -25,7 +25,10 @@ export type Profile = {
   birth_date?: string | null;
   gender?: string | null;
   looking_for?: string | null;
+  meet_pref?: string | null;
   intent?: string | null;
+  accepted_terms_at?: string | null;
+  accepted_privacy_at?: string | null;
   portrait_url?: string | null;
   fullbody_url?: string | null;
   main_photo_url?: string | null;
@@ -50,11 +53,53 @@ export type Profile = {
   [key: string]: unknown;
 };
 
+function hasText(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function getProfilePhotoCount(p: Profile | null): number {
+  if (!p) return 0;
+  let count = 0;
+  if (hasText(p.main_photo_url)) count += 1;
+  if (hasText(p.portrait_url) && p.portrait_url !== p.main_photo_url) count += 1;
+  if (hasText(p.fullbody_url) && p.fullbody_url !== p.main_photo_url && p.fullbody_url !== p.portrait_url) count += 1;
+  return count;
+}
+
+async function fetchProfileSportsCount(userId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from("profile_sports")
+    .select("sport_id", { count: "exact", head: true })
+    .eq("profile_id", userId);
+  if (error) {
+    console.warn("[AuthContext] fetchProfileSportsCount:", error.message);
+    return 0;
+  }
+  return count ?? 0;
+}
+
+function getStrictProfileIncompleteReason(profile: Profile | null, sportsCount: number): string | null {
+  if (!profile) return "profile_missing";
+  if (!hasText(profile.first_name)) return "first_name_missing";
+  if (!hasText(profile.birth_date)) return "birth_date_missing";
+  if (!hasText(profile.gender)) return "gender_missing";
+
+  const hasFinalCompletionFlag =
+    profile.profile_completed === true || (profile as { onboarding_completed?: unknown }).onboarding_completed === true;
+  if (hasFinalCompletionFlag) return null;
+
+  // Keep diagnostics for observability without blocking on non-critical fields.
+  void sportsCount;
+  void getProfilePhotoCount(profile);
+  return "completion_flag_missing";
+}
+
 type AuthState = {
   user: User | null;
   session: Session | null;
   profile: Profile | null;
   isProfileComplete: boolean;
+  profileIncompleteReason: string | null;
   /** True after the first bootstrap (getSession + optional OAuth wait) — distinct from « no user ». */
   isAuthInitialized: boolean;
   isLoading: boolean;
@@ -223,6 +268,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthInitialized, setIsAuthInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [profileSportsCount, setProfileSportsCount] = useState(0);
   /** Permet à `INITIAL_SESSION` de ne pas doubler le chargement profil pendant `init()`. */
   const initDoneRef = useRef(false);
 
@@ -264,6 +310,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         onboarding_completed: (p as { onboarding_completed?: unknown } | null)?.onboarding_completed ?? null,
       });
       setProfile(p);
+      const sportsCount = await fetchProfileSportsCount(userId);
+      if (gen !== profileLoadGenRef.current) {
+        return;
+      }
+      setProfileSportsCount(sportsCount);
     } catch (e) {
       console.warn("[AuthContext] profile load error", e);
     } finally {
@@ -289,8 +340,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const p = await fetchProfile(user.id);
       if (p) {
+        const sportsCount = await fetchProfileSportsCount(user.id);
         flushSync(() => {
           setProfile(p);
+          setProfileSportsCount(sportsCount);
         });
       }
       return p;
@@ -324,6 +377,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setSession(null);
     setProfile(null);
+    setProfileSportsCount(0);
   }, []);
 
   useEffect(() => {
@@ -353,6 +407,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setSession(null);
           setUser(null);
           setProfile(null);
+          setProfileSportsCount(0);
           return;
         }
 
@@ -367,6 +422,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setSession(null);
           setUser(null);
           setProfile(null);
+          setProfileSportsCount(0);
           return;
         }
 
@@ -398,6 +454,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         } else {
           setProfile(null);
+          setProfileSportsCount(0);
           console.log("[AuthContext] no session after bootstrap");
         }
       } finally {
@@ -447,6 +504,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         } else {
           setProfile(null);
+          setProfileSportsCount(0);
         }
         return;
       }
@@ -488,6 +546,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         console.log("[AuthContext] redirect decision: no session in auth event", { event });
         setProfile(null);
+        setProfileSportsCount(0);
         if (mounted) setIsLoading(false);
       }
     });
@@ -507,15 +566,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * Ne pas recalculer via `isOnboardingComplete` : trop fragile si une colonne
    * manque au fetch (ou schéma partiel) — repli côté cascade `PROFILE_LOAD_TIERS_FOR_AUTH`.
    */
-  const isProfileComplete =
-  profile?.profile_completed === true ||
-  profile?.onboarding_completed === true;
+  const profileIncompleteReason = getStrictProfileIncompleteReason(profile, profileSportsCount);
+  const isProfileComplete = profileIncompleteReason === null;
 
   const value: AuthState = {
     user,
     session,
     profile,
     isProfileComplete,
+    profileIncompleteReason,
     isAuthInitialized,
     isLoading,
     error,

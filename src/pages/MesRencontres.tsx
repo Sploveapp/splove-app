@@ -66,6 +66,7 @@ type ProposalRow = {
   supersedes_proposal_id?: string | null;
   responded_by?: string | null;
   responded_at?: string | null;
+  expires_at?: string | null;
 };
 
 type ProfileLite = {
@@ -75,7 +76,7 @@ type ProfileLite = {
   portrait_url: string | null;
 };
 
-type TabKey = "respond" | "upcoming" | "past";
+type TabKey = "to_confirm" | "confirmed" | "expired" | "cancelled";
 
 function formatMeetingAgendaLabel(d: Date): string {
   const weekday = new Intl.DateTimeFormat("fr-FR", { weekday: "long" }).format(d);
@@ -108,22 +109,15 @@ function needsMyResponse(uid: string, p: ProposalRow): boolean {
   return st === "pending" || st === "countered";
 }
 
-function isUpcoming(p: ProposalRow, now: number): boolean {
-  if (normalizeActivityProposalStatus(p.status) !== "accepted") return false;
-  if (!p.scheduled_at) return false;
-  const t = new Date(p.scheduled_at).getTime();
-  if (Number.isNaN(t)) return false;
-  return t > now;
-}
-
-function isPastSection(p: ProposalRow, now: number): boolean {
+function isExpiredSection(p: ProposalRow, now: number): boolean {
   const st = normalizeActivityProposalStatus(p.status);
-  if (st === "declined" || st === "cancelled") return true;
-  if (st !== "accepted") return false;
-  if (!p.scheduled_at) return false;
-  const t = new Date(p.scheduled_at).getTime();
-  if (Number.isNaN(t)) return false;
-  return t <= now;
+  if (st === "expired") return true;
+  if (st !== "pending" && st !== "proposed" && st !== "countered") return false;
+  if (!p.created_at) return false;
+  const fallback = parseCreatedMs(p.created_at) + 48 * 60 * 60 * 1000;
+  const exp = p.expires_at ? new Date(p.expires_at).getTime() : fallback;
+  if (!Number.isFinite(exp)) return false;
+  return exp <= now;
 }
 
 function statusBadgeLabel(status: string | null | undefined): string {
@@ -189,7 +183,7 @@ export default function MesRencontres() {
   const [rows, setRows] = useState<ProposalRow[]>([]);
   const [profilesById, setProfilesById] = useState<Record<string, ProfileLite>>({});
   const [otherByConv, setOtherByConv] = useState<Record<string, string>>({});
-  const [tab, setTab] = useState<TabKey>("respond");
+  const [tab, setTab] = useState<TabKey>("to_confirm");
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -338,27 +332,40 @@ export default function MesRencontres() {
     void loadData();
   }, [loadData]);
 
-  const { respondList, upcomingList, pastList } = useMemo(() => {
-    const respond: ProposalRow[] = [];
-    const upcoming: ProposalRow[] = [];
-    const past: ProposalRow[] = [];
+  const { toConfirmList, confirmedList, expiredList, cancelledList } = useMemo(() => {
+    const toConfirm: ProposalRow[] = [];
+    const confirmed: ProposalRow[] = [];
+    const expired: ProposalRow[] = [];
+    const cancelled: ProposalRow[] = [];
     for (const p of rows) {
-      if (needsMyResponse(uid, p)) respond.push(p);
-      else if (isUpcoming(p, nowTick)) upcoming.push(p);
-      else if (isPastSection(p, nowTick)) past.push(p);
+      const st = normalizeActivityProposalStatus(p.status);
+      if (isExpiredSection(p, nowTick)) {
+        expired.push(p);
+      } else if (st === "cancelled" || st === "declined") {
+        cancelled.push(p);
+      } else if (st === "accepted") {
+        confirmed.push(p);
+      } else if (st === "pending" || st === "proposed" || st === "countered") {
+        toConfirm.push(p);
+      }
     }
-    respond.sort((a, b) => parseCreatedMs(a.created_at) - parseCreatedMs(b.created_at));
-    upcoming.sort((a, b) => {
-      const ta = a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0;
-      const tb = b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0;
-      return ta - tb;
-    });
-    past.sort((a, b) => {
+    toConfirm.sort((a, b) => parseCreatedMs(b.created_at) - parseCreatedMs(a.created_at));
+    confirmed.sort((a, b) => {
       const ta = a.scheduled_at ? new Date(a.scheduled_at).getTime() : parseCreatedMs(a.created_at);
       const tb = b.scheduled_at ? new Date(b.scheduled_at).getTime() : parseCreatedMs(b.created_at);
       return tb - ta;
     });
-    return { respondList: respond, upcomingList: upcoming, pastList: past };
+    expired.sort((a, b) => {
+      const ta = a.scheduled_at ? new Date(a.scheduled_at).getTime() : parseCreatedMs(a.created_at);
+      const tb = b.scheduled_at ? new Date(b.scheduled_at).getTime() : parseCreatedMs(b.created_at);
+      return tb - ta;
+    });
+    cancelled.sort((a, b) => {
+      const ta = a.scheduled_at ? new Date(a.scheduled_at).getTime() : parseCreatedMs(a.created_at);
+      const tb = b.scheduled_at ? new Date(b.scheduled_at).getTime() : parseCreatedMs(b.created_at);
+      return tb - ta;
+    });
+    return { toConfirmList: toConfirm, confirmedList: confirmed, expiredList: expired, cancelledList: cancelled };
   }, [rows, uid, nowTick]);
 
   function partnerForProposal(p: ProposalRow): ProfileLite | null {
@@ -487,13 +494,20 @@ export default function MesRencontres() {
   }
 
   const tabToCard: Record<TabKey, MeetingCardTab> = {
-    respond: "respond",
-    upcoming: "upcoming",
-    past: "past",
+    to_confirm: "respond",
+    confirmed: "upcoming",
+    expired: "past",
+    cancelled: "past",
   };
 
   const currentList =
-    tab === "respond" ? respondList : tab === "upcoming" ? upcomingList : pastList;
+    tab === "to_confirm"
+      ? toConfirmList
+      : tab === "confirmed"
+        ? confirmedList
+        : tab === "expired"
+          ? expiredList
+          : cancelledList;
 
   return (
     <div
@@ -521,9 +535,10 @@ export default function MesRencontres() {
           >
             {(
               [
-                { id: "respond" as const, label: "À répondre" },
-                { id: "upcoming" as const, label: "À venir" },
-                { id: "past" as const, label: "Passées" },
+                { id: "to_confirm" as const, label: "À confirmer" },
+                { id: "confirmed" as const, label: "Confirmées" },
+                { id: "expired" as const, label: "Expirées" },
+                { id: "cancelled" as const, label: "Annulées" },
               ] as const
             ).map((t) => (
               <button
@@ -562,7 +577,7 @@ export default function MesRencontres() {
             <p className="py-12 text-center text-[15px] text-zinc-500">Chargement…</p>
           ) : (
             <div className="flex flex-col gap-3">
-              {tab === "respond" && respondList.length === 0 ? (
+              {tab === "to_confirm" && toConfirmList.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center shadow-sm">
                   <p className="text-[15px] font-medium text-zinc-700">Rien en attente pour le moment.</p>
                   <p className="mt-2 text-[14px] leading-relaxed text-zinc-500">
@@ -571,7 +586,7 @@ export default function MesRencontres() {
                 </div>
               ) : null}
 
-              {tab === "upcoming" && upcomingList.length === 0 ? (
+              {tab === "confirmed" && confirmedList.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center shadow-sm">
                   <p className="text-[15px] font-medium text-zinc-700">Aucune rencontre à venir.</p>
                   <p className="mt-2 text-[14px] leading-relaxed text-zinc-500">
@@ -580,10 +595,18 @@ export default function MesRencontres() {
                 </div>
               ) : null}
 
-              {tab === "past" && pastList.length === 0 ? (
+              {tab === "expired" && expiredList.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center shadow-sm">
                   <p className="text-[14px] leading-relaxed text-zinc-500">
-                    Aucune rencontre passée pour l’instant.
+                    Aucune rencontre expirée pour l’instant.
+                  </p>
+                </div>
+              ) : null}
+
+              {tab === "cancelled" && cancelledList.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center shadow-sm">
+                  <p className="text-[14px] leading-relaxed text-zinc-500">
+                    Aucune rencontre annulée pour l’instant.
                   </p>
                 </div>
               ) : null}
@@ -600,14 +623,14 @@ export default function MesRencontres() {
                   statusLabel={statusBadgeLabel(p.status)}
                   badgeTone={statusBadgeTone(p.status)}
                   busy={actionBusyId === p.id}
-                  onConfirm={tab === "respond" ? () => void handleConfirm(p) : undefined}
-                  onDecline={tab === "respond" ? () => void handleDecline(p) : undefined}
-                  onCounter={tab === "respond" ? () => openCounterModal(p) : undefined}
+                  onConfirm={tab === "to_confirm" && needsMyResponse(uid, p) ? () => void handleConfirm(p) : undefined}
+                  onDecline={tab === "to_confirm" && needsMyResponse(uid, p) ? () => void handleDecline(p) : undefined}
+                  onCounter={tab === "to_confirm" && needsMyResponse(uid, p) ? () => openCounterModal(p) : undefined}
                   onOpenChat={
-                    tab === "respond" || tab === "upcoming" ? () => openChat(p) : undefined
+                    tab === "to_confirm" || tab === "confirmed" ? () => openChat(p) : undefined
                   }
-                  onCancel={tab === "upcoming" ? () => void handleCancel(p) : undefined}
-                  onRepropose={tab === "past" ? () => openMatch(p) : undefined}
+                  onCancel={tab === "confirmed" ? () => void handleCancel(p) : undefined}
+                  onRepropose={tab === "expired" || tab === "cancelled" ? () => openMatch(p) : undefined}
                 />
               ))}
             </div>

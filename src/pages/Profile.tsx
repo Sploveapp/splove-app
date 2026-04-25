@@ -71,6 +71,9 @@ export default function Profile() {
   const [phraseDraft, setPhraseDraft] = useState("");
   const [phraseSaving, setPhraseSaving] = useState(false);
   const [phraseMessage, setPhraseMessage] = useState<string | null>(null);
+  const [isActiveMode, setIsActiveMode] = useState(false);
+  const [activeModeSaving, setActiveModeSaving] = useState(false);
+  const [activeModeMessage, setActiveModeMessage] = useState<string | null>(null);
 
   const syncAccessibilityFromProfile = useCallback(() => {
     if (!profile) return;
@@ -93,6 +96,7 @@ export default function Profile() {
     if (!profile) return;
     const pr = profile as Record<string, unknown>;
     setLocCity(typeof pr.city === "string" ? pr.city : "");
+    setIsActiveMode(pr.is_active_mode === true);
     const dr = pr.discovery_radius_km;
     if (typeof dr === "number" && Number.isFinite(dr) && dr > 0) {
       setLocRadius(String(Math.round(dr)));
@@ -245,6 +249,30 @@ export default function Profile() {
     }
   }
 
+  async function handleSaveActiveMode() {
+    if (!user?.id) return;
+    setActiveModeMessage(null);
+    setActiveModeSaving(true);
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ is_active_mode: isActiveMode })
+        .eq("id", user.id);
+      if (error) {
+        console.error("[Profile] active mode save error:", error);
+        setActiveModeMessage(error.message || "Enregistrement impossible.");
+        return;
+      }
+      await refetchProfile();
+      setActiveModeMessage("Mode rencontre active enregistré.");
+    } catch (err) {
+      console.error("[Profile] active mode save failed:", err);
+      setActiveModeMessage("Enregistrement impossible.");
+    } finally {
+      setActiveModeSaving(false);
+    }
+  }
+
   return (
     <div
       style={{
@@ -292,6 +320,26 @@ export default function Profile() {
           }}
         >
           Mes rencontres
+        </button>
+
+        <button
+          type="button"
+          onClick={() => navigate("/profile/edit")}
+          style={{
+            width: "100%",
+            marginBottom: "20px",
+            padding: "14px 16px",
+            borderRadius: "14px",
+            border: `1px solid ${APP_BORDER}`,
+            background: APP_CARD,
+            color: APP_TEXT,
+            fontSize: "15px",
+            fontWeight: 600,
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+        >
+          Modifier mon profil
         </button>
 
         {user && (
@@ -780,6 +828,72 @@ export default function Profile() {
                   ? "✓ Enregistré"
                   : "Enregistrer ces préférences"}
             </button>
+          </div>
+
+          <div
+            style={{
+              background: APP_CARD,
+              borderRadius: "20px",
+              padding: "20px 24px",
+              boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+              marginBottom: "20px",
+            }}
+          >
+            <h2
+              style={{
+                margin: "0 0 8px 0",
+                fontSize: "16px",
+                fontWeight: 600,
+                color: APP_TEXT,
+              }}
+            >
+              Mode rencontre active
+            </h2>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                marginBottom: "12px",
+                fontSize: "14px",
+                color: APP_TEXT_MUTED,
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isActiveMode}
+                onChange={(e) => {
+                  setIsActiveMode(e.target.checked);
+                  setActiveModeMessage(null);
+                }}
+                style={{ width: "16px", height: "16px" }}
+              />
+              <span>Mode rencontre active</span>
+            </label>
+            <button
+              type="button"
+              onClick={() => void handleSaveActiveMode()}
+              disabled={activeModeSaving}
+              style={{
+                width: "100%",
+                padding: "10px 14px",
+                borderRadius: "12px",
+                border: "none",
+                background: activeModeSaving ? CTA_DISABLED_BG : BRAND_BG,
+                color: TEXT_ON_BRAND,
+                fontSize: "14px",
+                fontWeight: 600,
+                cursor: activeModeSaving ? "wait" : "pointer",
+              }}
+            >
+              {activeModeSaving ? "Enregistrement…" : "Enregistrer ce mode"}
+            </button>
+            {activeModeMessage ? (
+              <p style={{ margin: "10px 0 0 0", fontSize: "13px", color: APP_TEXT_MUTED }}>
+                {activeModeMessage}
+              </p>
+            ) : null}
           </div>
 
           <div

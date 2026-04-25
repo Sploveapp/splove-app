@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from "react-router-dom";
-import { IconChatBubble, IconDiscover, IconMeet, IconUser } from "./ui/Icon";
+import { IconChatBubble, IconHeartOutline, IconMeet, IconUser } from "./ui/Icon";
 
 type Props = {
   inboxCount: number;
@@ -39,7 +39,7 @@ export function BottomNav({ inboxCount }: Props) {
         onClick={() => navigate("/discover")}
       >
         <span className="app-bottom-nav__tab-inner">
-          <IconDiscover size={19} active={isDiscover} />
+          <IconHeartOutline size={19} active={isDiscover} />
           <span className={`app-bottom-nav__active-dot${isDiscover ? " app-bottom-nav__active-dot--on" : ""}`} />
         </span>
       </button>

@@ -1,5 +1,3 @@
-import SploveLoader from "./SploveLoader";
-
 /**
  * Écran de démarrage léger : branding SPLove statique.
  * Afficher tant que `AuthContext` ou une route équivalente est en chargement initial.
@@ -14,7 +12,16 @@ export function SplashScreen() {
       aria-label="Chargement de SPLove"
     >
       <div style={{ opacity: 0, animation: "splashLogoFadeIn 400ms ease-out forwards" }}>
-        <SploveLoader />
+        <img
+          src="/logo.png"
+          alt=""
+          aria-hidden
+          width={160}
+          height={160}
+          className="h-[130px] w-[130px] max-h-[130px] max-w-[130px] object-contain md:h-[160px] md:w-[160px] md:max-h-[160px] md:max-w-[160px]"
+          decoding="async"
+          draggable={false}
+        />
       </div>
       <style>{`
         @keyframes splashLogoFadeIn {

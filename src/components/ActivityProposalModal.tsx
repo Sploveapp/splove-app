@@ -18,6 +18,7 @@ type Props = {
   initialSport?: string;
   initialPlace?: string;
   initialScheduledAt?: string;
+  suggestedSlots?: string[];
   /** Contre-proposition : retour vers la vue précédente sans envoi ni changement de statut. */
   onBack?: () => void;
 };
@@ -35,6 +36,7 @@ export function ActivityProposalModal({
   initialSport,
   initialPlace,
   initialScheduledAt,
+  suggestedSlots = [],
   onBack,
 }: Props) {
   const firstSport = sharedSports[0] ?? "";
@@ -222,6 +224,28 @@ export function ActivityProposalModal({
             <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-app-muted">
               Date / heure
             </label>
+            {suggestedSlots.length > 0 ? (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {suggestedSlots.slice(0, 2).map((iso) => {
+                  const d = new Date(iso);
+                  if (Number.isNaN(d.getTime())) return null;
+                  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000)
+                    .toISOString()
+                    .slice(0, 16);
+                  const label = d.toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
+                  return (
+                    <button
+                      key={iso}
+                      type="button"
+                      onClick={() => setScheduledAtLocal(local)}
+                      className="rounded-full border border-app-border bg-app-bg/80 px-3 py-1.5 text-[12px] font-medium text-app-text hover:bg-app-border"
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
             <input
               type="datetime-local"
               value={scheduledAtLocal}

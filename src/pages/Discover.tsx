@@ -29,9 +29,6 @@ import {
   IconProfileAvatarPlaceholder,
 } from "../components/ui/Icon";
 import { BETA_MODE } from "../constants/beta";
-import {
-  type PreferenceCompatFields,
-} from "../lib/matchingPreferences";
 import { parseProfileIntent } from "../lib/profileIntent";
 import { fetchBlockExclusionDetail, isBlockedWith } from "../services/blocks.service";
 import { VerifiedBadge } from "../components/VerifiedBadge";
@@ -52,9 +49,11 @@ import {
   computeReliabilityScore,
   getReliabilityUiHints,
 } from "../lib/discoverScore";
-import { applyDiscoverHardExclusions, rankDiscoverCandidates } from "../lib/discoverRanking";
+import { scoreAndFilterDiscoverCandidates } from "../services/discoverScoring.service";
 import { buildDiscoverLocationLines, formatViewerRadiusLabel } from "../utils/geolocation";
 import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
+import { isProfileActiveRecently } from "../services/splovePlus.service";
+import { usePremium } from "../hooks/usePremium";
 
 type Profile = {
   id: string;
@@ -93,6 +92,8 @@ type Profile = {
   max_distance_km?: number | null;
   discovery_radius_km?: number | null;
   location_updated_at?: string | null;
+  is_active_mode?: boolean | null;
+  reliability_label?: string | null;
 };
 
 /** Resolve photo URL from whatever columns the feed_profiles row actually includes. */
@@ -251,7 +252,7 @@ const FEED_PROFILE_IDS_SELECT = "id";
  * Badge « vérifié » : uniquement `photo_status === 'approved'`.
  */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, profile_sports(sports(label, slug))";
+  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, is_active_mode, profile_sports(sports(label, slug))";
 /** IDs déjà likés — schéma `likes` : `liker_id` / `liked_id` uniquement. */
 async function fetchOutgoingLikedUserIds(userId: string): Promise<Set<string>> {
   const out = new Set<string>();
@@ -347,6 +348,12 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   const reliabilityHints = getReliabilityUiHints(profile);
   const strongAffinity = profile.commonSportsCount >= 2;
   const photo = getProfileDisplayPhotoUrl(profile) ?? "";
+  const reliabilityLabel = (() => {
+    const raw = String(profile.reliability_label ?? "").trim().toLowerCase();
+    if (raw === "high") return { label: "High", className: "bg-emerald-500/90 text-white" };
+    if (raw === "low") return { label: "Low", className: "bg-rose-500/90 text-white" };
+    return { label: "Medium", className: "bg-amber-500/90 text-white" };
+  })();
 
   const [dx, setDx] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -462,6 +469,16 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
             Plusieurs sports
           </div>
         ) : null}
+        {isProfileActiveRecently(profile.last_active_at) ? (
+          <div className="pointer-events-none absolute left-3 top-10 z-10 rounded-full bg-[#FF1E2D]/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm backdrop-blur-sm">
+            Actif maintenant
+          </div>
+        ) : null}
+        <div
+          className={`pointer-events-none absolute right-3 top-10 z-10 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide shadow-sm backdrop-blur-sm ${reliabilityLabel.className}`}
+        >
+          {reliabilityLabel.label}
+        </div>
         <div className="absolute right-2 top-2 z-20" data-discover-menu-root>
           <button
             type="button"
@@ -650,6 +667,7 @@ export default function Discover() {
   const location = useLocation();
   const { user, isLoading: authLoading, profile } = useAuth();
   const currentUserId = user?.id ?? "";
+  const { hasPlus } = usePremium(currentUserId || null);
   const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
   const [mySportMatchKeys, setMySportMatchKeys] = useState<Set<string>>(new Set());
   const [myCity] = useState<string | null>(null);
@@ -839,6 +857,18 @@ export default function Discover() {
     [profiles, myCity]
   );
 
+  useEffect(() => {
+    if (!hasPlus) return;
+    setProfiles((prev) =>
+      [...prev].sort((a, b) => {
+        const aActive = a.is_active_mode === true ? 1 : 0;
+        const bActive = b.is_active_mode === true ? 1 : 0;
+        if (aActive !== bActive) return bActive - aActive;
+        return b.discoverScore - a.discoverScore;
+      }),
+    );
+  }, [hasPlus]);
+
   async function loadProfiles() {
     if (!currentUserId) {
       setLoading(false);
@@ -911,18 +941,6 @@ export default function Discover() {
         parseProfileIntent(safeMeProfile?.intent)
       );
       
-      const myIntent = parseProfileIntent(safeMeProfile.intent);
-      if (!myIntent) {
-        console.error("[Discover feed] invalid intent — cannot load feed", {
-          intent: safeMeProfile?.intent,
-          meProfile: safeMeProfile,
-        });
-        setErrorMessage(
-          "Ton intention de rencontre n’est pas reconnue. Mets à jour ton profil puis réessaie.",
-        );
-        setProfiles([]);
-        return;
-      }
       const likedList = [...likedIds];
       const useNotIn = likedList.length > 0 && likedList.length < 200;
       const notInClause = useNotIn ? `(${likedList.join(",")})` : null;
@@ -935,7 +953,6 @@ export default function Discover() {
         .from("feed_profiles")
         .select(FEED_PROFILE_IDS_SELECT)
         .neq("id", currentUserId)
-        .eq("intent", myIntent)
         .order("created_at", { ascending: false })
         .limit(DISCOVER_FETCH_LIMIT);
 
@@ -980,7 +997,6 @@ export default function Discover() {
         .from("profiles")
         .select(DISCOVER_PROFILES_DETAIL_SELECT)
         .in("id", feedIds)
-        .eq("intent", myIntent)
         .eq("profile_completed", true)
         .not("first_name", "is", null)
         .neq("first_name", "")
@@ -1060,23 +1076,8 @@ export default function Discover() {
         raw = raw.filter((p) => !matchedIds.has(p.id));
       }
 
-      /** Filtre défensif : même intention (normalisée) que l’utilisateur. */
-      let stage: Profile[] = raw.filter((p) => parseProfileIntent(p.intent) === myIntent);
-      if (import.meta.env.DEV) {
-        const keptIntent = new Set(stage.map((p) => p.id));
-        for (const p of raw) {
-          if (!keptIntent.has(p.id)) {
-            console.debug("[Discover debug] exclusion intent", {
-              id: p.id,
-              first_name: p.first_name,
-              intent: p.intent,
-              parsed: parseProfileIntent(p.intent),
-              expected: myIntent,
-            });
-          }
-        }
-      }
-      console.log("[Discover feed] profiles after intent filter:", stage.length);
+      let stage: Profile[] = raw;
+      console.log("[Discover feed] profiles before scoring filters:", stage.length);
       let sharedPlaceById = new Map<string, boolean>();
       if (stage.length > 0) {
         const { data: sharedRows, error: sharedErr } = await supabase.rpc("discover_shared_place_flags", {
@@ -1093,28 +1094,60 @@ export default function Discover() {
         }
       }
 
-      const hardFiltered = applyDiscoverHardExclusions(
+      const discoverFiltered: ProfileWithAffinity[] = scoreAndFilterDiscoverCandidates(
         stage.map((p) => ({ ...p, has_shared_place: sharedPlaceById.get(p.id) === true })),
         {
-          currentUserId,
+          viewerId: currentUserId,
           viewer: {
+            id: currentUserId,
             gender: meProfile.gender ?? null,
             looking_for: meProfile.looking_for ?? null,
-          } as PreferenceCompatFields,
-          viewerSportMatchKeys: sportsSet,
-          excludedIds: new Set([...likedIds, ...blockExclude]),
+            intent: meProfile.intent ?? null,
+          },
+          likedIds,
           matchedIds,
-        },
-      );
-      const ranked = rankDiscoverCandidates(hardFiltered, {
-        mySportMatchKeys: sportsSet,
-        myProfile: meProfile,
-        distanceById: distById,
-      });
-      const discoverFiltered: ProfileWithAffinity[] = ranked.map((p) => ({
+          blockedIds: blockExclude,
+          mySportMatchKeys: sportsSet,
+          distanceById: distById,
+        }
+      ).map((p) => ({
         ...p,
         reliabilityScore: computeReliabilityScore(p),
       }));
+
+      if (discoverFiltered.length > 0) {
+        const candidateIds = discoverFiltered.map((p) => p.id).filter(Boolean);
+        const { data: engagementRows, error: engagementError } = await supabase
+          .from("user_engagement")
+          .select("user_id, reliability_label")
+          .in("user_id", candidateIds);
+        if (engagementError) {
+          console.error("[Discover] user_engagement fetch error:", engagementError);
+        } else {
+          const labelById = new Map<string, string>();
+          for (const row of (engagementRows ?? []) as {
+            user_id?: string | null;
+            reliability_label?: string | null;
+          }[]) {
+            const uid = typeof row.user_id === "string" ? row.user_id : "";
+            if (!uid) continue;
+            labelById.set(uid, row.reliability_label ?? "Medium");
+          }
+          for (let i = 0; i < discoverFiltered.length; i += 1) {
+            const p = discoverFiltered[i];
+            discoverFiltered[i] = { ...p, reliability_label: labelById.get(p.id) ?? "Medium" };
+          }
+        }
+      }
+
+      if (hasPlus) {
+        discoverFiltered.sort((a, b) => {
+          const aActive = a.is_active_mode === true ? 1 : 0;
+          const bActive = b.is_active_mode === true ? 1 : 0;
+          if (aActive !== bActive) return bActive - aActive;
+          return b.discoverScore - a.discoverScore;
+        });
+      }
 
       if (import.meta.env.DEV && discoverFiltered.length > 0) {
         for (const p of discoverFiltered.slice(0, 12)) {
@@ -1329,7 +1362,7 @@ export default function Discover() {
             Du terrain à la rencontre
           </p>
           <p className="mx-auto mt-2 max-w-[21rem] text-[13px] leading-relaxed text-app-muted">
-            Un like ouvre la porte — une sortie concrète fait le reste. Pas d’endless chat.
+            Des profils compatibles pour passer du sport à une vraie rencontre.
           </p>
           {formatViewerRadiusLabel(myDiscoveryRadiusKm) ? (
             <p className="mx-auto mt-1.5 max-w-[21rem] text-[11px] font-medium text-app-muted">
@@ -1419,19 +1452,25 @@ export default function Discover() {
         )}
 
         {!loading && !errorMessage && profiles.length === 0 && (
-          <div className="rounded-2xl border border-[#E11D2E]/10 bg-app-card px-5 py-8 text-center shadow-sm ring-1 ring-app-border">
-            <p className="text-base font-semibold leading-snug text-app-text">En attendant…</p>
-            <p className="mx-auto mt-2 max-w-[18rem] text-sm leading-relaxed text-app-muted">
-              Aucun profil compatible pour l’instant. Tu peux revenir plus tard ou ajuster rayon et sports dans ton profil.
+          <div className="rounded-2xl border border-app-border bg-app-card px-5 py-8 text-center shadow-sm ring-1 ring-app-border">
+            <p className="text-base font-semibold leading-snug text-app-text">
+              Aucun profil compatible pour l’instant.
             </p>
-            <p className="mx-auto mt-3 max-w-[19rem] text-[12px] leading-relaxed text-app-muted">
-              SPLove+ peut augmenter ta visibilité ; voir les profils et matcher reste gratuit.
+            <p className="mx-auto mt-2 max-w-[18rem] text-sm leading-relaxed text-app-muted">
+              Tu peux revenir plus tard ou ajuster tes sports, ton rayon ou tes préférences.
             </p>
             <Link
-              to="/splove-plus"
-              className="mt-4 inline-block rounded-xl border border-app-border px-4 py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border"
+              to="/profile"
+              className="mx-auto mt-5 block w-full max-w-xs rounded-xl px-4 py-3 text-[15px] font-bold shadow-md transition hover:opacity-95 active:scale-[0.99]"
+              style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              Découvrir SPLove+ (optionnel)
+              Modifier mes critères
+            </Link>
+            <Link
+              to="/splove-plus"
+              className="mt-3 inline-block text-[12px] font-medium text-app-muted underline decoration-app-border underline-offset-2 hover:text-app-text"
+            >
+              Voir SPLove+
             </Link>
           </div>
         )}
@@ -1486,30 +1525,6 @@ export default function Discover() {
           </div>
         )}
 
-        <section
-          className="mb-2 mt-1 rounded-xl border border-app-border/50 bg-app-bg/50 px-3 py-3 ring-1 ring-white/[0.03]"
-          aria-label="Option SPLove+"
-        >
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-app-muted">
-            Option SPLove+
-          </p>
-          <p className="mt-1 text-[13px] font-medium leading-snug text-app-text">
-            Passe du match au réel, sans attendre.
-          </p>
-          <p className="mt-1 text-[12px] leading-snug text-app-muted">
-            Propose une activité. On te rend visible au bon moment, au bon endroit.
-          </p>
-          <ul className="mt-2 space-y-0.5 text-[11px] leading-snug text-app-muted">
-            <li>Ta proposition passe en priorité</li>
-            <li>Tu rencontres plus vite, pour de vrai</li>
-          </ul>
-          <Link
-            to="/splove-plus"
-            className="mt-2.5 block w-full rounded-lg border border-app-border/80 bg-app-card/60 py-1.5 text-center text-[11px] font-semibold text-app-text transition hover:bg-app-border/80"
-          >
-            Passer au réel maintenant
-          </Link>
-        </section>
       </main>
 
       {previewProfile

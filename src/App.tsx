@@ -10,6 +10,7 @@ import Onboarding from "./pages/Onboarding";
 import Discover from "./pages/Discover";
 import LikesYou from "./pages/LikesYou";
 import Profile from "./pages/Profile";
+import EditProfile from "./pages/EditProfile";
 import Chat from "./pages/Chat";
 import Match from "./pages/Match";
 import SplovePlus from "./pages/SplovePlus";
@@ -34,12 +35,14 @@ function App() {
                 <Routes>
                   <Route element={<AppLayout />}>
                     <Route path="/" element={<Navigate to="/discover" replace />} />
+                    <Route path="/onboarding" element={<Onboarding />} />
                     <Route path="/discover" element={<Discover />} />
                     <Route path="/activity" element={<Navigate to="/discover" replace />} />
                     <Route path="/messages" element={<Messages />} />
                     <Route path="/mes-rencontres" element={<MesRencontres />} />
                     <Route path="/likes-you" element={<LikesYou />} />
                     <Route path="/profile" element={<Profile />} />
+                    <Route path="/profile/edit" element={<EditProfile />} />
                     <Route path="/account-settings" element={<AccountSettings />} />
                     <Route path="/splove-plus" element={<SplovePlus />} />
                     <Route path="/checkout" element={<Checkout />} />

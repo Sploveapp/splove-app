@@ -38,6 +38,20 @@ function formatWhenLine(p: ActivityProposalRowLike): string {
   return p.time_slot?.trim() || "Créneau à confirmer";
 }
 
+function formatRemainingLabel(expiresAt: string | null | undefined): string | null {
+  if (!expiresAt) return null;
+  const t = new Date(expiresAt).getTime();
+  if (Number.isNaN(t)) return null;
+  const delta = t - Date.now();
+  if (delta <= 0) return "Expirée";
+  const totalMinutes = Math.floor(delta / (60 * 1000));
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h <= 0) return `${m} min restantes`;
+  if (m === 0) return `${h} h restantes`;
+  return `${h} h ${m} min restantes`;
+}
+
 export function ActivityProposalBubble({
   proposal: p,
   currentUserId,
@@ -69,6 +83,7 @@ export function ActivityProposalBubble({
   const emoji = sportEmojiHint(sportLine);
   const placeLine = p.location?.trim() || "—";
   const whenLine = formatWhenLine(p);
+  const remainingLine = formatRemainingLabel(p.expires_at);
   const noteLine = p.note?.trim();
 
   const shellDisabled = proposalActionLocked || pairBlocked;
@@ -98,7 +113,7 @@ export function ActivityProposalBubble({
         }`}
       >
         <p className="text-center text-[11px] font-bold uppercase tracking-[0.12em] text-app-muted">
-          Proposition
+          Proposition d’activité
         </p>
 
         <div className="mt-3 space-y-1.5 text-left">
@@ -114,6 +129,12 @@ export function ActivityProposalBubble({
             <span aria-hidden>🕒 </span>
             {whenLine}
           </p>
+          {remainingLine ? (
+            <p className="text-sm leading-snug text-app-muted">
+              <span aria-hidden>⏳ </span>
+              {remainingLine}
+            </p>
+          ) : null}
         </div>
 
         <div className="my-3 border-t border-app-border/80" aria-hidden />
@@ -143,7 +164,7 @@ export function ActivityProposalBubble({
               className="w-full rounded-xl py-2.5 text-[13px] font-bold shadow-sm transition hover:opacity-95 disabled:opacity-50"
               style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              ✅ Oui
+              Accepter
             </button>
             <button
               type="button"
@@ -151,7 +172,7 @@ export function ActivityProposalBubble({
               onClick={onDecline}
               className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border/40 disabled:opacity-50"
             >
-              ❌ Non
+              Refuser
             </button>
             <button
               type="button"
@@ -159,7 +180,7 @@ export function ActivityProposalBubble({
               onClick={onCounter}
               className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border/40 disabled:opacity-50"
             >
-              🔁 Proposer autre
+              Proposer un créneau
             </button>
           </div>
         ) : null}

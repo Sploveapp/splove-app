@@ -13,7 +13,7 @@ import type { ActivityProposalRowLike } from "./messageTypes";
 function norm(s: string | null | undefined): string {
   const x = (s ?? "pending").toLowerCase();
   if (x === "proposed") return "pending";
-  if (x === "countered" || x === "alternative_requested" || x === "replaced") {
+  if (x === "countered" || x === "counter_proposed" || x === "alternative_requested" || x === "replaced") {
     return "reschedule_requested";
   }
   return x;

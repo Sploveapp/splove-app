@@ -11,6 +11,7 @@ import { matchMomentumLine } from "../lib/discoverCardCopy";
 import { ensureConversationWindow } from "../lib/ensureConversationWindow";
 import { BETA_MODE } from "../constants/beta";
 import { buildCreateActivityProposalRpcArgs } from "../lib/messages/activityProposalMutations";
+import { createAutoProposalForMatchIfEligible } from "../services/activityProposals.service";
 
 export type MatchLocationState = {
   partnerFirstName?: string | null;
@@ -48,6 +49,16 @@ export default function Match() {
       matchedByUserId,
     });
   }, [conversationId, matchedByUserId, user?.id]);
+
+  useEffect(() => {
+    if (!conversationId || !user?.id) return;
+    void createAutoProposalForMatchIfEligible({
+      conversationId,
+      currentUserId: user.id,
+    }).catch((e) => {
+      console.warn("[Match] auto proposal skipped:", e);
+    });
+  }, [conversationId, user?.id]);
 
   useEffect(() => {
     async function loadActiveProposal() {

@@ -12,6 +12,7 @@ import { buildProposalRulesContext, getAvailableProposalActions } from "./activi
 export function normalizeActivityProposalStatus(raw: string | null | undefined): string {
   const s = (raw ?? "pending").toLowerCase();
   if (s === "proposed") return "pending";
+  if (s === "counter_proposed") return "reschedule_requested";
   if (s === "countered") return "reschedule_requested";
   if (s === "alternative_requested" || s === "replaced") return "reschedule_requested";
   return s;

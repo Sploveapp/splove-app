@@ -58,7 +58,11 @@ export function LikesYouProfileCard({
 }: Props) {
   const profile = like.profile;
   if (!profile) return null;
-  const profileWithOptional = profile as { birth_date?: string | null; moment_preference?: string | null };
+  const profileWithOptional = profile as {
+    birth_date?: string | null;
+    moment_preference?: string | null;
+    reliability_label?: string | null;
+  };
   const age = profileWithOptional.birth_date
     ? Math.floor(
         (Date.now() - new Date(profileWithOptional.birth_date).getTime()) /
@@ -75,6 +79,12 @@ export function LikesYouProfileCard({
   const photo = profile.main_photo_url?.trim() ?? "";
   const hasExistingRelation = Boolean(like.is_match || like.conversation_id || like.match_id);
   const conversationLabel = like.conversation_id ? LIKES_YOU_CONTINUE_EXCHANGE : LIKES_YOU_OPEN_CONVERSATION;
+  const reliabilityBadge = (() => {
+    const raw = String(profileWithOptional.reliability_label ?? "").toLowerCase().trim();
+    if (raw === "high") return { label: "High", bg: "#10B981" };
+    if (raw === "low") return { label: "Low", bg: "#EF4444" };
+    return { label: "Medium", bg: "#F59E0B" };
+  })();
 
   return (
     <div
@@ -141,6 +151,21 @@ export function LikesYouProfileCard({
             {profile.first_name ?? "Sans prénom"}
           </p>
           {isPhotoVerified(profile) ? <VerifiedBadge /> : null}
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: "999px",
+              padding: "3px 8px",
+              fontSize: "11px",
+              fontWeight: 700,
+              color: "#FFFFFF",
+              background: reliabilityBadge.bg,
+            }}
+          >
+            {reliabilityBadge.label}
+          </span>
         </div>
         {profile.city && (
           <p
@@ -177,6 +202,25 @@ export function LikesYouProfileCard({
           {guided}
         </p>
         <div style={{ display: "flex", gap: "12px" }}>
+          {onViewProfile && (
+            <button
+              type="button"
+              onClick={() => onViewProfile(profile.id)}
+              style={{
+                flex: 1,
+                padding: "14px",
+                borderRadius: "14px",
+                border: `1px solid ${APP_BORDER}`,
+                background: "transparent",
+                cursor: "pointer",
+                fontSize: "15px",
+                fontWeight: 600,
+                color: APP_TEXT_MUTED,
+              }}
+            >
+              {LIKES_YOU_VIEW_PROFILE}
+            </button>
+          )}
           {!hasExistingRelation && onPass && (
             <button
               type="button"
@@ -276,25 +320,6 @@ export function LikesYouProfileCard({
             >
               <IconChatBubble size={19} />
               {conversationLabel}
-            </button>
-          )}
-          {hasExistingRelation && onViewProfile && (
-            <button
-              type="button"
-              onClick={() => onViewProfile(profile.id)}
-              style={{
-                flex: 1,
-                padding: "14px",
-                borderRadius: "14px",
-                border: `1px solid ${APP_BORDER}`,
-                background: "transparent",
-                cursor: "pointer",
-                fontSize: "15px",
-                fontWeight: 600,
-                color: APP_TEXT_MUTED,
-              }}
-            >
-              {LIKES_YOU_VIEW_PROFILE}
             </button>
           )}
         </div>

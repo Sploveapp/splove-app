@@ -1,20 +1,15 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
-import { usePremium } from "../hooks/usePremium";
 import { useLikesReceived } from "../hooks/useLikesReceived";
-import { BlurredProfileCard } from "../components/BlurredProfileCard";
 import { LikesYouProfileCard } from "../components/LikesYouProfileCard";
-import { PaywallModal } from "../components/PaywallModal";
 import { ReportModal } from "../components/ReportModal";
 import { ReportPhotoModal } from "../components/ReportPhotoModal";
 import { supabase } from "../lib/supabase";
-import { BETA_MODE } from "../constants/beta";
 import {
   BLOCK_PROFILE_CONFIRM,
   LIKES_YOU_TITLE,
   LIKES_YOU_LOADING,
-  LIKES_YOU_EMPTY,
   ERROR_GENERIC,
 } from "../constants/copy";
 import { insertBlock } from "../services/blocks.service";
@@ -28,7 +23,6 @@ export default function LikesYou() {
   const { user, profile, isAuthInitialized } = useAuth();
   const navigate = useNavigate();
   const currentUserId = isAuthInitialized && user?.id ? user.id : null;
-  const { hasPlus, isLoading: premiumLoading } = usePremium(user?.id ?? "");
   const { list, setList, loading, error } = useLikesReceived(
     currentUserId,
     profile?.gender ?? null,
@@ -44,7 +38,6 @@ export default function LikesYou() {
     likesForRender.map((x) => x.profile?.first_name ?? null),
   );
 
-  const [showPaywall, setShowPaywall] = useState(false);
   const [reportProfileId, setReportProfileId] = useState<string | null>(null);
   const [reportPhotoTarget, setReportPhotoTarget] = useState<{
     profileId: string;
@@ -121,7 +114,7 @@ export default function LikesYou() {
           {LIKES_YOU_TITLE}
         </h1>
 
-        {(premiumLoading || loading) && (
+        {loading && (
           <p style={{ color: "#64748b", fontSize: "15px" }}>{LIKES_YOU_LOADING}</p>
         )}
 
@@ -129,20 +122,11 @@ export default function LikesYou() {
           <p style={{ color: "#dc2626", fontSize: "14px" }}>{error || ERROR_GENERIC}</p>
         )}
 
-        {!premiumLoading && !loading && likesForRender.length === 0 && (
-          <p style={{ color: "#64748b", fontSize: "15px" }}>{LIKES_YOU_EMPTY}</p>
+        {!loading && likesForRender.length === 0 && (
+          <p style={{ color: "#64748b", fontSize: "15px" }}>Personne ne t’a liké pour l’instant.</p>
         )}
 
-        {!premiumLoading && !loading && likesForRender.length > 0 && !hasPlus &&
-          likesForRender.map((like) => (
-            <BlurredProfileCard
-              key={like.id}
-              like={like}
-              onUnlock={() => setShowPaywall(true)}
-            />
-          ))}
-
-        {!premiumLoading && !loading && likesForRender.length > 0 && hasPlus &&
+        {!loading && likesForRender.length > 0 &&
           likesForRender.map((like) => (
             <LikesYouProfileCard
   key={like.id}
@@ -193,13 +177,6 @@ export default function LikesYou() {
 />
           ))}
       </main>
-
-      {showPaywall && !BETA_MODE && (
-        <PaywallModal
-          featureName="likes_you"
-          onClose={() => setShowPaywall(false)}
-        />
-      )}
 
       {reportProfileId && currentUserId && (
         <ReportModal
