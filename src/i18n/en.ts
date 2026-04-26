@@ -59,6 +59,8 @@ const en = {
   auth_toggle_signup: "No account yet? Sign up",
   auth_terms_notice: "By continuing, you accept our Terms and Privacy Policy.",
   auth_signup_success: "Account created. Check your email to confirm.",
+  auth_apple_coming_soon_line_1: "Apple sign-in coming soon 🍎",
+  auth_apple_coming_soon_line_2: "You can continue with Google or email in the meantime.",
   discover_real_meetups: "Real meetups",
   discover_heading: "From sport to real life",
   discover_subheading: "Compatible profiles to turn sport into a real meetup.",

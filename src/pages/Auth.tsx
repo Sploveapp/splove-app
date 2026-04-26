@@ -40,6 +40,7 @@ export default function Auth() {
   const [oauthLoading, setOauthLoading] = useState<"google" | "apple" | null>(null);
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
+  const [appleNotice, setAppleNotice] = useState(false);
 
   useEffect(() => {
     if (isLoading || !isAuthInitialized) return;
@@ -88,21 +89,18 @@ export default function Auth() {
     }
   }
 
-  async function signInWithApple() {
-    setMessage(null);
-    setOauthLoading("apple");
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "apple",
-        options: { redirectTo: oauthRedirectUrl() },
-      });
-      if (error) throw error;
-    } catch (err: unknown) {
-      setMessage({ type: "error", text: authErrorToUserMessage(err, language) });
-    } finally {
-      setOauthLoading(null);
-    }
-  }
+  const handleAppleComingSoon = () => {
+    console.log("[AppleOAuth] coming soon clicked", {
+      source: "auth_screen",
+      timestamp: new Date().toISOString(),
+    });
+
+    setAppleNotice(true);
+
+    window.setTimeout(() => {
+      setAppleNotice(false);
+    }, 3500);
+  };
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -204,12 +202,27 @@ export default function Auth() {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <button
             type="button"
-            style={btnOAuth}
+            className="opacity-60 cursor-pointer"
+            style={{
+              ...btnOAuth,
+              opacity: loading || oauthLoading ? 0.5 : 0.6,
+            }}
             disabled={!!oauthLoading || loading}
-            onClick={() => void signInWithApple()}
+            onClick={handleAppleComingSoon}
           >
-            {oauthLoading === "apple" ? `${t("loading")}` : t("continue_with_apple")}
+            {t("continue_with_apple")}
           </button>
+          {appleNotice && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-3 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white shadow-lg backdrop-blur"
+            >
+              {t("auth_apple_coming_soon_line_1")}
+              <br />
+              <span className="text-white/70">{t("auth_apple_coming_soon_line_2")}</span>
+            </div>
+          )}
           <button
             type="button"
             style={btnOAuth}

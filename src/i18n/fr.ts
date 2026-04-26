@@ -59,6 +59,9 @@ const fr = {
   auth_toggle_signup: "Pas encore de compte ? S'inscrire",
   auth_terms_notice: "En continuant, tu acceptes nos CGU et notre Politique de confidentialite.",
   auth_signup_success: "Compte cree. Verifie ton email pour confirmer.",
+  auth_apple_coming_soon_line_1: "Connexion Apple bientôt disponible 🍎",
+  auth_apple_coming_soon_line_2:
+    "Tu peux continuer avec Google ou email en attendant.",
   discover_real_meetups: "Rencontres reelles",
   discover_heading: "Du terrain a la rencontre",
   discover_subheading: "Des profils compatibles pour passer du sport a une vraie rencontre.",
