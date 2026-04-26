@@ -1699,6 +1699,7 @@ export default function Chat() {
                           ? `chat-message-bubble ml-auto ${getOwnMessageBubbleClassName(chatAccentTheme)}`
                           : "chat-message-bubble mr-auto max-w-[85%] rounded-2xl border border-app-border bg-app-card px-3.5 py-2.5 text-sm leading-snug text-app-text shadow-sm"
                       }
+                      {...{ "x-apple-data-detectors": "false" }}
                     >
                       {m.body}
                     </div>

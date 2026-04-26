@@ -13,6 +13,7 @@ import {
   TEXT_ON_BRAND,
 } from "../constants/theme";
 import { useTranslation } from "../i18n/useTranslation";
+import { antiExitValidator } from "../lib/antiExitValidator";
 
 type SportOption = { id: string | number; name: string; category?: string | null };
 type LookingForValue =
@@ -235,6 +236,13 @@ export default function EditProfile() {
     setLoading(true);
     setMessage(null);
     try {
+      const bioTrim = bio.trim();
+      if (bioTrim && antiExitValidator(bioTrim, "profile").isBlocked) {
+        setMessage(t("safety_content_refusal"));
+        setLoading(false);
+        return;
+      }
+
       let nextPortrait = portraitUrl;
       let nextBody = bodyUrl;
       if (portraitFile) nextPortrait = await uploadPhoto(user.id, portraitFile, "portrait");

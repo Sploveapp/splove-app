@@ -453,7 +453,8 @@ const en = {
   activity_modal_placeholder_phrase: "Your line…",
   activity_modal_submit_default: "Send proposal",
   sending: "Sending…",
-  safety_content_refusal: "For your safety, keep messaging on SPLove until you meet.",
+  safety_content_refusal:
+    "For your safety, keep your conversations on SPLove before you meet in person.",
   chat_first_message_policy_homme:
     "On SPLove, your match goes first. You can still suggest an activity slot below.",
   block_profile_confirm: "This person will no longer appear for you, and you will not be able to message each other. Continue?",

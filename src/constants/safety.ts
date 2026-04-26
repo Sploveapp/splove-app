@@ -1,6 +1,6 @@
 /**
  * SPLove — Signalements + référence historique filtres.
- * La modération active des textes est dans `src/lib/contentModeration.ts`.
+ * Blocage anti-sortie (texte) : `src/lib/antiExitValidator.ts` (API historique : `contentModeration.ts`).
  */
 
 // ——— Report reasons ———

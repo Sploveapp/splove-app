@@ -164,7 +164,7 @@ export const ACCESSIBILITY_PREF_BOTH_REQUIRED =
 // ——— Safety (message filter + reports) ———
 /** Message unique pour refus modération (chat, bio, propositions). */
 export const SAFETY_CONTENT_REFUSAL =
-  "Pour votre sécurité, les échanges restent sur SPLove jusqu'à la rencontre.";
+  "Pour ta sécurité, les échanges doivent rester sur SPLove avant la rencontre.";
 /** @deprecated Utiliser SAFETY_CONTENT_REFUSAL */
 export const SAFETY_MESSAGE_BLOCKED = SAFETY_CONTENT_REFUSAL;
 /** Chat — couple F/H amoureux : l’homme ne peut pas envoyer le premier message texte (activité OK). */

@@ -455,7 +455,8 @@ const fr = {
   activity_modal_placeholder_phrase: "Votre phrase…",
   activity_modal_submit_default: "Envoyer la proposition",
   sending: "Envoi…",
-  safety_content_refusal: "Pour votre sécurité, les échanges restent sur SPLove jusqu'à la rencontre.",
+  safety_content_refusal:
+    "Pour ta sécurité, les échanges doivent rester sur SPLove avant la rencontre.",
   chat_first_message_policy_homme:
     "Ici, le premier message écrit revient à votre correspondante. Vous pouvez lui proposer un créneau d'activité ci-dessous.",
   block_profile_confirm: "Cette personne ne vous sera plus proposée et vous ne pourrez plus échanger. Continuer ?",

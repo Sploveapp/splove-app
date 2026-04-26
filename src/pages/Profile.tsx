@@ -132,7 +132,7 @@ export default function Profile() {
     if (!user?.id) return;
     const phraseText = phraseDraft.trim();
     if (phraseText.length > 0 && bioPublicTextViolatesPolicy(phraseText)) {
-      setPhraseMessage("Ce texte n'est pas autorise (liens, reseaux sociaux, etc.).");
+      setPhraseMessage(t("safety_content_refusal"));
       return;
     }
     setPhraseSaving(true);
