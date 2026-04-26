@@ -69,12 +69,31 @@ export default function Auth() {
     return <Navigate to="/onboarding" replace />;
   }
 
-  async function signInWithProvider(provider: "google" | "apple") {
+  async function signInWithGoogle() {
     setMessage(null);
-    setOauthLoading(provider);
+    setOauthLoading("google");
+    try {
+      console.log("[GoogleOAuth] click");
+      console.log("[GoogleOAuth] redirectTo", oauthRedirectUrl());
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: oauthRedirectUrl() },
+      });
+      if (error) throw error;
+      console.log("[GoogleOAuth] redirect started");
+    } catch (err: unknown) {
+      setMessage({ type: "error", text: authErrorToUserMessage(err, language) });
+    } finally {
+      setOauthLoading(null);
+    }
+  }
+
+  async function signInWithApple() {
+    setMessage(null);
+    setOauthLoading("apple");
     try {
       const { error } = await supabase.auth.signInWithOAuth({
-        provider,
+        provider: "apple",
         options: { redirectTo: oauthRedirectUrl() },
       });
       if (error) throw error;
@@ -187,7 +206,7 @@ export default function Auth() {
             type="button"
             style={btnOAuth}
             disabled={!!oauthLoading || loading}
-            onClick={() => void signInWithProvider("apple")}
+            onClick={() => void signInWithApple()}
           >
             {oauthLoading === "apple" ? `${t("loading")}` : t("continue_with_apple")}
           </button>
@@ -195,7 +214,7 @@ export default function Auth() {
             type="button"
             style={btnOAuth}
             disabled={!!oauthLoading || loading}
-            onClick={() => void signInWithProvider("google")}
+            onClick={() => void signInWithGoogle()}
           >
             {oauthLoading === "google" ? `${t("loading")}` : t("continue_with_google")}
           </button>

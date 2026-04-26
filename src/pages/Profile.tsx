@@ -52,7 +52,7 @@ import LanguageSwitcher from "../components/LanguageSwitcher";
 export default function Profile() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { user, profile, refetchProfile } = useAuth();
+  const { user, profile, refetchProfile, signOut } = useAuth();
   const mainPhoto = profile?.main_photo_url?.trim() || null;
   const [imageError, setImageError] = useState(false);
   const [comingSoonOpen, setComingSoonOpen] = useState(false);
@@ -125,8 +125,7 @@ export default function Profile() {
   }, [phraseMessage]);
 
   async function handleLogout() {
-    await supabase.auth.signOut();
-    navigate("/auth", { replace: true });
+    await signOut();
   }
 
   async function handleSaveSportPhrase() {

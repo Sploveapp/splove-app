@@ -1,45 +1,15 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "../i18n/useTranslation";
+import { useSplovePlus } from "../hooks/useSplovePlus";
+import { useAuth } from "../contexts/AuthContext";
 
 const BETA_METRICS_KEY = "splove_plus_beta_metrics";
-
-const K = {
-  plusActive: "splove_plus_active",
-  incPriority: "splove_plus_priority_proposals",
-  incGhost: "splove_plus_ghost_mode",
-  incPlaces: "splove_plus_common_places",
-  incReminders: "splove_plus_smart_reminders",
-  incSmartBoost: "splove_plus_smart_boost",
-  osBoost: "splove_boost_active",
-  osBoostDuration: "splove_boost_duration",
-  osGhost24: "splove_ghost_24h",
-  osPriority: "splove_priority_one_shot",
-  osPlaces24: "splove_common_places_24h",
-  osReminder: "splove_smart_reminder_one_shot",
-} as const;
 
 type BetaMetrics = {
   paywallViews: number;
   ctaClicks: number;
   activations: number;
   featureUsage: Record<string, number>;
-};
-
-type IncludedState = {
-  priority: boolean;
-  ghost: boolean;
-  places: boolean;
-  reminders: boolean;
-  smartBoost: boolean;
-};
-
-type OneShotState = {
-  boost: boolean;
-  boostDuration: "30" | "60" | null;
-  ghost: boolean;
-  priority: boolean;
-  places: boolean;
-  reminder: boolean;
 };
 
 type ModalId = "boost" | "ghost" | "priority" | "places" | "reminder" | null;
@@ -92,58 +62,37 @@ function trackBetaEvent(eventName: "paywall_view" | "cta_click" | "activation" |
   });
 }
 
-function readLsBool(key: string): boolean {
-  try {
-    return localStorage.getItem(key) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function writeLs(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // ignore
-  }
-}
-
-function loadIncluded(): IncludedState {
-  return {
-    priority: readLsBool(K.incPriority),
-    ghost: readLsBool(K.incGhost),
-    places: readLsBool(K.incPlaces),
-    reminders: readLsBool(K.incReminders),
-    smartBoost: readLsBool(K.incSmartBoost),
-  };
-}
-
-function loadOneShots(): OneShotState {
-  let dur: "30" | "60" | null = null;
-  try {
-    const d = localStorage.getItem(K.osBoostDuration);
-    if (d === "30" || d === "60") dur = d;
-  } catch {
-    // ignore
-  }
-  return {
-    boost: readLsBool(K.osBoost),
-    boostDuration: dur,
-    ghost: readLsBool(K.osGhost24),
-    priority: readLsBool(K.osPriority),
-    places: readLsBool(K.osPlaces24),
-    reminder: readLsBool(K.osReminder),
-  };
-}
-
 export default function SplovePlus() {
   const { t, language } = useTranslation();
+  const { user } = useAuth();
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [plusActive, setPlusActive] = useState(() => readLsBool(K.plusActive));
-  const [included, setIncluded] = useState<IncludedState>(() => loadIncluded());
-  const [oneShots, setOneShots] = useState<OneShotState>(() => loadOneShots());
   const [modal, setModal] = useState<ModalId>(null);
   const [boostDuration, setBoostDuration] = useState<"30" | "60">("30");
+  const {
+    isActive,
+    activate,
+    isPriorityEnabled,
+    isGhostEnabled,
+    isPlacesEnabled,
+    isRemindersEnabled,
+    isBoostEnabled,
+    isOneShotBoostActive,
+    oneShotBoostDuration,
+    isOneShotGhostActive,
+    isOneShotPriorityActive,
+    isOneShotPlacesActive,
+    isOneShotReminderActive,
+    togglePriority,
+    toggleGhost,
+    togglePlaces,
+    toggleReminders,
+    toggleBoost,
+    activateOneShotBoost,
+    activateOneShotGhost,
+    activateOneShotPriority,
+    activateOneShotPlaces,
+    activateOneShotReminder,
+  } = useSplovePlus(user?.id ?? null);
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -155,32 +104,12 @@ export default function SplovePlus() {
     trackBetaEvent("paywall_view");
   }, []);
 
-  function setIncludedKey(field: keyof IncludedState, key: string, value: boolean) {
-    writeLs(key, value ? "true" : "false");
-    setIncluded((prev) => ({ ...prev, [field]: value }));
-    trackBetaEvent("feature_usage", `incl_${field}`);
-  }
-
-  function toggleIncluded(field: keyof IncludedState) {
-    if (!plusActive) return;
-    const map: Record<keyof IncludedState, string> = {
-      priority: K.incPriority,
-      ghost: K.incGhost,
-      places: K.incPlaces,
-      reminders: K.incReminders,
-      smartBoost: K.incSmartBoost,
-    };
-    const key = map[field];
-    setIncludedKey(field, key, !included[field]);
-  }
-
   function handlePrimaryCta() {
     trackBetaEvent("cta_click");
-    if (plusActive) return;
+    if (isActive) return;
     trackBetaEvent("activation");
-    writeLs(K.plusActive, "true");
-    setPlusActive(true);
-    setToastMessage(t("activation_success"));
+    activate();
+    setToastMessage(t("splove_plus_activation_value"));
   }
 
   function openOneShot(kind: NonNullable<ModalId>, already: boolean) {
@@ -188,27 +117,31 @@ export default function SplovePlus() {
       setToastMessage(t("one_shot_activated"));
       return;
     }
-    if (kind === "boost") {
-      const d = oneShots.boostDuration;
-      if (d === "30" || d === "60") setBoostDuration(d);
-      else setBoostDuration("30");
-    }
+    if (kind === "boost") setBoostDuration(oneShotBoostDuration === "60" ? "60" : "30");
     setModal(kind);
   }
 
   function confirmOneShot() {
     if (!modal) return;
-    if (modal === "boost") {
-      writeLs(K.osBoost, "true");
-      writeLs(K.osBoostDuration, boostDuration);
-    }
-    if (modal === "ghost") writeLs(K.osGhost24, "true");
-    if (modal === "priority") writeLs(K.osPriority, "true");
-    if (modal === "places") writeLs(K.osPlaces24, "true");
-    if (modal === "reminder") writeLs(K.osReminder, "true");
+    if (modal === "boost") activateOneShotBoost(boostDuration);
+    if (modal === "ghost") activateOneShotGhost();
+    if (modal === "priority") activateOneShotPriority();
+    if (modal === "places") activateOneShotPlaces();
+    if (modal === "reminder") activateOneShotReminder();
     setModal(null);
-    setOneShots(loadOneShots());
-    setToastMessage(t("activation_success"));
+    if (modal === "boost") {
+      setToastMessage(
+        language === "en"
+          ? boostDuration === "60"
+            ? "You're now boosted for 1 hour"
+            : "You're now boosted for 30 minutes"
+          : boostDuration === "60"
+            ? "Tu es booste pendant 1 heure"
+            : "Tu es booste pendant 30 minutes",
+      );
+      return;
+    }
+    setToastMessage(t("one_shot_activated"));
   }
 
   const heroP =
@@ -235,20 +168,27 @@ export default function SplovePlus() {
           <button
             type="button"
             onClick={handlePrimaryCta}
-            disabled={plusActive}
+            disabled={isActive}
             className="w-full rounded-2xl bg-[#FF3B3B] px-4 py-3.5 text-[15px] font-semibold text-white shadow-[0_10px_30px_rgba(255,59,59,0.25)] transition duration-200 hover:opacity-95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {plusActive ? t("splove_plus_status_active") : t("premium_cta")}
+            {isActive ? t("splove_plus_status_active") : t("premium_cta")}
           </button>
           <p className="text-xs font-medium text-[#FF9B9B]">
             {language === "en" ? "+3x more activity proposals accepted" : "+3x plus de propositions acceptees"}
           </p>
-          {plusActive ? (
+          {isActive ? (
             <p className="text-xs font-medium text-emerald-300/95">{t("splove_plus_status_active")}</p>
+          ) : null}
+          {isGhostEnabled ? (
+            <p className="mx-auto max-w-md rounded-xl border border-violet-400/35 bg-violet-500/10 px-3 py-2 text-xs font-medium text-violet-100">
+              {language === "en"
+                ? "Ghost Mode is on - your profile is hidden from Discover."
+                : "Mode fantome actif - ton profil est invisible dans Decouvrir."}
+            </p>
           ) : null}
         </header>
 
-        {plusActive ? (
+        {isActive ? (
           <section
             className="space-y-3 rounded-3xl border border-white/10 bg-white/[0.03] p-4"
             aria-label={t("premium_included_options")}
@@ -256,43 +196,58 @@ export default function SplovePlus() {
             <h2 className="text-base font-semibold text-white">{t("premium_included_options")}</h2>
             <ToggleRow
               label={t("premium_feature_2")}
-              active={included.priority}
               activeWord={t("active")}
               activateLabel={t("activate")}
               deactivateLabel={t("deactivate")}
-              onToggle={() => toggleIncluded("priority")}
+              active={isPriorityEnabled}
+              onToggle={() => {
+                togglePriority();
+                trackBetaEvent("feature_usage", "incl_priority");
+              }}
             />
             <ToggleRow
               label={t("one_shot_ghost")}
-              active={included.ghost}
+              active={isGhostEnabled}
               activeWord={t("active")}
               activateLabel={t("activate")}
               deactivateLabel={t("deactivate")}
-              onToggle={() => toggleIncluded("ghost")}
+              onToggle={() => {
+                toggleGhost();
+                trackBetaEvent("feature_usage", "incl_ghost");
+              }}
             />
             <ToggleRow
               label={t("premium_feature_3")}
-              active={included.places}
+              active={isPlacesEnabled}
               activeWord={t("active")}
               activateLabel={t("activate")}
               deactivateLabel={t("deactivate")}
-              onToggle={() => toggleIncluded("places")}
+              onToggle={() => {
+                togglePlaces();
+                trackBetaEvent("feature_usage", "incl_places");
+              }}
             />
             <ToggleRow
               label={t("one_shot_smart_reminder")}
-              active={included.reminders}
+              active={isRemindersEnabled}
               activeWord={t("active")}
               activateLabel={t("activate")}
               deactivateLabel={t("deactivate")}
-              onToggle={() => toggleIncluded("reminders")}
+              onToggle={() => {
+                toggleReminders();
+                trackBetaEvent("feature_usage", "incl_reminders");
+              }}
             />
             <ToggleRow
               label={t("premium_feature_4")}
-              active={included.smartBoost}
+              active={isBoostEnabled}
               activeWord={t("active")}
               activateLabel={t("activate")}
               deactivateLabel={t("deactivate")}
-              onToggle={() => toggleIncluded("smartBoost")}
+              onToggle={() => {
+                toggleBoost();
+                trackBetaEvent("feature_usage", "incl_smart_boost");
+              }}
             />
           </section>
         ) : null}
@@ -363,10 +318,10 @@ export default function SplovePlus() {
           <button
             type="button"
             onClick={handlePrimaryCta}
-            disabled={plusActive}
+            disabled={isActive}
             className="mt-4 w-full rounded-2xl bg-[#FF3B3B] px-4 py-3.5 text-[15px] font-semibold text-white transition duration-200 hover:opacity-95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {plusActive ? t("splove_plus_status_active") : t("premium_cta")}
+            {isActive ? t("splove_plus_status_active") : t("premium_cta")}
           </button>
           <p className="mt-2 text-center text-xs text-white/55">{t("premium_cancel_anytime")}</p>
           <p className="mt-1 text-center text-xs text-white/45">{t("premium_maybe_paid_after_beta")}</p>
@@ -378,39 +333,39 @@ export default function SplovePlus() {
             <MiniOfferCard
               title={t("one_shot_boost_visibility")}
               price={t("price_eur_199")}
-              isActive={oneShots.boost}
+              isActive={isOneShotBoostActive}
               activeDetail={
-                oneShots.boost && oneShots.boostDuration
-                  ? oneShots.boostDuration === "30"
-                    ? t("boost_duration_30")
-                    : t("boost_duration_60")
+                isOneShotBoostActive
+                  ? oneShotBoostDuration === "60"
+                    ? t("boost_duration_60")
+                    : t("boost_duration_30")
                   : null
               }
-              onClick={() => openOneShot("boost", oneShots.boost)}
+              onClick={() => openOneShot("boost", isOneShotBoostActive)}
             />
             <MiniOfferCard
               title={t("one_shot_ghost")}
               price={t("price_eur_299")}
-              isActive={oneShots.ghost}
-              onClick={() => openOneShot("ghost", oneShots.ghost)}
+              isActive={isOneShotGhostActive}
+              onClick={() => openOneShot("ghost", isOneShotGhostActive)}
             />
             <MiniOfferCard
               title={t("one_shot_priority")}
               price={t("price_eur_399")}
-              isActive={oneShots.priority}
-              onClick={() => openOneShot("priority", oneShots.priority)}
+              isActive={isOneShotPriorityActive}
+              onClick={() => openOneShot("priority", isOneShotPriorityActive)}
             />
             <MiniOfferCard
               title={t("one_shot_common_places")}
               price={t("price_eur_299")}
-              isActive={oneShots.places}
-              onClick={() => openOneShot("places", oneShots.places)}
+              isActive={isOneShotPlacesActive}
+              onClick={() => openOneShot("places", isOneShotPlacesActive)}
             />
             <MiniOfferCard
               title={t("one_shot_smart_reminder")}
               price={t("price_eur_199")}
-              isActive={oneShots.reminder}
-              onClick={() => openOneShot("reminder", oneShots.reminder)}
+              isActive={isOneShotReminderActive}
+              onClick={() => openOneShot("reminder", isOneShotReminderActive)}
             />
           </div>
         </section>
@@ -425,10 +380,10 @@ export default function SplovePlus() {
           <button
             type="button"
             onClick={handlePrimaryCta}
-            disabled={plusActive}
+            disabled={isActive}
             className="w-full rounded-2xl bg-[#FF3B3B] px-4 py-3.5 text-[15px] font-semibold text-white shadow-[0_10px_30px_rgba(255,59,59,0.25)] transition duration-200 hover:opacity-95 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {plusActive ? t("splove_plus_status_active") : t("premium_cta")}
+            {isActive ? t("splove_plus_status_active") : t("premium_cta")}
           </button>
         </div>
       </div>

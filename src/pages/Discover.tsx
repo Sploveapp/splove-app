@@ -53,6 +53,7 @@ import { buildDiscoverLocationLines, formatViewerRadiusLabel } from "../utils/ge
 import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
 import { isProfileActiveRecently } from "../services/splovePlus.service";
 import { usePremium } from "../hooks/usePremium";
+import { useSplovePlus } from "../hooks/useSplovePlus";
 import { useTranslation } from "../i18n/useTranslation";
 
 type Profile = {
@@ -123,9 +124,126 @@ type ProfileWithAffinity = Profile & {
   discover_excluded: boolean;
   /** Tri principal Discover — ne pas afficher. */
   reliabilityScore: number;
+  is_boost_active?: boolean;
   /** Au moins un place_ref commun avec le viewer — renseigné par `discover_shared_place_flags` ; jamais de nom dans l’UI Discover. */
   has_shared_place?: boolean;
 };
+
+function boostStorageKeys(profileId: string) {
+  return {
+    active: `splove_${profileId}_boost_active`,
+    start: `splove_${profileId}_boost_start_time`,
+    duration: `splove_${profileId}_boost_duration`,
+  };
+}
+
+function clearProfileBoostStorage(profileId: string) {
+  const k = boostStorageKeys(profileId);
+  try {
+    localStorage.removeItem(k.active);
+    localStorage.removeItem(k.start);
+    localStorage.removeItem(k.duration);
+  } catch {
+    // ignore storage cleanup errors
+  }
+}
+
+function isProfileBoostActive(profileId: string): boolean {
+  if (!profileId) return false;
+  const k = boostStorageKeys(profileId);
+  try {
+    const active = localStorage.getItem(k.active);
+    const startRaw = localStorage.getItem(k.start);
+    const durationRaw = localStorage.getItem(k.duration);
+    if (active !== "true" || !startRaw || !durationRaw) return false;
+    const start = Number(startRaw);
+    const durationMinutes = durationRaw === "60" ? 60 : durationRaw === "30" ? 30 : 0;
+    if (!Number.isFinite(start) || durationMinutes <= 0) {
+      clearProfileBoostStorage(profileId);
+      return false;
+    }
+    const expiresAt = start + durationMinutes * 60 * 1000;
+    if (Date.now() >= expiresAt) {
+      clearProfileBoostStorage(profileId);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ghostStorageKeys(profileId: string) {
+  return {
+    active: `splove_${profileId}_ghost_mode`,
+    start: `splove_${profileId}_ghost_start_time`,
+    duration: `splove_${profileId}_ghost_duration`,
+  };
+}
+
+function clearProfileGhostStorage(profileId: string) {
+  const k = ghostStorageKeys(profileId);
+  try {
+    localStorage.removeItem(k.active);
+    localStorage.removeItem(k.start);
+    localStorage.removeItem(k.duration);
+  } catch {
+    // ignore storage cleanup errors
+  }
+}
+
+function isProfileGhostActive(profileId: string): boolean {
+  if (!profileId) return false;
+  const k = ghostStorageKeys(profileId);
+  try {
+    const active = localStorage.getItem(k.active);
+    if (active !== "true") return false;
+    const startRaw = localStorage.getItem(k.start);
+    const durationRaw = localStorage.getItem(k.duration);
+    if (!startRaw || !durationRaw) {
+      clearProfileGhostStorage(profileId);
+      return false;
+    }
+    const start = Number(startRaw);
+    const durationHours = Number(durationRaw);
+    if (!Number.isFinite(start) || !Number.isFinite(durationHours) || durationHours <= 0) {
+      clearProfileGhostStorage(profileId);
+      return false;
+    }
+    const expiresAt = start + durationHours * 60 * 60 * 1000;
+    if (Date.now() >= expiresAt) {
+      clearProfileGhostStorage(profileId);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isIntentCompatibleForBoost(viewerIntentRaw: string | null | undefined, candidateIntentRaw: string | null | undefined): boolean {
+  const viewerIntent = parseProfileIntent(viewerIntentRaw);
+  const candidateIntent = parseProfileIntent(candidateIntentRaw);
+  if (viewerIntent && candidateIntent) return viewerIntent === candidateIntent;
+  const rawViewer = String(viewerIntentRaw ?? "").trim().toLowerCase();
+  const rawCandidate = String(candidateIntentRaw ?? "").trim().toLowerCase();
+  const viewerBoth = rawViewer === "both" || rawViewer === "les deux";
+  const candidateBoth = rawCandidate === "both" || rawCandidate === "les deux";
+  if (viewerBoth || candidateBoth) return true;
+  return false;
+}
+
+function computeBoostRankingScore(
+  profile: ProfileWithAffinity,
+  viewerIntentRaw: string | null | undefined,
+): number {
+  const baseScore = Number.isFinite(profile.discoverScore) ? profile.discoverScore : 0;
+  const boostBonus = profile.is_boost_active === true ? 300 : 0;
+  const sportsBonus = profile.commonSportsCount > 0 ? 100 : 0;
+  const intentBonus = isIntentCompatibleForBoost(viewerIntentRaw, profile.intent) ? 80 : 0;
+  const activityBonus = isProfileActiveRecently(profile.last_active_at) ? 40 : 0;
+  return baseScore + boostBonus + sportsBonus + intentBonus + activityBonus;
+}
 
 type LikeRpcParsed = { is_match: boolean; conversation_id: string | null };
 
@@ -313,6 +431,7 @@ type DiscoverSwipeCardProps = {
   onReport: (id: string) => void;
   onReportPhoto: (p: ProfileWithAffinity) => void;
   onBlock: (id: string) => void | Promise<void>;
+  language: "fr" | "en";
 };
 
 const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
@@ -327,6 +446,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   onReport,
   onReportPhoto,
   onBlock,
+  language,
 }: DiscoverSwipeCardProps) {
   const { t } = useTranslation();
   const age = getAgeFromBirthDate(profile.birth_date ?? null);
@@ -366,6 +486,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
     if (raw === "low") return { label: "Low", className: "bg-rose-500/90 text-white" };
     return { label: "Medium", className: "bg-amber-500/90 text-white" };
   })();
+  const boostBadgeLabel = language === "en" ? "Active now" : "Actif maintenant";
 
   const [dx, setDx] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -447,6 +568,10 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
     <article
       className={`mb-7 flex max-h-[min(88vh,820px)] min-h-[min(520px,85svh)] flex-col overflow-hidden rounded-3xl bg-app-card shadow-lg ring-1 ring-app-border/90 ${
         strongAffinity ? "ring-2 ring-emerald-200/70" : ""
+      } ${
+        profile.is_boost_active
+          ? "ring-2 ring-fuchsia-400/45 shadow-[0_0_22px_rgba(217,70,239,0.22)] animate-[pulse_2.8s_ease-in-out_infinite]"
+          : ""
       }`}
     >
       <div
@@ -484,6 +609,11 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
         {isProfileActiveRecently(profile.last_active_at) ? (
           <div className="pointer-events-none absolute left-3 top-10 z-10 rounded-full bg-[#FF1E2D]/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm backdrop-blur-sm">
             Actif maintenant
+          </div>
+        ) : null}
+        {profile.is_boost_active === true ? (
+          <div className="pointer-events-none absolute left-3 top-[4.2rem] z-10 rounded-full bg-fuchsia-500/85 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm backdrop-blur-sm">
+            {boostBadgeLabel}
           </div>
         ) : null}
         <div
@@ -679,7 +809,7 @@ export default function Discover() {
   const navigate = useNavigate();
   const location = useLocation();
   const handledPreviewNavKeyRef = useRef<string | null>(null);
-  const { user, isLoading: authLoading, profile } = useAuth();
+  const { user, session, isLoading: authLoading, profile, isProfileLoading } = useAuth();
   const currentUserId = user?.id ?? "";
   const { hasPlus } = usePremium(currentUserId || null);
   const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
@@ -698,10 +828,19 @@ export default function Discover() {
   const [likeActionError, setLikeActionError] = useState<string | null>(null);
   const [discoverMenuProfileId, setDiscoverMenuProfileId] = useState<string | null>(null);
   const [blockActionError, setBlockActionError] = useState<string | null>(null);
+  const [boostLifecycleMessage, setBoostLifecycleMessage] = useState<string | null>(null);
   /** Same row object as weekly suggestions / main feed — avoids find-by-id mismatch for Like. */
   const [previewProfile, setPreviewProfile] = useState<ProfileWithAffinity | null>(null);
   const likeInFlightRef = useRef<Set<string>>(new Set());
   const blockInFlightRef = useRef<Set<string>>(new Set());
+  const prevBoostActiveRef = useRef(false);
+  const { boostStats } = useSplovePlus(currentUserId || null);
+
+  useEffect(() => {
+    console.log("[Discover] session", session);
+    console.log("[Discover] profile", profile);
+    console.log("[Discover] isProfileLoading", isProfileLoading);
+  }, [session, profile, isProfileLoading]);
 
   function openReportPhotoFromDiscover(p: ProfileWithAffinity) {
     setDiscoverMenuProfileId(null);
@@ -732,6 +871,24 @@ export default function Discover() {
   }, [blockActionError]);
 
   useEffect(() => {
+    if (!boostLifecycleMessage) return;
+    const t = window.setTimeout(() => setBoostLifecycleMessage(null), 3000);
+    return () => window.clearTimeout(t);
+  }, [boostLifecycleMessage]);
+
+  useEffect(() => {
+    const active = boostStats.isActive;
+    if (prevBoostActiveRef.current && !active) {
+      setBoostLifecycleMessage(
+        language === "en"
+          ? `Boost ended - ${boostStats.views} views reached`
+          : `Boost termine - ${boostStats.views} vues obtenues`,
+      );
+    }
+    prevBoostActiveRef.current = active;
+  }, [boostStats.isActive, boostStats.views, language]);
+
+  useEffect(() => {
     if (!discoverMenuProfileId) return;
     const onDoc = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
@@ -752,7 +909,7 @@ export default function Discover() {
     const requestedProfileId = explicitProfileId ?? legacyProfileId;
     const shouldOpen = navState?.openProfile === true || Boolean(legacyProfileId);
     console.log("DISCOVER_OPEN_PROFILE_ID", requestedProfileId ?? null);
-    if (!shouldOpen || !requestedProfileId || !isValidProfileId(requestedProfileId) || !currentUserId || !profile?.id) {
+    if (!shouldOpen || !requestedProfileId || !isValidProfileId(requestedProfileId) || !currentUserId) {
       return;
     }
     if (handledPreviewNavKeyRef.current === location.key) return;
@@ -861,7 +1018,7 @@ export default function Discover() {
     return () => {
       cancelled = true;
     };
-  }, [location.state, location.key, currentUserId, profile?.id, profiles]);
+  }, [location.state, location.key, currentUserId, profiles]);
 
   const closePreviewModal = useMemo(() => {
     return () => {
@@ -894,11 +1051,8 @@ export default function Discover() {
       profile_completed: profile?.profile_completed,
       photo_status: profile?.photo_status,
     });
-    if (!profile?.id) {
-      return;
-    }
     void loadProfiles();
-  }, [authLoading, user?.id, profile?.id]);
+  }, [authLoading, user?.id]);
 
   const weeklySuggestions = useMemo(
     () =>
@@ -924,10 +1078,10 @@ export default function Discover() {
         const aActive = a.is_active_mode === true ? 1 : 0;
         const bActive = b.is_active_mode === true ? 1 : 0;
         if (aActive !== bActive) return bActive - aActive;
-        return b.discoverScore - a.discoverScore;
+        return computeBoostRankingScore(b, profile?.intent ?? null) - computeBoostRankingScore(a, profile?.intent ?? null);
       }),
     );
-  }, [hasPlus]);
+  }, [hasPlus, profile?.intent]);
 
   async function loadProfiles() {
     if (!currentUserId) {
@@ -1135,6 +1289,7 @@ export default function Discover() {
       if (matchedIds.size > 0) {
         raw = raw.filter((p) => !matchedIds.has(p.id));
       }
+      raw = raw.filter((p) => !isProfileGhostActive(p.id));
 
       let stage: Profile[] = raw;
       console.log("[Discover feed] profiles before scoring filters:", stage.length);
@@ -1200,14 +1355,19 @@ export default function Discover() {
         }
       }
 
-      if (hasPlus) {
-        discoverFiltered.sort((a, b) => {
+      for (let i = 0; i < discoverFiltered.length; i += 1) {
+        const p = discoverFiltered[i];
+        discoverFiltered[i] = { ...p, is_boost_active: isProfileBoostActive(p.id) };
+      }
+
+      discoverFiltered.sort((a, b) => {
+        if (hasPlus) {
           const aActive = a.is_active_mode === true ? 1 : 0;
           const bActive = b.is_active_mode === true ? 1 : 0;
           if (aActive !== bActive) return bActive - aActive;
-          return b.discoverScore - a.discoverScore;
-        });
-      }
+        }
+        return computeBoostRankingScore(b, meProfile.intent ?? null) - computeBoostRankingScore(a, meProfile.intent ?? null);
+      });
 
       if (import.meta.env.DEV && discoverFiltered.length > 0) {
         for (const p of discoverFiltered.slice(0, 12)) {
@@ -1399,16 +1559,24 @@ export default function Discover() {
     setPreviewProfile(null);
   };
 
-  if (!authLoading && user?.id) {
-    if (!profile) {
-      return (
-        <div className="min-h-0 bg-app-bg font-sans">
-          <main className="mx-auto max-w-md px-4 pb-8 pt-8">
-            <p className="text-center text-sm text-app-muted">{t("loading")}</p>
-          </main>
-        </div>
-      );
-    }
+  if (!authLoading && user?.id && isProfileLoading) {
+    return (
+      <div className="min-h-0 bg-app-bg font-sans">
+        <main
+          className="mx-auto max-w-md px-4 pb-8 pt-8"
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+          aria-label={t("loading")}
+        >
+          <div className="space-y-0">
+            {[0, 1, 2].map((i) => (
+              <DiscoverProfileCardSkeleton key={i} />
+            ))}
+          </div>
+        </main>
+      </div>
+    );
   }
 
   return (
@@ -1431,6 +1599,31 @@ export default function Discover() {
           ) : null}
           {myCity ? (
             <p className="mx-auto mt-0.5 max-w-[21rem] text-[11px] text-app-muted">Ta ville · {myCity}</p>
+          ) : null}
+          {boostStats.isActive ? (
+            <div className="mx-auto mt-3 max-w-[21rem] rounded-xl border border-fuchsia-400/35 bg-fuchsia-500/10 px-3 py-2 text-[12px] font-medium text-fuchsia-100">
+              <p>
+                {language === "en"
+                  ? `Boost active - ${boostStats.views} views`
+                  : `Boost actif - ${boostStats.views} vues`}
+              </p>
+              <p className="mt-0.5 text-[11px] text-fuchsia-200/90">
+                {language === "en"
+                  ? "You're getting more visibility now"
+                  : "Tu gagnes en visibilite maintenant"}
+              </p>
+              <p className="mt-0.5 text-[11px] text-fuchsia-200/85">
+                {language === "en" ? "Time left:" : "Temps restant :"}{" "}
+                {Math.max(1, Math.ceil(boostStats.remainingTime / 60000))} min
+              </p>
+              {boostStats.lastMinuteGain > 0 ? (
+                <p className="mt-0.5 text-[11px] text-fuchsia-100/85">
+                  {language === "en"
+                    ? `+${boostStats.lastMinuteGain} views in the last minute`
+                    : `+${boostStats.lastMinuteGain} vues sur la derniere minute`}
+                </p>
+              ) : null}
+            </div>
           ) : null}
         </section>
 
@@ -1511,6 +1704,12 @@ export default function Discover() {
           </p>
         )}
 
+        {boostLifecycleMessage ? (
+          <p className="mb-4 rounded-xl border border-fuchsia-400/30 bg-fuchsia-950/30 px-3 py-2 text-sm text-fuchsia-100">
+            {boostLifecycleMessage}
+          </p>
+        ) : null}
+
         {!loading && !errorMessage && profiles.length === 0 && (
           <div className="rounded-2xl border border-app-border bg-app-card px-5 py-8 text-center shadow-sm ring-1 ring-app-border">
             <p className="text-base font-semibold leading-snug text-app-text">
@@ -1551,6 +1750,7 @@ export default function Discover() {
               onReport={setReportProfileId}
               onReportPhoto={openReportPhotoFromDiscover}
               onBlock={handleBlock}
+              language={language}
             />
           ))}
 

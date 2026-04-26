@@ -18,13 +18,21 @@ import Checkout from "./pages/Checkout";
 import Messages from "./pages/Messages";
 import AccountSettings from "./pages/AccountSettings";
 import MesRencontres from "./pages/MesRencontres";
+import AuthCallback from "./pages/AuthCallback";
 function App() {
+  if (window.location.pathname === "/auth/callback" && !window.location.hash) {
+    window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/auth/callback${window.location.search}`);
+    return null;
+  }
+
   return (
     <HashRouter>
       <AuthProvider>
         <RecoveryRedirect />
         <Routes>
           <Route path="/auth" element={<Auth />} />
+          {/* OAuth return: outside ProtectedRoute; AuthContext must not force /auth on this path */}
+          <Route path="/auth/callback" element={<AuthCallback />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/onboarding" element={<Onboarding />} />

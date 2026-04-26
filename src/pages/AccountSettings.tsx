@@ -19,7 +19,7 @@ const CONFIRM_WORD = "SUPPRIMER";
 export default function AccountSettings() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { user, refetchProfile } = useAuth();
+  const { user, refetchProfile, signOut } = useAuth();
   const [pauseLoading, setPauseLoading] = useState(false);
   const [deactivateLoading, setDeactivateLoading] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -102,9 +102,8 @@ export default function AccountSettings() {
         setDeleteError(msg);
         return;
       }
-      await supabase.auth.signOut();
       setDeleteModalOpen(false);
-      navigate("/auth", { replace: true });
+      await signOut();
     } finally {
       setDeleteLoading(false);
     }

@@ -1,5 +1,5 @@
-import { Link, useLocation, useNavigate } from "react-router-dom";
-import { supabase } from "../lib/supabase";
+import { Link, useLocation } from "react-router-dom";
+import { useAuth } from "../contexts/AuthContext";
 import { NAV_ICON_HOVER } from "../constants/theme";
 import { useTranslation } from "../i18n/useTranslation";
 
@@ -13,7 +13,7 @@ type GlobalHeaderProps = {
  */
 export function GlobalHeader({ variant = "default" }: GlobalHeaderProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const { signOut } = useAuth();
   const location = useLocation();
   const compact = variant === "compact";
 
@@ -25,8 +25,7 @@ export function GlobalHeader({ variant = "default" }: GlobalHeaderProps) {
   const isSplovePlus = location.pathname === "/splove-plus";
 
   async function handleLogout() {
-    await supabase.auth.signOut();
-    navigate("/auth", { replace: true });
+    await signOut();
   }
 
   return (
