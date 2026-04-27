@@ -1,3 +1,5 @@
+import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+
 export type MeetingCardTab = "respond" | "upcoming" | "past";
 
 export type MeetingCardProps = {
@@ -35,12 +37,18 @@ function PartnerAvatar({
   url: string | null;
 }) {
   const initial = (name.trim().charAt(0) || "?").toUpperCase();
+  const displayUrl = useProfilePhotoSignedUrl(url);
   if (url && url.length > 0) {
-    return (
+    return displayUrl ? (
       <img
-        src={url}
+        src={displayUrl}
         alt=""
         className="h-14 w-14 shrink-0 rounded-2xl object-cover ring-1 ring-zinc-200"
+      />
+    ) : (
+      <div
+        className="h-14 w-14 shrink-0 rounded-2xl bg-zinc-100 ring-1 ring-zinc-200"
+        aria-hidden
       />
     );
   }

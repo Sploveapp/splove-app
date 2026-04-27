@@ -1,0 +1,34 @@
+import type { ButtonHTMLAttributes } from "react";
+
+const REWIND_BG = "#1F1F24";
+const REWIND_ACCENT = "#D1003F";
+
+export type DiscoverRewindButtonProps = {
+  onRewind: () => void;
+  disabled: boolean;
+  busy: boolean;
+} & Pick<ButtonHTMLAttributes<HTMLButtonElement>, "aria-label">;
+
+/**
+ * Fixed bottom-center rewind control — dark chip + raspberry accent (no layout redesign).
+ */
+export function DiscoverRewindButton({ onRewind, disabled, busy, "aria-label": ariaLabel }: DiscoverRewindButtonProps) {
+  return (
+    <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 flex justify-center pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      <button
+        type="button"
+        onClick={onRewind}
+        disabled={disabled || busy}
+        aria-label={ariaLabel}
+        className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full text-xl font-semibold leading-none shadow-lg transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+        style={{
+          backgroundColor: REWIND_BG,
+          color: REWIND_ACCENT,
+          boxShadow: `0 4px 20px rgba(0,0,0,0.45), 0 0 0 1px rgba(209,0,63,0.32)`,
+        }}
+      >
+        {busy ? <span className="text-sm text-white/80">…</span> : <span aria-hidden>↩</span>}
+      </button>
+    </div>
+  );
+}

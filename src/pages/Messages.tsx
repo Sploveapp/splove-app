@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, type NavigateFunction } from "react-router-dom";
 import { CHAT_MESSAGES_TABLE, logSupabaseTableError, supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
 import { useTranslation } from "../i18n/useTranslation";
+import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import { INBOX_REFRESH_EVENT } from "../constants";
+import { countPendingSecondChancesForUser } from "../services/secondChance.service";
 
 type InboxRow = {
   conversationId: string;
@@ -15,6 +18,45 @@ type InboxRow = {
   lastAt: string | null;
 };
 
+function MessageThreadRowItem(props: {
+  row: InboxRow;
+  t: (k: string) => string;
+  navigate: NavigateFunction;
+}) {
+  const { row, t, navigate } = props;
+  const otherPhotoDisplay = useProfilePhotoSignedUrl(row.otherPhoto);
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => navigate(`/chat/${row.conversationId}`)}
+        className="flex w-full items-center gap-3 rounded-2xl border border-app-border/90 bg-app-card px-3 py-3 text-left shadow-sm ring-1 ring-app-border/80 transition hover:bg-app-border/90"
+      >
+        {row.otherPhoto ? (
+          otherPhotoDisplay ? (
+            <img
+              src={otherPhotoDisplay}
+              alt=""
+              className="h-12 w-12 shrink-0 rounded-full object-cover ring-2 ring-app-border"
+            />
+          ) : (
+            <div className="h-12 w-12 shrink-0 rounded-full bg-app-border ring-2 ring-app-border" />
+          )
+        ) : (
+          <div className="h-12 w-12 shrink-0 rounded-full bg-app-border ring-2 ring-app-border" />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold text-app-text">{row.otherName || t("unnamed_profile")}</p>
+          <p className="truncate text-sm text-app-muted">
+            {row.lastMessage ?? t("messages_no_message_yet")}
+          </p>
+        </div>
+        <span className="shrink-0 text-[12px] font-medium text-[#FF1E2D]">{t("open")}</span>
+      </button>
+    </li>
+  );
+}
+
 export default function Messages() {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -22,12 +64,14 @@ export default function Messages() {
   const [rows, setRows] = useState<InboxRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [secondChanceCount, setSecondChanceCount] = useState(0);
 
   const load = useCallback(async () => {
     if (!user?.id) return;
     setLoading(true);
     setError(null);
     try {
+      void countPendingSecondChancesForUser(user.id).then(setSecondChanceCount);
       const blocked = await fetchBlockedRelatedUserIds();
       const { data: matches, error: mErr } = await supabase
         .from("matches")
@@ -147,6 +191,14 @@ export default function Messages() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const onRefresh = () => {
+      if (user?.id) void countPendingSecondChancesForUser(user.id).then(setSecondChanceCount);
+    };
+    window.addEventListener(INBOX_REFRESH_EVENT, onRefresh);
+    return () => window.removeEventListener(INBOX_REFRESH_EVENT, onRefresh);
+  }, [user?.id]);
+
   if (!user?.id) {
     return (
       <div className="p-6 text-center text-sm text-app-muted">
@@ -164,6 +216,19 @@ export default function Messages() {
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-app-muted">{t("messages_title")}</p>
         <h1 className="mt-1 text-xl font-bold text-app-text">{t("messages_conversations")}</h1>
         <p className="mt-1 text-sm text-app-muted">{t("messages_subtitle")}</p>
+
+        {secondChanceCount > 0 && (
+          <div className="mt-4 rounded-2xl border border-app-border/90 bg-app-card/80 px-4 py-3 text-sm text-app-text shadow-sm">
+            <p className="leading-snug text-app-text">{t("second_chance_messages_banner", { n: secondChanceCount })}</p>
+            <button
+              type="button"
+              onClick={() => navigate("/second-chances")}
+              className="mt-2 text-left text-[13px] font-semibold text-[#FF1E2D] underline"
+            >
+              {t("second_chance_inbox_open")}
+            </button>
+          </div>
+        )}
 
         {loading && <p className="mt-6 text-sm text-app-muted">{t("loading")}</p>}
         {error && (
@@ -188,30 +253,7 @@ export default function Messages() {
         {!loading && rows.length > 0 && (
           <ul className="mt-5 space-y-2">
             {rows.map((r) => (
-              <li key={r.conversationId}>
-                <button
-                  type="button"
-                  onClick={() => navigate(`/chat/${r.conversationId}`)}
-                  className="flex w-full items-center gap-3 rounded-2xl border border-app-border/90 bg-app-card px-3 py-3 text-left shadow-sm ring-1 ring-app-border/80 transition hover:bg-app-border/90"
-                >
-                  {r.otherPhoto ? (
-                    <img
-                      src={r.otherPhoto}
-                      alt=""
-                      className="h-12 w-12 shrink-0 rounded-full object-cover ring-2 ring-app-border"
-                    />
-                  ) : (
-                    <div className="h-12 w-12 shrink-0 rounded-full bg-app-border ring-2 ring-app-border" />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-semibold text-app-text">{r.otherName || t("unnamed_profile")}</p>
-                    <p className="truncate text-sm text-app-muted">
-                      {r.lastMessage ?? t("messages_no_message_yet")}
-                    </p>
-                  </div>
-                  <span className="shrink-0 text-[12px] font-medium text-[#FF1E2D]">{t("open")}</span>
-                </button>
-              </li>
+              <MessageThreadRowItem key={r.conversationId} row={r} t={t} navigate={navigate} />
             ))}
           </ul>
         )}

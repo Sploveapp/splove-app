@@ -95,11 +95,28 @@ export async function getActiveSubscription(
   return null;
 }
 
+async function referralPlusActive(profileId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("referral_plus_until")
+    .eq("id", profileId)
+    .maybeSingle();
+  if (error) {
+    const low = (error.message ?? "").toLowerCase();
+    if (error.code === "42703" || low.includes("does not exist")) return false;
+    return false;
+  }
+  const u = (data as { referral_plus_until?: string | null } | null)?.referral_plus_until;
+  if (!u) return false;
+  return new Date(u).getTime() > Date.now();
+}
+
 /**
- * Indique si l'utilisateur a accès à SPLove+ (abonnement actif).
+ * Indique si l'utilisateur a accès à SPLove+ (abonnement actif ou période parrainage).
  */
 export async function hasPremiumAccess(profileId: string): Promise<boolean> {
   if (BETA_MODE) return true;
   const sub = await getActiveSubscription(profileId);
-  return sub != null;
+  if (sub != null) return true;
+  return referralPlusActive(profileId);
 }

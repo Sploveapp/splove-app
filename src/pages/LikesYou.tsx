@@ -13,6 +13,7 @@ import { APP_BORDER, APP_CARD, APP_TEXT, APP_TEXT_MUTED, BRAND_BG, TEXT_ON_BRAND
 import { supabase } from "../lib/supabase";
 import { insertBlock } from "../services/blocks.service";
 import { useTranslation } from "../i18n/useTranslation";
+import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import {
   fetchConversationIdForUserPair,
   normalizeCreateLikeRpcResult,
@@ -285,12 +286,16 @@ function LikesYouProfilePreviewModal({
   onBlock: () => void;
   t: (key: string, vars?: Record<string, string | number>) => string;
 }) {
-  const primaryPhoto = [profile.main_photo_url, profile.portrait_url, profile.fullbody_url]
-    .map((x) => (typeof x === "string" ? x.trim() : ""))
-    .find(Boolean) || "";
-  const secondaryPhoto = [profile.fullbody_url, profile.portrait_url, profile.main_photo_url]
-    .map((x) => (typeof x === "string" ? x.trim() : ""))
-    .find((x) => Boolean(x) && x !== primaryPhoto) || "";
+  const primaryRaw =
+    [profile.main_photo_url, profile.portrait_url, profile.fullbody_url]
+      .map((x) => (typeof x === "string" ? x.trim() : ""))
+      .find(Boolean) || null;
+  const secondaryRaw =
+    [profile.fullbody_url, profile.portrait_url, profile.main_photo_url]
+      .map((x) => (typeof x === "string" ? x.trim() : ""))
+      .find((x) => Boolean(x) && x !== primaryRaw) || null;
+  const primaryPhoto = useProfilePhotoSignedUrl(primaryRaw) ?? "";
+  const secondaryPhoto = useProfilePhotoSignedUrl(secondaryRaw) ?? "";
   const sports = (profile.profile_sports ?? [])
     .map((ps) => ps.sports?.label ?? "")
     .filter((x): x is string => Boolean(x))

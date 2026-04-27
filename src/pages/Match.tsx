@@ -13,6 +13,7 @@ import { BETA_MODE } from "../constants/beta";
 import { buildCreateActivityProposalRpcArgs } from "../lib/messages/activityProposalMutations";
 import { createAutoProposalForMatchIfEligible } from "../services/activityProposals.service";
 import { useTranslation } from "../i18n/useTranslation";
+import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 
 export type MatchLocationState = {
   partnerFirstName?: string | null;
@@ -32,6 +33,7 @@ export default function Match() {
   const state = (location.state ?? null) as MatchLocationState | null;
   const partnerName = state?.partnerFirstName?.trim() || null;
   const partnerPhoto = state?.partnerMainPhotoUrl?.trim() || null;
+  const partnerPhotoDisplay = useProfilePhotoSignedUrl(partnerPhoto);
   const matchedByUserId = state?.matchedByUserId ?? null;
   const sharedSports = state?.sharedSports ?? [];
   const momentum = matchMomentumLine(sharedSports);
@@ -140,11 +142,15 @@ export default function Match() {
         <div className="rounded-3xl border border-app-border bg-app-card px-6 py-10 text-center shadow-sm ring-1 ring-app-border">
           {partnerPhoto && (
             <div className="mx-auto w-28 overflow-hidden rounded-2xl ring-2 ring-app-border">
-              <img
-                src={partnerPhoto}
-                alt={partnerName ? `${t("photo_of")} ${partnerName}` : t("profile_photo")}
-                className="aspect-[3/4] h-full w-full object-cover"
-              />
+              {partnerPhotoDisplay ? (
+                <img
+                  src={partnerPhotoDisplay}
+                  alt={partnerName ? `${t("photo_of")} ${partnerName}` : t("profile_photo")}
+                  className="aspect-[3/4] h-full w-full object-cover"
+                />
+              ) : (
+                <div className="aspect-[3/4] w-full bg-app-border" />
+              )}
             </div>
           )}
           <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.2em] text-app-muted">{t("match")}</p>

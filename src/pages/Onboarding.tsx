@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { env } from "../lib/env";
 import { useAuth } from "../contexts/AuthContext";
@@ -27,10 +27,13 @@ import {
 } from "../constants/theme";
 import { PHOTO_VERIFICATION_PLACEHOLDER } from "../constants";
 import { profilePhotoStoragePathFromPublicUrl } from "../lib/profilePhotoStoragePath";
+import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { photoModerationHeadline, photoModerationRejectedDetail } from "../lib/photoModerationUi";
 import { invokeModeratePhoto } from "../services/photoModeration.service";
 import type { PhotoModerationStatus } from "../types/photoModeration.types";
 import { useTranslation } from "../i18n/useTranslation";
+import { antiExitValidator } from "../lib/antiExitValidator";
+import { stashPendingReferralCodeFromSearch, tryClaimPendingReferralCode } from "../services/referral.service";
 
 const genderOptions = [
   { value: "female", label: "gender.female" },
@@ -342,23 +345,11 @@ async function uploadOnboardingPhoto(
 
     console.log("UPLOAD_SUCCESS", uploadData);
     console.log("PHOTO_STORAGE_UPLOAD_SUCCESS", uploadData);
-    const { data: publicUrlData } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(filePath);
-    return publicUrlData.publicUrl;
+    return supabase.storage.from(PHOTO_BUCKET).getPublicUrl(filePath).data.publicUrl;
   } catch (err) {
     console.error("UPLOAD_FAILED", err);
     return null;
   }
-}
-
-function toStoragePublicUrl(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const raw = value.trim();
-  if (!raw) return null;
-  if (/^https?:\/\//i.test(raw)) return raw;
-  const bucketPrefix = `${PHOTO_BUCKET}/`;
-  const path = raw.startsWith(bucketPrefix) ? raw.slice(bucketPrefix.length) : raw;
-  const { data } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
-  return data.publicUrl ?? null;
 }
 
 const BIRTH_YEAR_MIN = 1900;
@@ -411,6 +402,7 @@ const labelClassName = "mb-1 block text-sm font-semibold text-app-text";
 export default function Onboarding() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const {
     user,
     isProfileComplete,
@@ -471,7 +463,10 @@ export default function Onboarding() {
   const [optionalProfileWarning, setOptionalProfileWarning] = useState<string | null>(null);
   const [hydratingDraft, setHydratingDraft] = useState(false);
   const hydratedDraftRef = useRef(false);
-  
+
+  useEffect(() => {
+    stashPendingReferralCodeFromSearch(searchParams.get("ref"));
+  }, [searchParams]);
 
   function logDetailedError(
     step: string,
@@ -765,18 +760,16 @@ export default function Onboarding() {
         setPracticePreferences(Array.isArray(row.practice_preferences) ? (row.practice_preferences as string[]) : []);
         const sp = row.sport_phrase;
         setSportPhraseOptional(typeof sp === "string" ? sp : "");
-        const hydratedPortrait =
-          toStoragePublicUrl(row.portrait_url) ??
-          toStoragePublicUrl(row.main_photo_url) ??
-          toStoragePublicUrl(row.avatar_url) ??
-          toStoragePublicUrl(row.portrait_path);
-        const hydratedBody =
-          toStoragePublicUrl(row.fullbody_url) ??
-          toStoragePublicUrl(row.activity_photo_path) ??
-          toStoragePublicUrl(row.fullbody_path) ??
-          toStoragePublicUrl(row.photo2_path);
-        setPortraitSavedUrl(hydratedPortrait ?? "");
-        setBodySavedUrl(hydratedBody ?? "");
+        const firstPortraitRef =
+          [row.portrait_url, row.main_photo_url, row.avatar_url, row.portrait_path]
+            .map((x) => (typeof x === "string" ? x.trim() : ""))
+            .find(Boolean) ?? "";
+        const firstBodyRef =
+          [row.fullbody_url, row.activity_photo_path, row.fullbody_path, row.photo2_path]
+            .map((x) => (typeof x === "string" ? x.trim() : ""))
+            .find(Boolean) ?? "";
+        setPortraitSavedUrl(firstPortraitRef);
+        setBodySavedUrl(firstBodyRef);
 
         const { data: ps, error: sportErr } = await supabase
           .from("profile_sports")
@@ -879,8 +872,14 @@ export default function Onboarding() {
     () => (bodyFile ? URL.createObjectURL(bodyFile) : null),
     [bodyFile]
   );
-  const portraitDisplayUrl = portraitPreviewUrl || portraitSavedUrl || null;
-  const bodyDisplayUrl = bodyPreviewUrl || bodySavedUrl || null;
+  const signedSavedPortrait = useProfilePhotoSignedUrl(
+    portraitPreviewUrl ? null : (portraitSavedUrl.trim() || null),
+  );
+  const signedSavedBody = useProfilePhotoSignedUrl(
+    bodyPreviewUrl ? null : (bodySavedUrl.trim() || null),
+  );
+  const portraitDisplayUrl = portraitPreviewUrl || signedSavedPortrait || null;
+  const bodyDisplayUrl = bodyPreviewUrl || signedSavedBody || null;
 
   useEffect(() => {
     return () => {
@@ -1281,6 +1280,11 @@ export default function Onboarding() {
       return true;
     }
     if (current === 10) {
+      const phrase = sportPhraseOptional.trim();
+      if (phrase && antiExitValidator(phrase, "onboarding").isBlocked) {
+        setStepHint(t("safety_content_refusal"));
+        return false;
+      }
       return true;
     }
     if (current === 11) {
@@ -1864,6 +1868,10 @@ export default function Onboarding() {
         setError(t("onboarding_error_profile_gate"));
         return;
       }
+
+      void tryClaimPendingReferralCode().then((r) => {
+        if (r.ok) void refetchProfile();
+      });
 
       let sessionOk = await syncAuthSession();
       if (!sessionOk) {

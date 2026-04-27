@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, Link } from "react-router-dom";
+import { Navigate, Link, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { oauthRedirectUrl } from "../lib/authRedirect";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
@@ -8,6 +8,7 @@ import { APP_BG, APP_BORDER, APP_CARD, BRAND_BG, TEXT_ON_BRAND } from "../consta
 import { SplashScreen } from "../components/SplashScreen";
 import { IconEye, IconEyeOff } from "../components/ui/Icon";
 import { useTranslation } from "../i18n/useTranslation";
+import { stashPendingReferralCodeFromSearch } from "../services/referral.service";
 
 function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
   const raw = err instanceof Error ? err.message : String(err);
@@ -30,6 +31,7 @@ function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
 
 export default function Auth() {
   const { t, language } = useTranslation();
+  const [searchParams] = useSearchParams();
   const { user, isProfileComplete, isLoading, isAuthInitialized } = useAuth();
   const [introSplash, setIntroSplash] = useState(true);
   const [email, setEmail] = useState("");
@@ -41,6 +43,10 @@ export default function Auth() {
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const [appleNotice, setAppleNotice] = useState(false);
+
+  useEffect(() => {
+    stashPendingReferralCodeFromSearch(searchParams.get("ref"));
+  }, [searchParams]);
 
   useEffect(() => {
     if (isLoading || !isAuthInitialized) return;

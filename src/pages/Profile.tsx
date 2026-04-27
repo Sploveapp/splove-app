@@ -29,7 +29,61 @@ const FEATURE_COMING_SOON_MESSAGE = "Fonction bientot disponible";
 
 const SPORT_PHRASE_MAX_LEN = 120;
 
+const MEETUP_HOUR_MS = 60 * 60 * 1000;
+const MEETUP_DURATION_H = 24;
+const MEETUP_GREEN = "#22C55D";
+const MEETUP_CARD_BG = "#121215";
+const MEETUP_CARD_BORDER_ACTIVE = "rgba(34, 197, 94, 0.42)";
+
 const ACCESSIBILITY_SAVE_SUCCESS = "Preferences enregistrees.";
+
+type MeetupModeSession = { endAt: number; startTime: number; durationH: number };
+
+function meetupStorageKeys(userId: string) {
+  return {
+    mode: `splove_${userId}_active_meetup_mode`,
+    start: `splove_${userId}_active_meetup_start_time`,
+    duration: `splove_${userId}_active_meetup_duration`,
+  } as const;
+}
+
+function clearMeetupModeStorage(userId: string) {
+  const k = meetupStorageKeys(userId);
+  try {
+    localStorage.removeItem(k.mode);
+    localStorage.removeItem(k.start);
+    localStorage.removeItem(k.duration);
+  } catch {
+    // ignore
+  }
+}
+
+function readMeetupModeSession(userId: string, clearIfExpired: boolean): MeetupModeSession | null {
+  const k = meetupStorageKeys(userId);
+  let mode: string | null;
+  let startS: string | null;
+  let durationS: string | null;
+  try {
+    mode = localStorage.getItem(k.mode);
+    startS = localStorage.getItem(k.start);
+    durationS = localStorage.getItem(k.duration);
+  } catch {
+    return null;
+  }
+  if (mode !== "true" || !startS || !durationS) return null;
+  const start = parseInt(startS, 10);
+  const durationH = parseInt(durationS, 10);
+  if (!Number.isFinite(start) || !Number.isFinite(durationH) || durationH <= 0) {
+    if (clearIfExpired) clearMeetupModeStorage(userId);
+    return null;
+  }
+  const endAt = start + durationH * MEETUP_HOUR_MS;
+  if (Date.now() >= endAt) {
+    if (clearIfExpired) clearMeetupModeStorage(userId);
+    return null;
+  }
+  return { endAt, startTime: start, durationH };
+}
 
 const sectionHeadingButtonStyle: CSSProperties = {
   margin: "0 0 12px 0",
@@ -47,6 +101,8 @@ const sectionHeadingButtonStyle: CSSProperties = {
 import { CHAT_BUBBLE_COLOR_ORDER, CHAT_BUBBLE_COLORS } from "../constants/chatBubbleColors";
 import { getOwnMessageBubbleClassName } from "../lib/messageBubbleTheme";
 import { useTranslation } from "../i18n/useTranslation";
+import { buildAuthReferralLink, fetchGrowthProfileFields, type GrowthProfileRow } from "../services/referral.service";
+import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 
 export default function Profile() {
@@ -54,8 +110,11 @@ export default function Profile() {
   const navigate = useNavigate();
   const { user, profile, refetchProfile, signOut } = useAuth();
   const mainPhoto = profile?.main_photo_url?.trim() || null;
+  const mainPhotoDisplay = useProfilePhotoSignedUrl(mainPhoto) ?? null;
   const [imageError, setImageError] = useState(false);
   const [comingSoonOpen, setComingSoonOpen] = useState(false);
+  const [growth, setGrowth] = useState<GrowthProfileRow | null>(null);
+  const [growthLinkCopied, setGrowthLinkCopied] = useState(false);
   const [needsAdaptedActivities, setNeedsAdaptedActivities] = useState(false);
   const [prefOpenToStandard, setPrefOpenToStandard] = useState(true);
   const [prefOpenToAdapted, setPrefOpenToAdapted] = useState(true);
@@ -69,9 +128,8 @@ export default function Profile() {
   const [phraseDraft, setPhraseDraft] = useState("");
   const [phraseSaving, setPhraseSaving] = useState(false);
   const [phraseMessage, setPhraseMessage] = useState<string | null>(null);
-  const [isActiveMode, setIsActiveMode] = useState(false);
-  const [activeModeSaving, setActiveModeSaving] = useState(false);
-  const [activeModeMessage, setActiveModeMessage] = useState<string | null>(null);
+  const [meetupModeTick, setMeetupModeTick] = useState(0);
+  const [meetupModeError, setMeetupModeError] = useState<string | null>(null);
 
   const syncAccessibilityFromProfile = useCallback(() => {
     if (!profile) return;
@@ -94,7 +152,6 @@ export default function Profile() {
     if (!profile) return;
     const pr = profile as Record<string, unknown>;
     setLocCity(typeof pr.city === "string" ? pr.city : "");
-    setIsActiveMode(pr.is_active_mode === true);
     const dr = pr.discovery_radius_km;
     if (typeof dr === "number" && Number.isFinite(dr) && dr > 0) {
       setLocRadius(String(Math.round(dr)));
@@ -123,6 +180,83 @@ export default function Profile() {
     const t = window.setTimeout(() => setPhraseMessage(null), 2000);
     return () => window.clearTimeout(t);
   }, [phraseMessage]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const id = window.setInterval(() => setMeetupModeTick((n) => n + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    void fetchGrowthProfileFields(user.id).then(setGrowth);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || !profile) return;
+    const session = readMeetupModeSession(user.id, true);
+    const pr = profile as Record<string, unknown>;
+    const dbActive = pr.is_active_mode === true;
+    if (session && !dbActive) {
+      void supabase
+        .from("profiles")
+        .update({ is_active_mode: true })
+        .eq("id", user.id)
+        .then(({ error }) => {
+          if (!error) void refetchProfile();
+        });
+    } else if (!session && dbActive) {
+      void supabase
+        .from("profiles")
+        .update({ is_active_mode: false })
+        .eq("id", user.id)
+        .then(({ error }) => {
+          if (!error) void refetchProfile();
+        });
+    }
+  }, [user?.id, profile, meetupModeTick, refetchProfile]);
+
+  async function handleMeetupModeCardClick() {
+    if (!user?.id) return;
+    setMeetupModeError(null);
+    const session = readMeetupModeSession(user.id, true);
+    if (session) {
+      clearMeetupModeStorage(user.id);
+      setMeetupModeTick((n) => n + 1);
+      const { error } = await supabase
+        .from("profiles")
+        .update({ is_active_mode: false })
+        .eq("id", user.id);
+      if (error) {
+        setMeetupModeError(error.message || t("action_impossible"));
+        return;
+      }
+      await refetchProfile();
+      return;
+    }
+    const k = meetupStorageKeys(user.id);
+    const now = Date.now();
+    try {
+      localStorage.setItem(k.mode, "true");
+      localStorage.setItem(k.start, now.toString());
+      localStorage.setItem(k.duration, String(MEETUP_DURATION_H));
+    } catch {
+      setMeetupModeError(t("action_impossible"));
+      return;
+    }
+    setMeetupModeTick((n) => n + 1);
+    const { error } = await supabase
+      .from("profiles")
+      .update({ is_active_mode: true })
+      .eq("id", user.id);
+    if (error) {
+      clearMeetupModeStorage(user.id);
+      setMeetupModeTick((n) => n + 1);
+      setMeetupModeError(error.message || t("action_impossible"));
+      return;
+    }
+    await refetchProfile();
+  }
 
   async function handleLogout() {
     await signOut();
@@ -246,29 +380,10 @@ export default function Profile() {
     }
   }
 
-  async function handleSaveActiveMode() {
-    if (!user?.id) return;
-    setActiveModeMessage(null);
-    setActiveModeSaving(true);
-    try {
-      const { error } = await supabase
-        .from("profiles")
-        .update({ is_active_mode: isActiveMode })
-        .eq("id", user.id);
-      if (error) {
-        console.error("[Profile] active mode save error:", error);
-        setActiveModeMessage(error.message || t("action_impossible"));
-        return;
-      }
-      await refetchProfile();
-      setActiveModeMessage("Mode rencontre active enregistre.");
-    } catch (err) {
-      console.error("[Profile] active mode save failed:", err);
-      setActiveModeMessage(t("action_impossible"));
-    } finally {
-      setActiveModeSaving(false);
-    }
-  }
+  const meetupSession = user?.id ? readMeetupModeSession(user.id, true) : null;
+  const meetupModeOn = meetupSession !== null;
+  const meetupRemainingMs = meetupSession ? Math.max(0, meetupSession.endAt - Date.now()) : 0;
+  const meetupHoursLeft = Math.floor(meetupRemainingMs / MEETUP_HOUR_MS);
 
   return (
     <div
@@ -375,24 +490,36 @@ export default function Profile() {
                   background: "none",
                 }}
               >
-                <img
-                  src={mainPhoto}
-                  alt="Votre photo de profil — appuyez pour les options"
-                  onLoad={() => {
-                    console.log("PROFILE IMAGE LOADED", mainPhoto);
-                  }}
-                  onError={() => {
-                    console.error("PROFILE IMAGE ERROR", mainPhoto);
-                    setImageError(true);
-                  }}
-                  style={{
-                    width: "100%",
-                    aspectRatio: "3 / 4",
-                    objectFit: "cover",
-                    display: "block",
-                    pointerEvents: "none",
-                  }}
-                />
+                {mainPhotoDisplay ? (
+                  <img
+                    src={mainPhotoDisplay}
+                    alt="Votre photo de profil — appuyez pour les options"
+                    onLoad={() => {
+                      console.log("PROFILE IMAGE LOADED", mainPhoto);
+                    }}
+                    onError={() => {
+                      console.error("PROFILE IMAGE ERROR", mainPhoto);
+                      setImageError(true);
+                    }}
+                    style={{
+                      width: "100%",
+                      aspectRatio: "3 / 4",
+                      objectFit: "cover",
+                      display: "block",
+                      pointerEvents: "none",
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: "100%",
+                      aspectRatio: "3 / 4",
+                      background: APP_BG,
+                      border: `1px solid ${APP_BORDER}`,
+                      display: "block",
+                    }}
+                  />
+                )}
               </button>
             ) : (
               <button
@@ -830,7 +957,7 @@ export default function Profile() {
             style={{
               background: APP_CARD,
               borderRadius: "20px",
-              padding: "20px 24px",
+              padding: "20px 24px 22px",
               boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
               marginBottom: "20px",
             }}
@@ -845,50 +972,116 @@ export default function Profile() {
             >
               {t("profile_active_mode_title")}
             </h2>
-            <label
+            <p
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "10px",
-                marginBottom: "12px",
-                fontSize: "14px",
+                margin: "0 0 16px 0",
+                fontSize: "13px",
+                fontWeight: 500,
                 color: APP_TEXT_MUTED,
-                cursor: "pointer",
+                lineHeight: 1.45,
               }}
             >
-              <input
-                type="checkbox"
-                checked={isActiveMode}
-                onChange={(e) => {
-                  setIsActiveMode(e.target.checked);
-                  setActiveModeMessage(null);
-                }}
-                style={{ width: "16px", height: "16px" }}
-              />
-              <span>{t("profile_active_mode_title")}</span>
-            </label>
+              {t("profile_active_mode_description")}
+            </p>
             <button
               type="button"
-              onClick={() => void handleSaveActiveMode()}
-              disabled={activeModeSaving}
+              onClick={() => void handleMeetupModeCardClick()}
+              aria-pressed={meetupModeOn}
               style={{
                 width: "100%",
-                padding: "10px 14px",
-                borderRadius: "12px",
-                border: "none",
-                background: activeModeSaving ? CTA_DISABLED_BG : BRAND_BG,
-                color: TEXT_ON_BRAND,
-                fontSize: "14px",
-                fontWeight: 600,
-                cursor: activeModeSaving ? "wait" : "pointer",
+                margin: 0,
+                padding: "16px 16px 14px",
+                borderRadius: "16px",
+                border: `1px solid ${meetupModeOn ? MEETUP_CARD_BORDER_ACTIVE : APP_BORDER}`,
+                background: MEETUP_CARD_BG,
+                boxShadow: meetupModeOn
+                  ? "0 0 0 1px rgba(34, 197, 94, 0.12), 0 10px 40px rgba(34, 197, 94, 0.14)"
+                  : "0 1px 0 rgba(0,0,0,0.2)",
+                cursor: "pointer",
+                textAlign: "left",
+                position: "relative",
               }}
             >
-              {activeModeSaving ? t("loading") : t("save_this_mode")}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "12px",
+                }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <p
+                    style={{
+                      margin: "0 0 4px 0",
+                      fontSize: "16px",
+                      fontWeight: 600,
+                      color: meetupModeOn ? MEETUP_GREEN : APP_TEXT,
+                      letterSpacing: "0.01em",
+                    }}
+                  >
+                    {meetupModeOn ? t("profile_active_mode_cta_on") : t("profile_active_mode_cta_off")}
+                  </p>
+                </div>
+                <div
+                  aria-hidden
+                  style={{
+                    width: 52,
+                    height: 30,
+                    borderRadius: 999,
+                    background: meetupModeOn ? "rgba(34, 197, 94, 0.28)" : "rgba(255,255,255,0.1)",
+                    border: `1px solid ${meetupModeOn ? "rgba(34, 197, 94, 0.55)" : APP_BORDER}`,
+                    position: "relative",
+                    flexShrink: 0,
+                    transition: "background 0.2s ease, border-color 0.2s ease",
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 3,
+                      left: meetupModeOn ? 24 : 3,
+                      width: 24,
+                      height: 24,
+                      borderRadius: 999,
+                      background: meetupModeOn ? MEETUP_GREEN : "rgba(255,255,255,0.65)",
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+                      transition: "left 0.18s ease",
+                    }}
+                  />
+                </div>
+              </div>
+              {meetupModeOn ? (
+                <>
+                  <p
+                    style={{
+                      margin: "12px 0 0 0",
+                      fontSize: "13px",
+                      fontWeight: 500,
+                      color: APP_TEXT_MUTED,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {t("profile_active_mode_on_hint")}
+                  </p>
+                  <p
+                    style={{
+                      margin: "8px 0 0 0",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      color: MEETUP_GREEN,
+                      letterSpacing: "0.02em",
+                    }}
+                  >
+                    {meetupHoursLeft >= 1
+                      ? t("profile_active_mode_countdown", { hours: meetupHoursLeft })
+                      : t("profile_active_mode_countdown_soon")}
+                  </p>
+                </>
+              ) : null}
             </button>
-            {activeModeMessage ? (
-              <p style={{ margin: "10px 0 0 0", fontSize: "13px", color: APP_TEXT_MUTED }}>
-                {activeModeMessage}
-              </p>
+            {meetupModeError ? (
+              <p style={{ margin: "10px 0 0 0", fontSize: "13px", color: "rgb(251 191 36)" }}>{meetupModeError}</p>
             ) : null}
           </div>
 
@@ -1040,6 +1233,89 @@ export default function Profile() {
               </p>
             ) : null}
           </div>
+
+          {growth?.referral_code ? (
+            <div
+              id="growth_invite"
+              style={{
+                background: APP_CARD,
+                borderRadius: "20px",
+                padding: "20px 24px",
+                boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+                marginBottom: "20px",
+                border: `1px solid ${APP_BORDER}`,
+              }}
+            >
+              <h2
+                style={{
+                  margin: "0 0 6px 0",
+                  fontSize: "16px",
+                  fontWeight: 600,
+                  color: APP_TEXT,
+                }}
+              >
+                {t("growth_invite_title")}
+              </h2>
+              <p
+                style={{
+                  margin: "0 0 14px 0",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  color: APP_TEXT_MUTED,
+                  lineHeight: 1.45,
+                }}
+              >
+                {t("growth_invite_sub")}
+              </p>
+              <p style={{ margin: "0 0 4px 0", fontSize: "12px", fontWeight: 600, color: APP_TEXT_MUTED }}>
+                {t("growth_your_code")}
+              </p>
+              <p
+                style={{
+                  margin: "0 0 12px 0",
+                  fontSize: "20px",
+                  fontWeight: 700,
+                  letterSpacing: "0.12em",
+                  color: APP_TEXT,
+                  fontFamily: "ui-monospace, monospace",
+                }}
+              >
+                {growth.referral_code}
+              </p>
+              {typeof growth.rewind_credits === "number" ? (
+                <p style={{ margin: "0 0 12px 0", fontSize: "13px", color: APP_TEXT_MUTED }}>
+                  {t("growth_rewinds")}: {growth.rewind_credits}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!growth.referral_code) return;
+                  const link = buildAuthReferralLink(growth.referral_code);
+                  try {
+                    await navigator.clipboard.writeText(link);
+                    setGrowthLinkCopied(true);
+                    window.setTimeout(() => setGrowthLinkCopied(false), 2000);
+                  } catch {
+                    setGrowthLinkCopied(false);
+                  }
+                }}
+                style={{
+                  width: "100%",
+                  padding: "10px 14px",
+                  borderRadius: "12px",
+                  border: "none",
+                  background: growthLinkCopied ? CTA_DISABLED_BG : BRAND_BG,
+                  color: TEXT_ON_BRAND,
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                {growthLinkCopied ? t("rl_session_link_copied") : t("growth_copy_link")}
+              </button>
+            </div>
+          ) : null}
 
           <div
             style={{

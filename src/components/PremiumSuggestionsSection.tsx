@@ -1,4 +1,5 @@
 import { VerifiedBadge } from "./VerifiedBadge";
+import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 
 type PremiumSuggestion = {
   id: string;
@@ -19,6 +20,23 @@ type Props = {
   commonSportLabel?: string;
   onCardCta?: (id: string) => void;
 };
+
+function SuggestionHeadshot({ url, name }: { url: string | null; name: string }) {
+  const display = useProfilePhotoSignedUrl(url);
+  if (!url) {
+    return <div className="h-16 w-16 shrink-0 rounded-xl bg-app-border" />;
+  }
+  if (!display) {
+    return <div className="h-16 w-16 shrink-0 rounded-xl bg-app-border" />;
+  }
+  return (
+    <img
+      src={display}
+      alt={name}
+      className="h-16 w-16 shrink-0 rounded-xl object-cover"
+    />
+  );
+}
 
 const FALLBACK = [
   "Disponible pour une sortie running dès cette semaine",
@@ -45,15 +63,7 @@ export function PremiumSuggestionsSection({
             key={item.id}
             className="flex items-start gap-3 rounded-2xl border border-app-border bg-app-bg/60 p-3"
           >
-            {item.photoUrl ? (
-              <img
-                src={item.photoUrl}
-                alt={item.firstName}
-                className="h-16 w-16 shrink-0 rounded-xl object-cover"
-              />
-            ) : (
-              <div className="h-16 w-16 shrink-0 rounded-xl bg-app-border" />
-            )}
+            <SuggestionHeadshot url={item.photoUrl} name={item.firstName} />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-1.5">
                 <p className="truncate text-sm font-semibold text-app-text">

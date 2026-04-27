@@ -5,19 +5,22 @@
 import { parseProfileIntent, PROFILE_INTENT_AMICAL } from "./profileIntent";
 
 /** Phrase guidée unique (remplace la bio) — priorité au contenu saisi, puis ressenti court. */
-export function guidedProfileSentence(input: {
-  sport_phrase?: string | null;
-  sport_feeling?: string | null;
-  firstCommonSport: string | null;
-  commonSportLineSuffix?: string;
-  genericFallback?: string;
-}): string {
+export function guidedProfileSentence(
+  input: {
+    sport_phrase?: string | null;
+    sport_feeling?: string | null;
+    firstCommonSport?: string | null;
+    commonSportLineSuffix?: string;
+    genericFallback?: string;
+  },
+  realOutingIntent = "Partant(e) pour une vraie session."
+): string {
   const phrase = input.sport_phrase?.trim();
   if (phrase) return phrase.length > 140 ? `${phrase.slice(0, 137).trim()}…` : phrase;
   const feel = input.sport_feeling?.trim();
   if (feel) return feel.length > 120 ? `${feel.slice(0, 117).trim()}…` : feel;
   if (input.firstCommonSport) {
-    return `${input.firstCommonSport} — ${input.commonSportLineSuffix ?? "ready for a real outing."}`;
+    return `${input.firstCommonSport} — ${input.commonSportLineSuffix ?? realOutingIntent}`;
   }
   return input.genericFallback ?? "Envie de bouger ensemble, sans attendre.";
 }

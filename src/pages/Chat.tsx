@@ -13,6 +13,7 @@ import { ActivityProposalBubble } from "../components/chat/ActivityProposalBubbl
 import { ProposalComposerModal } from "../components/ProposalComposerModal";
 import { ChatEmojiPicker } from "../components/ChatEmojiPicker";
 import { ChatPostMatchPanel } from "../components/ChatPostMatchPanel";
+import { RealLifeSessionPanel } from "../components/RealLifeSessionPanel";
 import { PriorityProposalUpsell } from "../components/PriorityProposalUpsell";
 import type { ActivityPayload } from "../lib/chatActivity";
 import {
@@ -72,6 +73,11 @@ import {
   type MessageBubbleTheme,
 } from "../lib/messageBubbleTheme";
 import { useTranslation } from "../i18n/useTranslation";
+import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import {
+  fetchRealLifeSessionCheckin,
+  type RealLifeSessionCheckin,
+} from "../services/realLifeSessionCheckin.service";
 
 const CHAT_WINDOW_HOURS_MS = 48 * 60 * 60 * 1000;
 /** 1 h après le créneau pour proposer un retour discret (anti-prompt agressif). */
@@ -247,6 +253,7 @@ export default function Chat() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [partnerName, setPartnerName] = useState<string | null>(navState?.partnerFirstName?.trim() || null);
   const [partnerPhoto, setPartnerPhoto] = useState<string | null>(navState?.partnerMainPhotoUrl?.trim() || null);
+  const partnerPhotoDisplay = useProfilePhotoSignedUrl(partnerPhoto);
   const [proposals, setProposals] = useState<ProposalRow[]>([]);
   const [latestProposalTop, setLatestProposalTop] = useState<ProposalRow | null>(null);
   const [windowExpiresAt, setWindowExpiresAt] = useState<number | null>(null);
@@ -273,6 +280,8 @@ export default function Chat() {
   const [reportOpen, setReportOpen] = useState(false);
   const [partnerPhotoVerified, setPartnerPhotoVerified] = useState(false);
   const [chatMatchId, setChatMatchId] = useState<string | null>(null);
+  const [matchPair, setMatchPair] = useState<{ userA: string; userB: string } | null>(null);
+  const [rlCheckin, setRlCheckin] = useState<RealLifeSessionCheckin | null>(null);
   const [suggestedSlots, setSuggestedSlots] = useState<string[]>([]);
   const [chatAccentTheme, setChatAccentTheme] = useState<MessageBubbleTheme>(CHAT_DEFAULT_ACCENT);
   const [chatOptionsOpen, setChatOptionsOpen] = useState(false);
@@ -522,6 +531,8 @@ export default function Chat() {
         setChatMessages([]);
         setPairBlocked(false);
         setPartnerUserId(null);
+        setMatchPair(null);
+        setRlCheckin(null);
         setPartnerPhotoVerified(false);
         setPairChatMeta(null);
 
@@ -598,7 +609,10 @@ export default function Chat() {
         }
 
         const other = user.id === ua ? ub : ua;
-        if (!cancelled) setPartnerUserId(other);
+        if (!cancelled) {
+          setPartnerUserId(other);
+          setMatchPair({ userA: ua, userB: ub });
+        }
 
         const blocked = await isBlockedWith(other);
         if (!cancelled) setPairBlocked(blocked);
@@ -900,8 +914,21 @@ export default function Chat() {
     () => sortedProposalsDesc.some((p) => normalizeProposalStatus(p) === "accepted"),
     [sortedProposalsDesc],
   );
+  const acceptedProposalForRl = useMemo(
+    () => sortedProposalsDesc.find((p) => normalizeProposalStatus(p) === "accepted") ?? null,
+    [sortedProposalsDesc],
+  );
   const latestProposal = latestProposalTop ?? sortedProposalsDesc[0] ?? null;
   const productState = getProductState({ hasProposal: hasPendingProposal });
+
+  useEffect(() => {
+    const id = acceptedProposalForRl?.id;
+    if (!id || !matchPair || !user?.id) {
+      if (!id) setRlCheckin(null);
+      return;
+    }
+    void fetchRealLifeSessionCheckin(id).then((row) => setRlCheckin(row));
+  }, [acceptedProposalForRl?.id, matchPair, user?.id, proposals]);
 
   useEffect(() => {
     if (pendingProposal?.id) console.log("[Chat] active proposal id", pendingProposal.id);
@@ -1451,11 +1478,15 @@ export default function Chat() {
         ) : null}
         <div className="mx-auto mt-2 flex max-w-md items-center gap-3">
           {partnerPhoto ? (
-            <img
-              src={partnerPhoto}
-              alt=""
-              className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-app-border"
-            />
+            partnerPhotoDisplay ? (
+              <img
+                src={partnerPhotoDisplay}
+                alt=""
+                className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-app-border"
+              />
+            ) : (
+              <div className="h-11 w-11 shrink-0 rounded-full bg-app-border ring-2 ring-app-border" />
+            )
           ) : (
             <div className="h-11 w-11 shrink-0 rounded-full bg-app-border ring-2 ring-app-border" />
           )}
@@ -1584,6 +1615,16 @@ export default function Chat() {
               {t("chat_see_meetups")}
             </Link>
           </div>
+        ) : null}
+        {!pairBlocked && hasAcceptedProposal && acceptedProposalForRl && matchPair && user?.id ? (
+          <RealLifeSessionPanel
+            activityProposalId={acceptedProposalForRl.id}
+            userA={matchPair.userA}
+            userB={matchPair.userB}
+            checkin={rlCheckin}
+            onCheckinUpdate={setRlCheckin}
+            busy={proposalActionBusy}
+          />
         ) : null}
         <ChatPostMatchPanel
           productState={productState}

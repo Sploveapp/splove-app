@@ -14,6 +14,7 @@ import {
 } from "../constants/theme";
 import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
+import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 
 type SportOption = { id: string | number; name: string; category?: string | null };
 type LookingForValue =
@@ -118,6 +119,14 @@ export default function EditProfile() {
   const [bodyFile, setBodyFile] = useState<File | null>(null);
   const [portraitPreviewUrl, setPortraitPreviewUrl] = useState<string>("");
   const [bodyPreviewUrl, setBodyPreviewUrl] = useState<string>("");
+  const signedPortrait = useProfilePhotoSignedUrl(
+    portraitPreviewUrl ? null : (portraitUrl.trim() || null),
+  );
+  const signedBody = useProfilePhotoSignedUrl(
+    bodyPreviewUrl ? null : (bodyUrl.trim() || null),
+  );
+  const portraitDisplaySrc = portraitPreviewUrl || signedPortrait || "";
+  const bodyDisplaySrc = bodyPreviewUrl || signedBody || "";
 
   useEffect(() => {
     let cancelled = false;
@@ -432,9 +441,9 @@ export default function EditProfile() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
             <div style={{ border: `1px solid ${APP_BORDER}`, borderRadius: 14, padding: 10, background: APP_BG }}>
               <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.primary")}</p>
-              {portraitPreviewUrl || portraitUrl ? (
+              {portraitDisplaySrc ? (
                 <img
-                  src={portraitPreviewUrl || portraitUrl}
+                  src={portraitDisplaySrc}
                   alt={t("photos.primary")}
                   style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, marginBottom: 10 }}
                 />
@@ -484,9 +493,9 @@ export default function EditProfile() {
             </div>
             <div style={{ border: `1px solid ${APP_BORDER}`, borderRadius: 14, padding: 10, background: APP_BG }}>
               <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.secondary")}</p>
-              {bodyPreviewUrl || bodyUrl ? (
+              {bodyDisplaySrc ? (
                 <img
-                  src={bodyPreviewUrl || bodyUrl}
+                  src={bodyDisplaySrc}
                   alt={t("photos.secondary")}
                   style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, marginBottom: 10 }}
                 />

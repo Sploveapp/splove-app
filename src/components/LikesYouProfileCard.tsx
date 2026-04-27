@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import type { LikeReceived } from "../types/premium.types";
 import { useTranslation } from "../i18n/useTranslation";
 import { VerifiedBadge } from "./VerifiedBadge";
@@ -18,6 +19,9 @@ import {
   IconProfileAvatarPlaceholder,
 } from "./ui/Icon";
 import { guidedProfileSentence } from "../lib/discoverCardCopy";
+import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import { uniqueProfilePhotoRefsOrdered } from "../lib/profilePhotoSignedUrl";
+import { ProfilePhotoViewerModal } from "./ProfilePhotoViewerModal";
 
 function getSports(like: LikeReceived): string[] {
   const list = like.profile?.profile_sports ?? [];
@@ -70,7 +74,18 @@ export function LikesYouProfileCard({
     firstCommonSport: sports[0] ?? null,
     genericFallback: t("likes.guided_fallback"),
   });
-  const photo = profile.main_photo_url?.trim() ?? "";
+  const photoRaw = profile.main_photo_url?.trim() || null;
+  const photo = useProfilePhotoSignedUrl(photoRaw) ?? "";
+  const galleryRawRefs = useMemo(
+    () => uniqueProfilePhotoRefsOrdered(profile),
+    [profile.id, profile.main_photo_url, profile.portrait_url, profile.fullbody_url],
+  );
+  const [photoViewerOpen, setPhotoViewerOpen] = useState(false);
+  const mainGalleryIndex = useMemo(() => {
+    if (!photoRaw) return 0;
+    const i = galleryRawRefs.indexOf(photoRaw);
+    return i >= 0 ? i : 0;
+  }, [photoRaw, galleryRawRefs]);
   const hasExistingRelation = Boolean(like.is_match || like.conversation_id || like.match_id);
   const conversationLabel = like.conversation_id
     ? t("likes.continue_chat")
@@ -87,6 +102,7 @@ export function LikesYouProfileCard({
     : t("likes.profile_photo_alt");
 
   return (
+    <>
     <div
       style={{
         borderRadius: "20px",
@@ -102,7 +118,8 @@ export function LikesYouProfileCard({
           <img
             src={photo}
             alt={photoAlt}
-            className="h-full w-full object-cover"
+            className="h-full w-full cursor-pointer object-cover"
+            onClick={() => setPhotoViewerOpen(true)}
           />
         ) : (
           <div
@@ -381,5 +398,13 @@ export function LikesYouProfileCard({
         </div>
       </div>
     </div>
+    <ProfilePhotoViewerModal
+      isOpen={photoViewerOpen}
+      onClose={() => setPhotoViewerOpen(false)}
+      rawRefs={galleryRawRefs}
+      initialIndex={mainGalleryIndex}
+      nameForAlt={profile.first_name?.trim() || null}
+    />
+    </>
   );
 }
