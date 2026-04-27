@@ -1,15 +1,8 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  Image,
-  StyleSheet,
-  Pressable,
-  type ImageSourcePropType,
-} from 'react-native';
+import React, { useState } from "react";
+import type { CSSProperties } from "react";
 
-// Add `src/assets/heart-orbit.png` in your app (path relative to this file).
-const heartOrbit = require('../assets/heart-orbit.png') as ImageSourcePropType;
+// Place `heart-orbit.png` in `public/` (served as `${BASE_URL}heart-orbit.png`). If missing, the fallback (♥) is shown.
+const HEART_ORBIT_PUBLIC_URL = `${import.meta.env.BASE_URL}heart-orbit.png`.replace(/\/{2,}/g, "/");
 
 export type MatchScreenV2Props = {
   leftProfileUri?: string | null;
@@ -22,21 +15,22 @@ function CircularImage({
   style,
 }: {
   uri: string | null | undefined;
-  style?: object;
+  style?: CSSProperties;
 }): React.ReactElement {
   const [failed, setFailed] = useState(false);
   const useRemote = Boolean(uri) && !failed;
 
   return (
-    <View style={[styles.avatar, style]}>
+    <div style={{ ...styles.avatar, ...style }}>
       {useRemote ? (
-        <Image
-          source={{ uri: uri as string }}
+        <img
+          src={uri as string}
+          alt=""
           style={styles.avatarImage}
           onError={() => setFailed(true)}
         />
       ) : null}
-    </View>
+    </div>
   );
 }
 
@@ -46,86 +40,98 @@ export default function MatchScreen_v2({
   onPressSendMessage,
 }: MatchScreenV2Props): React.ReactElement {
   const [logoFailed, setLogoFailed] = useState(false);
+  const [buttonPressed, setButtonPressed] = useState(false);
 
   return (
-    <View style={styles.root}>
-      <View style={styles.content}>
-        <Text style={styles.title}>C’est un match.</Text>
-        <Text style={styles.subtitle}>Passe à l’action.</Text>
+    <div style={styles.root}>
+      <div style={styles.content}>
+        <p style={styles.title}>C’est un match.</p>
+        <p style={styles.subtitle}>Passe à l’action.</p>
 
-        <View style={styles.avatarsRow}>
+        <div style={styles.avatarsRow}>
           <CircularImage uri={leftProfileUri} style={styles.avatarLeft} />
-          <View style={styles.logoSlot}>
+          <div style={styles.logoSlot}>
             {logoFailed ? (
-              <View style={styles.logoFallback}>
-                <Text style={styles.logoFallbackText}>♥</Text>
-              </View>
+              <div style={styles.logoFallback}>
+                <span style={styles.logoFallbackText}>♥</span>
+              </div>
             ) : (
-              <Image
-                source={heartOrbit}
+              <img
+                src={HEART_ORBIT_PUBLIC_URL}
+                alt=""
                 style={styles.logo}
-                resizeMode="contain"
                 onError={() => setLogoFailed(true)}
               />
             )}
-          </View>
+          </div>
           <CircularImage uri={rightProfileUri} style={styles.avatarRight} />
-        </View>
+        </div>
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.button,
-            pressed && styles.buttonPressed,
-          ]}
-          onPress={onPressSendMessage}
+        <button
+          type="button"
+          style={{
+            ...styles.button,
+            ...(buttonPressed ? styles.buttonPressed : null),
+          }}
+          onClick={onPressSendMessage}
+          onPointerDown={() => setButtonPressed(true)}
+          onPointerUp={() => setButtonPressed(false)}
+          onPointerCancel={() => setButtonPressed(false)}
+          onPointerLeave={() => setButtonPressed(false)}
         >
-          <Text style={styles.buttonLabel}>Envoyer un message</Text>
-        </Pressable>
-      </View>
-    </View>
+          <span style={styles.buttonLabel}>Envoyer un message</span>
+        </button>
+      </div>
+    </div>
   );
 }
 
 const AVATAR = 112;
 const LOGO = 80;
 
-const styles = StyleSheet.create({
+const styles: Record<string, CSSProperties> = {
   root: {
     flex: 1,
-    backgroundColor: '#0B0B0F',
+    minHeight: "100vh",
+    backgroundColor: "#0B0B0F",
   },
   content: {
     flex: 1,
-    paddingHorizontal: 24,
+    display: "flex",
+    flexDirection: "column",
+    paddingLeft: 24,
+    paddingRight: 24,
     paddingTop: 56,
-    alignItems: 'center',
+    alignItems: "center",
   },
   title: {
-    color: '#F5F5F7',
+    margin: 0,
+    color: "#F5F5F7",
     fontSize: 28,
-    fontWeight: '700',
-    textAlign: 'center',
+    fontWeight: 700,
+    textAlign: "center",
   },
   subtitle: {
+    margin: 0,
     marginTop: 10,
-    color: 'rgba(245, 245, 247, 0.64)',
+    color: "rgba(245, 245, 247, 0.64)",
     fontSize: 16,
-    textAlign: 'center',
+    textAlign: "center",
   },
   avatarsRow: {
     marginTop: 48,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
   },
   avatar: {
     width: AVATAR,
     height: AVATAR,
     borderRadius: AVATAR / 2,
-    backgroundColor: '#1C1C24',
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
-    overflow: 'hidden',
+    backgroundColor: "#1C1C24",
+    border: "2px solid rgba(255, 255, 255, 0.10)",
+    overflow: "hidden",
   },
   avatarLeft: {
     marginRight: -18,
@@ -134,47 +140,58 @@ const styles = StyleSheet.create({
     marginLeft: -18,
   },
   avatarImage: {
-    width: '100%',
-    height: '100%',
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+    display: "block",
   },
   logoSlot: {
     width: LOGO,
     height: LOGO,
     zIndex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
   },
   logo: {
     width: LOGO,
     height: LOGO,
+    objectFit: "contain",
+    display: "block",
   },
   logoFallback: {
     width: LOGO,
     height: LOGO,
     borderRadius: LOGO / 2,
-    backgroundColor: '#2A1020',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#2A1020",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
   },
   logoFallbackText: {
-    color: '#FF6B9A',
+    color: "#FF6B9A",
     fontSize: 32,
   },
   button: {
     marginTop: 48,
-    width: '100%',
+    width: "100%",
     maxWidth: 400,
-    paddingVertical: 16,
+    paddingTop: 16,
+    paddingBottom: 16,
     borderRadius: 14,
-    backgroundColor: '#F5F5F7',
-    alignItems: 'center',
+    backgroundColor: "#F5F5F7",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    border: "none",
+    cursor: "pointer",
   },
   buttonPressed: {
     opacity: 0.88,
   },
   buttonLabel: {
-    color: '#0B0B0F',
+    color: "#0B0B0F",
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: 600,
   },
-});
+};
