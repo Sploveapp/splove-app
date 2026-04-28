@@ -148,6 +148,15 @@ export default function SplovePlus() {
     language === "en"
       ? "SPLove+ accelerates what really matters: meeting in real life."
       : "SPLove+ accelere ce qui compte vraiment : se voir en vrai.";
+  const opportunitiesTitle = language === "en" ? "Opportunities" : "Opportunites";
+  const intelligenceTitle = language === "en" ? "Intelligence" : "Intelligence";
+  const controlTitle = language === "en" ? "Control & freedom" : "Controle & liberte";
+  const rewindUnlimitedTitle =
+    language === "en" ? "Go back with no limits" : "Reviens en arriere sans limite";
+  const rewindUnlimitedDescription =
+    language === "en"
+      ? "Correct your swipes and recover profiles you missed."
+      : "Corrige tes swipes et retrouve les profils que tu as manques.";
 
   return (
     <main className="min-h-screen bg-[#0B0B0F] px-4 pb-28 pt-6 text-white">
@@ -252,57 +261,80 @@ export default function SplovePlus() {
           </section>
         ) : null}
 
-        <section className="space-y-3">
-          <BenefitCard
-            icon="⚡"
-            title={t("premium_feature_2")}
-            text={
-              language === "en"
-                ? "Your activity suggestions are shown first to turn a match into a real plan."
-                : "Tes propositions arrivent en priorité pour transformer le match en plan concret."
-            }
-            onClick={() => trackBetaEvent("feature_usage", "priority_proposals")}
-          />
-          <BenefitCard
-            icon="👻"
-            title={language === "en" ? "Go invisible anytime" : "Deviens invisible quand tu veux"}
-            text={
-              language === "en"
-                ? "Enable ghost mode and stay visible only when timing is right."
-                : "Active le mode fantome et reste visible seulement quand c'est le bon moment."
-            }
-            onClick={() => trackBetaEvent("feature_usage", "ghost_mode")}
-          />
-          <BenefitCard
-            icon="📍"
-            title={t("premium_feature_3")}
-            text={
-              language === "en"
-                ? "Find shared real-life places to make meeting easier."
-                : "Repère des lieux communs crédibles pour passer au réel plus facilement."
-            }
-            onClick={() => trackBetaEvent("feature_usage", "common_places")}
-          />
-          <BenefitCard
-            icon="🔔"
-            title={language === "en" ? "Never miss an opportunity" : "Ne rate plus une opportunite"}
-            text={
-              language === "en"
-                ? "Smart reminders at the right time to follow up naturally."
-                : "Rappels intelligents au bon timing pour relancer sans forcer."
-            }
-            onClick={() => trackBetaEvent("feature_usage", "smart_reminders")}
-          />
-          <BenefitCard
-            icon="🚀"
-            title={t("premium_feature_4")}
-            text={
-              language === "en"
-                ? "Smart boost when the right profiles are online."
-                : "Boost intelligent quand les bons profils sont réellement connectés."
-            }
-            onClick={() => trackBetaEvent("feature_usage", "smart_boost")}
-          />
+        <section className="space-y-5">
+          <div className="space-y-3">
+            <h2 className="px-1 text-[13px] font-semibold uppercase tracking-[0.08em] text-[#FF9B9B]">
+              {opportunitiesTitle}
+            </h2>
+            <BenefitCard
+              icon="⚡"
+              title={t("premium_feature_2")}
+              text={
+                language === "en"
+                  ? "Your activity suggestions are shown first to turn a match into a real plan."
+                  : "Tes propositions arrivent en priorité pour transformer le match en plan concret."
+              }
+              onClick={() => trackBetaEvent("feature_usage", "priority_proposals")}
+            />
+            <BenefitCard
+              icon="📍"
+              title={t("premium_feature_3")}
+              text={
+                language === "en"
+                  ? "Find shared real-life places to make meeting easier."
+                  : "Repère des lieux communs crédibles pour passer au réel plus facilement."
+              }
+              onClick={() => trackBetaEvent("feature_usage", "common_places")}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <h2 className="px-1 text-[13px] font-semibold uppercase tracking-[0.08em] text-[#FF9B9B]">
+              {intelligenceTitle}
+            </h2>
+            <BenefitCard
+              icon="🔔"
+              title={language === "en" ? "Never miss an opportunity" : "Ne rate plus une opportunite"}
+              text={
+                language === "en"
+                  ? "Smart reminders at the right time to follow up naturally."
+                  : "Rappels intelligents au bon timing pour relancer sans forcer."
+              }
+              onClick={() => trackBetaEvent("feature_usage", "smart_reminders")}
+            />
+            <BenefitCard
+              icon="🚀"
+              title={t("premium_feature_4")}
+              text={
+                language === "en"
+                  ? "Smart boost when the right profiles are online."
+                  : "Boost intelligent quand les bons profils sont réellement connectés."
+              }
+              onClick={() => trackBetaEvent("feature_usage", "smart_boost")}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <h2 className="px-1 text-[13px] font-semibold uppercase tracking-[0.08em] text-[#FF9B9B]">
+              {controlTitle}
+            </h2>
+            <BenefitCard
+              icon="↩"
+              title={rewindUnlimitedTitle}
+              text={rewindUnlimitedDescription}
+              onClick={() => trackBetaEvent("feature_usage", "rewind_unlimited")}
+            />
+            <BenefitCard
+              icon="👻"
+              title={language === "en" ? "Go invisible anytime" : "Deviens invisible quand tu veux"}
+              text={
+                language === "en"
+                  ? "Enable ghost mode and stay visible only when timing is right."
+                  : "Active le mode fantome et reste visible seulement quand c'est le bon moment."
+              }
+              onClick={() => trackBetaEvent("feature_usage", "ghost_mode")}
+            />
+          </div>
         </section>
 
         <section className="rounded-3xl border border-[#FF3B3B]/30 bg-gradient-to-b from-[#1A1114] to-[#141419] p-5">
@@ -310,6 +342,7 @@ export default function SplovePlus() {
           <p className="mt-1 text-3xl font-semibold text-white">{t("premium_price_month")}</p>
           <ul className="mt-4 space-y-2 text-sm text-white/80">
             <li>{`• ${t("premium_feature_2")}`}</li>
+            <li>{`• ${rewindUnlimitedTitle}`}</li>
             <li>{`• ${language === "en" ? "Ghost mode" : "Mode fantome"}`}</li>
             <li>{`• ${t("premium_feature_3")}`}</li>
             <li>{`• ${language === "en" ? "Smart reminders" : "Rappels intelligents"}`}</li>
@@ -342,6 +375,17 @@ export default function SplovePlus() {
                   : null
               }
               onClick={() => openOneShot("boost", isOneShotBoostActive)}
+            />
+            <MiniOfferCard
+              icon="↩"
+              title={language === "en" ? "Go back" : "Reviens en arriere"}
+              subtitle={
+                language === "en"
+                  ? "Recover a profile you missed"
+                  : "Retrouve un profil que tu as manque"
+              }
+              price={language === "en" ? "3 rewinds - 1,99€" : "3 retours - 1,99€"}
+              isActive={false}
             />
             <MiniOfferCard
               title={t("one_shot_ghost")}
@@ -579,13 +623,17 @@ function BenefitCard({
 }
 
 function MiniOfferCard({
+  icon,
   title,
+  subtitle,
   price,
   isActive,
   activeDetail,
   onClick,
 }: {
+  icon?: string;
   title: string;
+  subtitle?: string;
   price: string;
   isActive: boolean;
   activeDetail?: string | null;
@@ -603,7 +651,11 @@ function MiniOfferCard({
       }`}
     >
       <div className="min-w-0">
-        <div className="text-sm font-medium text-white">{title}</div>
+        <div className="text-sm font-medium text-white">
+          {icon ? <span className="mr-1.5 text-[13px] text-[#FF9B9B]">{icon}</span> : null}
+          {title}
+        </div>
+        {subtitle ? <div className="mt-0.5 text-[11px] text-white/65">{subtitle}</div> : null}
         {isActive ? (
           <div className="mt-0.5 text-[11px] font-medium text-emerald-300/95">
             ✓ {t("one_shot_activated")}

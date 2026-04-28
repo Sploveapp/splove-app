@@ -5,16 +5,30 @@ const REWIND_ACCENT = "#D1003F";
 
 export type DiscoverRewindButtonProps = {
   onRewind: () => void;
+  /** Seulement pendant chargement ; le parent gère le paywall vs rewind actif. */
   disabled: boolean;
   busy: boolean;
+  /** Légende optionnelle (crédits, accès monétisé, etc.) */
+  hint?: string | null;
 } & Pick<ButtonHTMLAttributes<HTMLButtonElement>, "aria-label">;
 
 /**
  * Fixed bottom-center rewind control — dark chip + raspberry accent (no layout redesign).
  */
-export function DiscoverRewindButton({ onRewind, disabled, busy, "aria-label": ariaLabel }: DiscoverRewindButtonProps) {
+export function DiscoverRewindButton({
+  onRewind,
+  disabled,
+  busy,
+  hint,
+  "aria-label": ariaLabel,
+}: DiscoverRewindButtonProps) {
   return (
-    <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 flex justify-center pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+    <div className="pointer-events-none fixed bottom-0 left-0 right-0 z-30 flex flex-col items-center justify-end gap-1 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      {hint ? (
+        <p className="pointer-events-none max-w-[16rem] px-2 text-center text-[10px] font-medium leading-tight text-app-muted/95">
+          {hint}
+        </p>
+      ) : null}
       <button
         type="button"
         onClick={onRewind}

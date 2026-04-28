@@ -59,6 +59,7 @@ import { useTranslation } from "../i18n/useTranslation";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { ProfilePhotoViewerModal } from "../components/ProfilePhotoViewerModal";
 import { DiscoverRewindButton } from "../components/DiscoverRewindButton";
+import { DiscoverRewindPurchaseModal } from "../components/DiscoverRewindPurchaseModal";
 import { SecondChancePassCard } from "../components/SecondChancePassCard";
 import { SecondChanceMessageModal } from "../components/SecondChanceMessageModal";
 import { createSecondChanceRequest } from "../services/secondChance.service";
@@ -66,6 +67,7 @@ import { uniqueProfilePhotoRefsOrdered } from "../lib/profilePhotoSignedUrl";
 import {
   fetchProfileCrossings,
   getDiscoverRewindStatus,
+  purchaseDiscoverRewindCredit,
   recordDiscoverSwipe,
   rewindLastDiscoverSwipe,
   type DiscoverRewindStatus,
@@ -663,6 +665,25 @@ function DiscoverProfileCardSkeleton() {
 const SWIPE_COMMIT_PX = 72;
 const TAP_MAX_PX = 15;
 const SWIPE_DAMP = 0.55;
+const DISCOVER_FREE_VISIBILITY_HOURS = 24;
+const DISCOVER_PREMIUM_VISIBILITY_HOURS = 72;
+
+function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremium: boolean): boolean {
+  const raw = typeof createdAt === "string" ? createdAt.trim() : "";
+  if (!raw) return false;
+  const ts = Date.parse(raw);
+  if (!Number.isFinite(ts)) return false;
+  const maxHours = isPremium ? DISCOVER_PREMIUM_VISIBILITY_HOURS : DISCOVER_FREE_VISIBILITY_HOURS;
+  return Date.now() - ts <= maxHours * 60 * 60 * 1000;
+}
+
+function hasAvailabilityTodaySignal(sportTime: string | null | undefined): boolean {
+  const v = typeof sportTime === "string" ? sportTime.trim().toLowerCase() : "";
+  if (!v) return false;
+  return ["today", "aujourd", "soir", "evening", "matin", "morning", "apres", "after"].some((k) =>
+    v.includes(k),
+  );
+}
 
 /**
  * Colonnes Discover depuis `public.profiles` uniquement — pas de colonnes optionnelles absentes en prod.
@@ -914,7 +935,14 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
     if (raw === "low") return { label: "Low", className: "bg-rose-500/90 text-white" };
     return { label: "Medium", className: "bg-amber-500/90 text-white" };
   })();
-  const boostBadgeLabel = language === "en" ? "Active now" : "Actif maintenant";
+  const activeNowBadge = language === "en" ? "Active now" : "Actif maintenant";
+  const availableTodayBadge = language === "en" ? "Available today" : "Disponible aujourd'hui";
+  const sharedLocationBadge = language === "en" ? "Shared location" : "Lieu commun";
+  const sharedTimingBadge = language === "en" ? "Shared timing" : "Timing commun";
+  const showActiveNow = isProfileActiveRecently(profile.last_active_at);
+  const showAvailableToday = hasAvailabilityTodaySignal(profile.sport_time);
+  const showSharedLocation = hasSharedPlace(profile);
+  const showSharedTiming = showAvailableToday && profile.commonSportsCount > 0;
 
   const [dx, setDx] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -1047,14 +1075,14 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
             Plusieurs sports
           </div>
         ) : null}
-        {isProfileActiveRecently(profile.last_active_at) ? (
+        {showActiveNow ? (
           <div className="pointer-events-none absolute left-3 top-10 z-10 rounded-full bg-[#FF1E2D]/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm backdrop-blur-sm">
-            Actif maintenant
+            {activeNowBadge}
           </div>
         ) : null}
         {profile.is_boost_active === true ? (
           <div className="pointer-events-none absolute left-3 top-[4.2rem] z-10 rounded-full bg-fuchsia-500/85 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm backdrop-blur-sm">
-            {boostBadgeLabel}
+            {activeNowBadge}
           </div>
         ) : null}
         <div
@@ -1137,7 +1165,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
               </span>
             ) : null}
           </div>
-          {sportsShown.length > 0 || hasSharedPlace(profile) ? (
+          {sportsShown.length > 0 || showSharedLocation || showAvailableToday || showSharedTiming ? (
             <div className="mt-2.5 flex flex-wrap gap-1.5">
               {sportsShown.map((name) => (
                 <span
@@ -1147,9 +1175,19 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
                   {name}
                 </span>
               ))}
-              {hasSharedPlace(profile) ? (
+              {showSharedLocation ? (
                 <span className="rounded-full bg-white/12 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/95 shadow-sm ring-1 ring-amber-200/35 backdrop-blur-[2px]">
-                  📍 Lieu commun
+                  📍 {sharedLocationBadge}
+                </span>
+              ) : null}
+              {showAvailableToday ? (
+                <span className="rounded-full bg-white/12 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/95 shadow-sm ring-1 ring-white/35 backdrop-blur-[2px]">
+                  {availableTodayBadge}
+                </span>
+              ) : null}
+              {showSharedTiming ? (
+                <span className="rounded-full bg-white/12 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/95 shadow-sm ring-1 ring-white/35 backdrop-blur-[2px]">
+                  ⏱ {sharedTimingBadge}
                 </span>
               ) : null}
             </div>
@@ -1292,6 +1330,8 @@ export default function Discover() {
   const [rewindError, setRewindError] = useState<string | null>(null);
   const [swipeHistory, setSwipeHistory] = useState<DiscoverSwipeHistoryEntry[]>([]);
   const swipeHistoryRef = useRef<DiscoverSwipeHistoryEntry[]>([]);
+  const [rewindPurchaseOpen, setRewindPurchaseOpen] = useState(false);
+  const [rewindPurchaseBusy, setRewindPurchaseBusy] = useState(false);
   const [secondChanceTarget, setSecondChanceTarget] = useState<ProfileWithAffinity | null>(null);
   const [secondChanceModalOpen, setSecondChanceModalOpen] = useState(false);
   const [secondChanceToast, setSecondChanceToast] = useState<string | null>(null);
@@ -1773,6 +1813,7 @@ export default function Discover() {
         raw = raw.filter((p) => !matchedIds.has(p.id));
       }
       raw = raw.filter((p) => !isProfileGhostActive(p.id));
+      raw = raw.filter((p) => isWithinVisibilityWindow(p.created_at ?? null, hasPlus));
 
       let stage: Profile[] = raw;
       console.log("[Discover feed] profiles before scoring filters:", stage.length);
@@ -2079,12 +2120,24 @@ export default function Discover() {
     setPreviewProfile(null);
   };
 
+  /** Affiche le CTA dès qu’il y a un dernier like/pass non-match (rewind actif, crédit ou paywall). */
   const canShowRewind = useMemo(() => {
     if (!rewindStatus) return false;
-    if (rewindStatus.can_rewind) return true;
-    if (BETA_MODE && hasPlus) return true;
-    return false;
-  }, [rewindStatus, hasPlus]);
+    if (rewindStatus.last_is_match) return false;
+    return Boolean(rewindStatus.last_swipe_at);
+  }, [rewindStatus]);
+
+  const rewindBarHint = useMemo(() => {
+    if (!rewindStatus) return null;
+    if (rewindStatus.suggest_paywall && !rewindStatus.can_rewind) {
+      return t("discover_rewind_paywall_hint");
+    }
+    const n = typeof rewindStatus.undo_credits === "number" ? rewindStatus.undo_credits : 0;
+    if (n > 0) {
+      return t("discover_rewind_credits", { n });
+    }
+    return null;
+  }, [rewindStatus, t]);
 
   async function loadCrossings() {
     if (!currentUserId) return;
@@ -2112,8 +2165,7 @@ export default function Discover() {
     }
   }
 
-  async function handleRewind() {
-    if (!currentUserId || rewindBusy) return;
+  async function runRewindFlow() {
     setRewindBusy(true);
     setRewindError(null);
     try {
@@ -2122,12 +2174,14 @@ export default function Discover() {
         const err = (res.error ?? "generic").toLowerCase();
         if (err.includes("time_window") || err.includes("rewind_rate")) {
           setRewindError(t("discover_rewind_err_upgrade"));
-        }
-        else if (err.includes("match")) setRewindError(t("discover_rewind_err_match"));
+        } else if (err.includes("no_undo_credits")) {
+          setRewindError(t("discover_rewind_err_no_credits"));
+        } else if (err.includes("match")) setRewindError(t("discover_rewind_err_match"));
         else if (err.includes("no_swipe")) setRewindError(t("discover_rewind_err_none"));
         else setRewindError(t("discover_rewind_err_generic"));
         return;
       }
+      void refetchProfile();
       const h = swipeHistoryRef.current;
       const last = h[h.length - 1];
       const fromLocal = last && last.profile.id === res.target_id ? last.profile : null;
@@ -2161,6 +2215,37 @@ export default function Discover() {
       refreshRewindStatus();
     } finally {
       setRewindBusy(false);
+    }
+  }
+
+  async function handleRewind() {
+    if (!currentUserId || rewindBusy || rewindPurchaseBusy) return;
+    const latest = await getDiscoverRewindStatus();
+    if (latest) setRewindStatus(latest);
+    const gate = latest ?? rewindStatus;
+    if (gate?.suggest_paywall && !gate.can_rewind) {
+      setRewindPurchaseOpen(true);
+      return;
+    }
+    void runRewindFlow();
+  }
+
+  async function handleRewindCreditPurchase() {
+    if (!currentUserId || rewindPurchaseBusy) return;
+    setRewindPurchaseBusy(true);
+    setRewindError(null);
+    try {
+      const buy = await purchaseDiscoverRewindCredit();
+      if (!buy.ok) {
+        setRewindError(t("discover_rewind_err_no_credits"));
+        return;
+      }
+      setRewindPurchaseOpen(false);
+      const latest = await getDiscoverRewindStatus();
+      if (latest) setRewindStatus(latest);
+      await runRewindFlow();
+    } finally {
+      setRewindPurchaseBusy(false);
     }
   }
 
@@ -2510,6 +2595,17 @@ export default function Discover() {
         </div>
       ) : null}
 
+      <DiscoverRewindPurchaseModal
+        open={rewindPurchaseOpen}
+        busy={rewindPurchaseBusy}
+        onBuy={() => void handleRewindCreditPurchase()}
+        onGoPlus={() => {
+          setRewindPurchaseOpen(false);
+          setRewindError(t("discover_rewind_err_upgrade"));
+        }}
+        onClose={() => setRewindPurchaseOpen(false)}
+      />
+
       {previewProfile ? (
         <DiscoverProfileDetailPreview
           profile={previewProfile}
@@ -2573,11 +2669,12 @@ export default function Discover() {
         }}
       />
 
-      {currentUserId && !errorMessage && !loading ? (
+      {currentUserId && !errorMessage && !loading && canShowRewind ? (
         <DiscoverRewindButton
           onRewind={() => void handleRewind()}
-          disabled={!canShowRewind}
+          disabled={rewindBusy}
           busy={rewindBusy}
+          hint={rewindBarHint}
           aria-label={t("discover_rewind")}
         />
       ) : null}

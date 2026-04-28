@@ -4,6 +4,12 @@ export type DiscoverRewindStatus = {
   can_rewind: boolean;
   reason: string | null;
   has_premium: boolean;
+  /** Accès via `user_has_feature('undo_swipe_return')` (SPLove+ complet ou autre). */
+  has_undo_feature?: boolean;
+  /** Crédits achat unitaire (hors abonnement). */
+  undo_credits?: number;
+  /** Proposer l’achat / SPLove+ (plafond gratuit atteint, pas de crédit). */
+  suggest_paywall?: boolean;
   last_action?: string | null;
   last_is_match?: boolean;
   /** Rewinds consommés sur la fenêtre 5 min (côté serveur, `discover_rewind_ledger`). */
@@ -24,6 +30,7 @@ function rewindFreeLimit(v: unknown): number {
 
 export type RecordSwipeResult = { ok: boolean; error?: string | null };
 export type RewindResult = { ok: boolean; target_id?: string; action?: string; error?: string | null };
+export type PurchaseRewindCreditResult = { ok: boolean; credits?: number; error?: string | null };
 
 export async function recordDiscoverSwipe(input: {
   targetId: string;
@@ -58,6 +65,9 @@ export async function getDiscoverRewindStatus(): Promise<DiscoverRewindStatus | 
     can_rewind: d.can_rewind === true,
     reason: typeof d.reason === "string" ? d.reason : d.reason == null ? null : String(d.reason),
     has_premium: d.has_premium === true,
+    has_undo_feature: d.has_undo_feature === true,
+    undo_credits: numOr0(d.undo_credits),
+    suggest_paywall: d.suggest_paywall === true,
     last_action: typeof d.last_action === "string" ? d.last_action : null,
     last_is_match: d.last_is_match === true,
     rewind_count: numOr0(d.rewind_count),
@@ -89,6 +99,15 @@ export async function rewindLastDiscoverSwipe(): Promise<RewindResult> {
     target_id: typeof d.target_id === "string" ? d.target_id : undefined,
     action: typeof d.action === "string" ? d.action : undefined,
   };
+}
+
+export async function purchaseDiscoverRewindCredit(): Promise<PurchaseRewindCreditResult> {
+  const { data, error } = await supabase.rpc("purchase_discover_rewind_credit");
+  if (error) return { ok: false, error: error.message };
+  const d = (data ?? null) as { ok?: boolean; credits?: number; error?: string } | null;
+  if (!d) return { ok: false, error: "empty" };
+  if (!d.ok) return { ok: false, error: d.error ?? "purchase_failed" };
+  return { ok: true, credits: numOr0(d.credits) };
 }
 
 export type ProfileCrossingRow = {
