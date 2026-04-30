@@ -8,7 +8,7 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { ReportModal } from "../components/ReportModal";
@@ -23,7 +23,6 @@ import {
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import {
   IconBanSoft,
-  IconHeartFilled,
   IconHeartOutline,
   IconPass,
   IconProfileAvatarPlaceholder,
@@ -57,9 +56,9 @@ import { usePremium } from "../hooks/usePremium";
 import { useSplovePlus } from "../hooks/useSplovePlus";
 import { useTranslation } from "../i18n/useTranslation";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import { DiscoverActionBar } from "@/components/DiscoverActionBar";
 import { ProfilePhotoViewerModal } from "../components/ProfilePhotoViewerModal";
 import { DiscoverRewindButton } from "../components/DiscoverRewindButton";
-import { DiscoverRewindPurchaseModal } from "../components/DiscoverRewindPurchaseModal";
 import { SecondChancePassCard } from "../components/SecondChancePassCard";
 import { SecondChanceMessageModal } from "../components/SecondChanceMessageModal";
 import { createSecondChanceRequest } from "../services/secondChance.service";
@@ -67,11 +66,18 @@ import { uniqueProfilePhotoRefsOrdered } from "../lib/profilePhotoSignedUrl";
 import {
   fetchProfileCrossings,
   getDiscoverRewindStatus,
-  purchaseDiscoverRewindCredit,
   recordDiscoverSwipe,
   rewindLastDiscoverSwipe,
   type DiscoverRewindStatus,
 } from "../services/discoverSwipes.service";
+import ReferralCard from "../components/referral/ReferralCard";
+import ReferralModal from "../components/referral/ReferralModal";
+import {
+  getOrCreateReferralCode,
+  getReferralVariant,
+  trackReferralEvent,
+} from "../lib/referral";
+import { trackEvent, getAbVariant, SECOND_CHANCE_COPY_TEST } from "../lib/analytics";
 
 type Profile = {
   id: string;
@@ -112,6 +118,10 @@ type Profile = {
   location_updated_at?: string | null;
   is_active_mode?: boolean | null;
   reliability_label?: string | null;
+  activity_label?: string | null;
+  availability_label?: string | null;
+  vibe_label?: string | null;
+  feed_reason?: string | null;
 };
 
 /** Resolve photo URL from whatever columns the feed view row actually includes. */
@@ -145,6 +155,41 @@ type ProfileWithAffinity = Profile & {
   /** Au moins un place_ref commun avec le viewer — renseigné par `discover_shared_place_flags` ; jamais de nom dans l’UI Discover. */
   has_shared_place?: boolean;
 };
+
+type DiscoverAliveRow = {
+  profile: Profile | null;
+  activity_label: string | null;
+  availability_label: string | null;
+  vibe_label: string | null;
+  feed_reason: string | null;
+};
+
+const activityLabelKeyMap: Record<string, string> = {
+  "vient de rejoindre": "discover.activityNew",
+  "actif recemment": "discover.activityRecently",
+  "actif récemment": "discover.activityRecently",
+  "actif aujourd'hui": "discover.activityToday",
+  "actif aujourd’hui": "discover.activityToday",
+  "profil a decouvrir": "discover.activityDiscover",
+  "profil à découvrir": "discover.activityDiscover",
+};
+
+const availabilityLabelKeyMap: Record<string, string> = {
+  "dispo cette semaine": "discover.availableThisWeek",
+  "a voir selon dispo": "discover.availabilityFlexible",
+  "à voir selon dispo": "discover.availabilityFlexible",
+};
+
+const vibeLabelKeyMap: Record<string, string> = {
+  "bonne vibe sportive": "discover.sportyVibe",
+};
+
+function normalizeAliveLabel(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
 
 /** Dernière(s) action(s) Discover locales — miroir du stack pour un rewind instantané. */
 type DiscoverSwipeHistoryEntry = { profile: ProfileWithAffinity; action: "like" | "pass" };
@@ -618,7 +663,6 @@ function safeTimeMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
-const DISCOVER_FETCH_LIMIT = 80;
 const DISCOVER_DISPLAY_LIMIT = 10;
 /** Source Supabase du fil Discover (classement serveur) — repli côté client si colonne absente. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
@@ -804,67 +848,6 @@ function isFeedQueryColumnError(err: { message?: string; details?: string; code?
   );
 }
 
-/**
- * Interroge `feed_profiles_ranked` (remplace l’ancienne `feed_profiles` / v2) ; enchaîne des repli
- * (clé `id` vs `profile_id`, ordre `created_at` / PK / aucun) sans modifier l’UI.
- */
-async function fetchDiscoverFeedProfileIds(
-  currentUserId: string,
-  notInClause: string | null,
-): Promise<{ data: { id: string }[]; error: { message: string; code?: string; details?: string } | null }> {
-  type KeyCol = "id" | "profile_id";
-  type OrderMode = "created_at" | "pk" | "none";
-
-  const build = (key: KeyCol, order: OrderMode) => {
-    let q = supabase
-      .from(DISCOVER_FEED_SOURCE)
-      .select(key)
-      .neq(key, currentUserId)
-      .limit(DISCOVER_FETCH_LIMIT);
-    if (order === "created_at") {
-      q = q.order("created_at", { ascending: false, nullsFirst: false });
-    } else if (order === "pk") {
-      q = q.order(key, { ascending: false });
-    }
-    if (notInClause) {
-      q = q.not(key, "in", notInClause);
-    }
-    return q;
-  };
-
-  const mapToIds = (data: unknown, key: KeyCol): { id: string }[] => {
-    if (!Array.isArray(data)) return [];
-    const out: { id: string }[] = [];
-    for (const row of data) {
-      const v = (row as Record<string, unknown>)[key];
-      if (typeof v === "string" && isValidProfileId(v)) out.push({ id: v });
-    }
-    return out;
-  };
-
-  const attempts: { key: KeyCol; order: OrderMode }[] = [
-    { key: "id", order: "created_at" },
-    { key: "id", order: "pk" },
-    { key: "id", order: "none" },
-    { key: "profile_id", order: "created_at" },
-    { key: "profile_id", order: "pk" },
-    { key: "profile_id", order: "none" },
-  ];
-
-  let lastErr: { message: string; code?: string; details?: string } | null = null;
-  for (const a of attempts) {
-    const res = await build(a.key, a.order);
-    if (!res.error) {
-      return { data: mapToIds(res.data, a.key), error: null };
-    }
-    lastErr = res.error;
-    if (!isFeedQueryColumnError(res.error)) {
-      return { data: [], error: res.error };
-    }
-  }
-  return { data: [], error: lastErr };
-}
-
 type DiscoverSwipeCardProps = {
   profile: ProfileWithAffinity;
   /** Ville du viewer (indication floue uniquement). */
@@ -880,6 +863,10 @@ type DiscoverSwipeCardProps = {
   onReportPhoto: (p: ProfileWithAffinity) => void;
   onBlock: (id: string) => void | Promise<void>;
   language: "fr" | "en";
+  handleUndo: () => void;
+  handleMessage: () => void;
+  canUndo: boolean;
+  restoredProfileId: string | null;
 };
 
 const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
@@ -895,8 +882,14 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   onReportPhoto,
   onBlock,
   language,
+  handleUndo,
+  handleMessage,
+  canUndo,
+  restoredProfileId,
 }: DiscoverSwipeCardProps) {
   const { t } = useTranslation();
+  const handlePass = onPass;
+  const handleLike = onLike;
   const age = getAgeFromBirthDate(profile.birth_date ?? null);
   const firstCommon = firstCommonSportName(profile, mySportMatchKeys);
   const sharedSports = getSharedSportsFromProfile(mySportMatchKeys, profile);
@@ -939,6 +932,13 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   const availableTodayBadge = language === "en" ? "Available today" : "Disponible aujourd'hui";
   const sharedLocationBadge = language === "en" ? "Shared location" : "Lieu commun";
   const sharedTimingBadge = language === "en" ? "Shared timing" : "Timing commun";
+  const activityLabelKey =
+    activityLabelKeyMap[normalizeAliveLabel(profile.activity_label)] ?? "discover.activityDiscover";
+  const availabilityLabelKey =
+    availabilityLabelKeyMap[normalizeAliveLabel(profile.availability_label)] ??
+    "discover.availabilityFlexible";
+  const vibeLabelKey = vibeLabelKeyMap[normalizeAliveLabel(profile.vibe_label)] ?? "discover.sportyVibe";
+  const aliveBadgeKeys = [activityLabelKey, availabilityLabelKey, vibeLabelKey];
   const showActiveNow = isProfileActiveRecently(profile.last_active_at);
   const showAvailableToday = hasAvailabilityTodaySignal(profile.sport_time);
   const showSharedLocation = hasSharedPlace(profile);
@@ -1070,8 +1070,17 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
           className="pointer-events-none absolute inset-x-0 bottom-0 h-[55%] bg-gradient-to-t from-black/85 via-black/35 to-transparent"
           aria-hidden
         />
+        {restoredProfileId === profile.id ? (
+          <div className="pointer-events-none absolute left-1/2 top-3 z-[12] -translate-x-1/2 rounded-full bg-emerald-600/95 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-md backdrop-blur-sm">
+            {t("discover_second_chance_badge")}
+          </div>
+        ) : null}
         {strongAffinity ? (
-          <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-full bg-app-card/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-800 shadow-sm backdrop-blur-sm">
+          <div
+            className={`pointer-events-none absolute left-3 z-10 rounded-full bg-app-card/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-800 shadow-sm backdrop-blur-sm ${
+              restoredProfileId === profile.id ? "top-14" : "top-3"
+            }`}
+          >
             Plusieurs sports
           </div>
         ) : null}
@@ -1192,6 +1201,18 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
               ) : null}
             </div>
           ) : null}
+          {aliveBadgeKeys.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {aliveBadgeKeys.map((badgeKey) => (
+                <span
+                  key={badgeKey}
+                  className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/90 ring-1 ring-white/25 backdrop-blur-[2px]"
+                >
+                  {t(badgeKey)}
+                </span>
+              ))}
+            </div>
+          ) : null}
           {discoverReasonsDisplay.length > 0 ? (
             <p className="mt-1.5 line-clamp-2 text-[10px] font-semibold leading-snug tracking-wide text-white/85 drop-shadow-sm">
               {discoverReasonsDisplay.join(" · ")}
@@ -1232,45 +1253,15 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
       </div>
 
       <div className="flex min-h-[96px] flex-1 flex-col justify-end gap-3 border-t border-app-border/90 bg-app-card px-3 py-3 sm:px-4">
-        <div className="flex items-stretch gap-2 sm:gap-2.5">
-          <button
-            type="button"
-            onClick={() => onPass(profile.id, 0)}
-            className="flex w-[3.25rem] shrink-0 flex-col items-center justify-center gap-0.5 rounded-2xl py-2 text-[11px] font-medium text-app-muted transition hover:bg-app-border hover:text-app-muted"
-            aria-label={t("pass")}
-          >
-            <IconPass size={20} />
-            <span>{t("pass")}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => void onLike(profile, 0)}
-            className="min-h-[52px] min-w-0 flex-1 rounded-2xl px-2 py-3 text-[15px] font-bold leading-tight shadow-md transition hover:opacity-95 active:scale-[0.99] sm:text-base"
-            style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
-          >
-            {t("propose_activity")}
-          </button>
-          <button
-            type="button"
-            onClick={() => void onLike(profile, 0)}
-            className="group flex w-[3.25rem] shrink-0 flex-col items-center justify-center gap-0.5 rounded-2xl border border-app-border bg-app-card py-2 text-[11px] font-semibold text-app-text shadow-sm transition hover:bg-app-border"
-            aria-label="J’aime ce profil"
-          >
-            <span className="relative inline-flex h-5 w-5 items-center justify-center">
-              <IconHeartOutline
-                size={20}
-                color="#FF1E2D"
-                className="absolute transition-opacity duration-150 ease-out group-active:opacity-0"
-              />
-              <IconHeartFilled
-                size={20}
-                color="#FF1E2D"
-                className="absolute opacity-0 transition-opacity duration-150 ease-out group-active:opacity-100"
-              />
-            </span>
-            <span>{t("like")}</span>
-          </button>
-        </div>
+        <DiscoverActionBar
+          canUndo={canUndo}
+          isBetaTester={true}
+          isOnline={(profile as { is_online?: boolean | null }).is_online === true}
+          onPass={() => handlePass(profile.id, 0)}
+          onLike={() => void handleLike(profile, 0)}
+          onUndo={handleUndo}
+          onMessage={handleMessage}
+        />
         <button
           type="button"
           onClick={() => onReport(profile.id)}
@@ -1328,10 +1319,15 @@ export default function Discover() {
   const [rewindStatus, setRewindStatus] = useState<DiscoverRewindStatus | null>(null);
   const [rewindBusy, setRewindBusy] = useState(false);
   const [rewindError, setRewindError] = useState<string | null>(null);
+  const [rewindToast, setRewindToast] = useState<string | null>(null);
+  const [rewindRestoredId, setRewindRestoredId] = useState<string | null>(null);
+  const [rewindRestoredFrom, setRewindRestoredFrom] = useState<"left" | "right">("left");
+  const passUndoSessionStackRef = useRef(0);
+  const [canUndo, setCanUndo] = useState(false);
+  const [restoredProfileId, setRestoredProfileId] = useState<string | null>(null);
+  const [lastRestoredProfileId, setLastRestoredProfileId] = useState<string | null>(null);
   const [swipeHistory, setSwipeHistory] = useState<DiscoverSwipeHistoryEntry[]>([]);
   const swipeHistoryRef = useRef<DiscoverSwipeHistoryEntry[]>([]);
-  const [rewindPurchaseOpen, setRewindPurchaseOpen] = useState(false);
-  const [rewindPurchaseBusy, setRewindPurchaseBusy] = useState(false);
   const [secondChanceTarget, setSecondChanceTarget] = useState<ProfileWithAffinity | null>(null);
   const [secondChanceModalOpen, setSecondChanceModalOpen] = useState(false);
   const [secondChanceToast, setSecondChanceToast] = useState<string | null>(null);
@@ -1343,6 +1339,13 @@ export default function Discover() {
   const [crossingList, setCrossingList] = useState<
     { target_id: string; state: string; first_name: string | null }[]
   >([]);
+  const referralVariant = useMemo(
+    () => (currentUserId ? getReferralVariant(currentUserId) : "A"),
+    [currentUserId],
+  );
+  const [referralModalOpen, setReferralModalOpen] = useState(false);
+  const [referralCodeState, setReferralCodeState] = useState<string | null>(null);
+  const inviteViewTrackedRef = useRef(false);
 
   const refreshRewindStatus = useCallback(() => {
     void getDiscoverRewindStatus().then(setRewindStatus);
@@ -1358,6 +1361,29 @@ export default function Discover() {
     if (!currentUserId) return;
     void refreshRewindStatus();
   }, [currentUserId, refreshRewindStatus]);
+
+  useEffect(() => {
+    inviteViewTrackedRef.current = false;
+  }, [currentUserId]);
+
+  useEffect(() => {
+    if (!currentUserId) return;
+    let cancelled = false;
+    void getOrCreateReferralCode(currentUserId, profile?.first_name ?? null).then((c) => {
+      if (!cancelled) setReferralCodeState(c);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserId, profile?.first_name]);
+
+  useEffect(() => {
+    const eligible =
+      Boolean(currentUserId) && !loading && !errorMessage && profiles.length <= 3;
+    if (!eligible || inviteViewTrackedRef.current) return;
+    inviteViewTrackedRef.current = true;
+    void trackReferralEvent("invite_view", { variant: referralVariant, source: "discover" });
+  }, [currentUserId, loading, errorMessage, profiles.length, referralVariant]);
 
   function openReportPhotoFromDiscover(p: ProfileWithAffinity) {
     setDiscoverMenuProfileId(null);
@@ -1398,6 +1424,24 @@ export default function Discover() {
     const t = window.setTimeout(() => setRewindError(null), 5000);
     return () => window.clearTimeout(t);
   }, [rewindError]);
+
+  useEffect(() => {
+    if (!rewindToast) return;
+    const t = window.setTimeout(() => setRewindToast(null), 1800);
+    return () => window.clearTimeout(t);
+  }, [rewindToast]);
+
+  useEffect(() => {
+    if (!rewindRestoredId) return;
+    const t = window.setTimeout(() => setRewindRestoredId(null), 320);
+    return () => window.clearTimeout(t);
+  }, [rewindRestoredId]);
+
+  useEffect(() => {
+    if (!restoredProfileId) return;
+    const tm = window.setTimeout(() => setRestoredProfileId(null), 1200);
+    return () => window.clearTimeout(tm);
+  }, [restoredProfileId]);
 
   useEffect(() => {
     if (!secondChanceToast) return;
@@ -1631,9 +1675,13 @@ export default function Discover() {
     let resultCount = 0;
     try {
       console.log("[Discover feed] currentUserId:", currentUserId);
-      void supabase.rpc("touch_profile_last_active").then(({ error }) => {
-        if (error) console.warn("[Discover] touch_profile_last_active:", error.message);
-      });
+      void (async () => {
+        try {
+          await supabase.rpc("touch_profile_activity");
+        } catch {
+          // Silent by design: should never block Discover rendering.
+        }
+      })();
 
       const [likedIds, matchedIds, meRes, blockDetail] = await Promise.all([
         fetchOutgoingLikedUserIds(currentUserId),
@@ -1694,71 +1742,30 @@ export default function Discover() {
         parseProfileIntent(safeMeProfile?.intent)
       );
       
-      const likedList = [...likedIds];
-      const useNotIn = likedList.length > 0 && likedList.length < 200;
-      const notInClause = useNotIn ? `(${likedList.join(",")})` : null;
+      const { data, error } = await supabase.rpc("get_discover_feed_alive", { p_limit: 12 });
 
-      const feedRes = await fetchDiscoverFeedProfileIds(currentUserId, notInClause);
-
-      if (feedRes.error) {
-        console.error("[Discover feed] feed_profiles_ranked query failed", {
-          code: feedRes.error.code,
-          message: feedRes.error.message,
+      if (error) {
+        console.error("[Discover feed] get_discover_feed_alive query failed", {
+          code: error.code,
+          message: error.message,
         });
         setErrorMessage(discoverFetchFailedMsg(language));
         return;
       }
 
-      const feedRowsRaw = feedRes.data;
-      console.log("[Discover feed] raw profiles count:", feedRowsRaw.length);
-
-      let feedIds = feedRowsRaw.map((r) => r.id).filter(isValidProfileId);
-      feedIds = feedIds.filter((id) => id !== currentUserId);
-      console.log("[Discover feed] profiles after self filter:", feedIds.length);
-      if (!useNotIn && likedIds.size > 0) {
-        feedIds = feedIds.filter((id) => !likedIds.has(id));
-      }
-      if (blockExclude.size > 0) {
-        feedIds = feedIds.filter((id) => !blockExclude.has(id));
-      }
-      console.log("[Discover feed] profiles after block filter:", feedIds.length);
-
-      if (feedIds.length === 0) {
-        console.warn("[Discover feed] final profiles count:", 0);
-        setProfiles([]);
-        setSwipeHistory([]);
-        return;
-      }
-
-      const detailRes = await supabase
-        .from("profiles")
-        .select(DISCOVER_PROFILES_DETAIL_SELECT)
-        .in("id", feedIds)
-        .eq("profile_completed", true)
-        .not("first_name", "is", null)
-        .neq("first_name", "")
-        .not("birth_date", "is", null)
-        .order("created_at", { ascending: false, nullsFirst: false });
-
-      if (detailRes.error) {
-        console.error("[Discover feed] profiles detail query failed", {
-          code: detailRes.error.code,
-          message: detailRes.error.message,
-        });
-        setErrorMessage(discoverFetchFailedMsg(language));
-        return;
-      }
-      const rawData: unknown = detailRes.data;
-      let raw: Profile[] = Array.isArray(rawData)
-        ? (rawData as unknown as Profile[])
-        : rawData && typeof rawData === "object"
-          ? [rawData as unknown as Profile]
-          : [];
-      if (!Array.isArray(rawData)) {
-        console.error("[Discover feed] unexpected profiles payload (expected array)", {
-          type: typeof rawData,
-        });
-      }
+      const profilesFromRpc: Profile[] = ((data ?? []) as DiscoverAliveRow[])
+        .filter((row): row is DiscoverAliveRow & { profile: Profile } =>
+          isValidProfileId(row.profile?.id),
+        )
+        .map((row) => ({
+          ...row.profile,
+          activity_label: row.activity_label,
+          availability_label: row.availability_label,
+          vibe_label: row.vibe_label,
+          feed_reason: row.feed_reason,
+        }));
+      console.log("[Discover feed] raw profiles count:", profilesFromRpc.length);
+      let raw: Profile[] = profilesFromRpc;
       if (BETA_MODE) {
         raw = raw.filter((p) => String(p.photo_status ?? "").toLowerCase().trim() === "approved");
       }
@@ -1770,13 +1777,10 @@ export default function Discover() {
 
       if (import.meta.env.DEV) {
         const loadedIds = new Set(raw.map((r) => r.id));
-        const missingDetail = feedIds.filter((id) => !loadedIds.has(id));
-        if (missingDetail.length > 0) {
-          console.debug(
-            "[Discover debug] absents requête profiles (profile_completed, profile_sports, prénom/date)",
-            { count: missingDetail.length, ids: missingDetail },
-          );
-        }
+        console.debug("[Discover debug] profils rpc charges", {
+          count: loadedIds.size,
+          ids: [...loadedIds],
+        });
       }
 
       const distById = new Map<string, number | null>();
@@ -1797,13 +1801,12 @@ export default function Discover() {
         }
       }
 
-      const feedIdSet = new Set(feedIds);
       raw = raw.filter((p) => {
         if (!p?.id || !isValidProfileId(p.id)) return false;
-        if (!feedIdSet.has(p.id)) return false;
+        if (p.id === currentUserId) return false;
         return true;
       });
-      if (!useNotIn && likedIds.size > 0) {
+      if (likedIds.size > 0) {
         raw = raw.filter((p) => !likedIds.has(p.id));
       }
       if (blockExclude.size > 0) {
@@ -1918,6 +1921,8 @@ export default function Discover() {
       console.log("[Discover feed] final profiles count:", resultCount);
       setProfiles(slice);
       setSwipeHistory([]);
+      passUndoSessionStackRef.current = 0;
+      setCanUndo(false);
     } catch (e) {
       console.error("[Discover] loadProfiles erreur inattendue:", e);
       setErrorMessage(discoverFetchFailedMsg(language));
@@ -1934,6 +1939,28 @@ export default function Discover() {
 
   async function handlePass(profileId: string, decisionTimeMs = 0) {
     setDiscoverMenuProfileId(null);
+    if (currentUserId && isValidProfileId(profileId)) {
+      const { data: passRpcData, error: rpcErr } = await supabase.rpc("pass_profile", {
+        p_passed_profile_id: profileId,
+      });
+      if (rpcErr) {
+        console.error("[Discover] pass_profile", rpcErr);
+        setRewindError(t("discover_rewind_err_generic"));
+        return;
+      }
+      const passDeclined =
+        passRpcData &&
+        typeof passRpcData === "object" &&
+        (passRpcData as { ok?: boolean }).ok === false;
+      if (passDeclined) {
+        console.error("[Discover] pass_profile declined", passRpcData);
+        setRewindError(t("discover_rewind_err_generic"));
+        return;
+      }
+      passUndoSessionStackRef.current += 1;
+      setCanUndo(true);
+      setRewindToast(t("discover_profile_passed"));
+    }
     let removed: ProfileWithAffinity | undefined;
     setProfiles((prev) => {
       removed = prev.find((p) => p.id === profileId);
@@ -1942,6 +1969,9 @@ export default function Discover() {
     if (removed != null) {
       const p = removed;
       setSwipeHistory((h) => [...h, { profile: p, action: "pass" }]);
+    }
+    if (removed?.id === lastRestoredProfileId) {
+      setLastRestoredProfileId(null);
     }
     if (currentUserId && isValidProfileId(profileId)) {
       const r = await recordDiscoverSwipe({
@@ -2058,6 +2088,19 @@ export default function Discover() {
       console.warn("[Discover] RPC warning (data present):", rpcError.message);
     }
 
+    if (lastRestoredProfileId != null && profile.id === lastRestoredProfileId) {
+      if (is_match === true) {
+        void trackEvent({
+          userId: user?.id ?? null,
+          eventName: "match_after_undo",
+          testName: SECOND_CHANCE_COPY_TEST,
+          variant: getAbVariant(user?.id, SECOND_CHANCE_COPY_TEST),
+          metadata: { matched_after_undo: true },
+        });
+      }
+      setLastRestoredProfileId(null);
+    }
+
     void recordDiscoverSwipe({
       targetId: profile.id,
       action: "like",
@@ -2139,6 +2182,96 @@ export default function Discover() {
     return null;
   }, [rewindStatus, t]);
 
+  async function handleUndo() {
+    if (!currentUserId) return;
+    setRewindBusy(true);
+    setRewindError(null);
+    try {
+      const { data, error } = await supabase.rpc("undo_last_pass");
+      if (error) {
+        console.error("[Discover] undo_last_pass", error);
+        setRewindError(
+          language === "en" ? "Could not go back." : "Impossible de revenir en arriere.",
+        );
+        passUndoSessionStackRef.current = 0;
+        setCanUndo(false);
+        return;
+      }
+      const row =
+        data && typeof data === "object"
+          ? (data as {
+              restored_profile_id?: string | null;
+            })
+          : null;
+      const restoredId =
+        row?.restored_profile_id != null && String(row.restored_profile_id).trim() !== ""
+          ? String(row.restored_profile_id)
+          : "";
+      if (!restoredId) {
+        passUndoSessionStackRef.current = 0;
+        setCanUndo(false);
+        setRewindToast(t("discover_pass_nothing_to_revisit"));
+        refreshRewindStatus();
+        return;
+      }
+
+      passUndoSessionStackRef.current = Math.max(0, passUndoSessionStackRef.current - 1);
+      setCanUndo(passUndoSessionStackRef.current > 0);
+
+      void refetchProfile();
+      const me = profile as Profile | null;
+      if (!me?.id) {
+        setRewindError(t("discover_rewind_restore_failed"));
+        return;
+      }
+
+      const restoredCard = await buildAffinityProfileForRewind({
+        currentUserId,
+        targetId: restoredId,
+        meProfile: me,
+        mySportMatchKeys,
+      });
+
+      if (!restoredCard) {
+        setRewindError(t("discover_rewind_restore_failed"));
+        return;
+      }
+
+      setSwipeHistory((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.profile.id === restoredId && last.action === "pass") {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
+      const card = restoredCard;
+      setProfiles((p) =>
+        p.some((x) => x.id === card.id) ? [card, ...p.filter((x) => x.id !== card.id)] : [card, ...p],
+      );
+      setRewindRestoredId(card.id);
+      setRewindRestoredFrom("left");
+      setRestoredProfileId(card.id);
+      setRewindToast(t("discover_second_chance_activated"));
+      refreshRewindStatus();
+      setSecondChanceTarget(card);
+      setLastRestoredProfileId(card.id);
+      void trackEvent({
+        userId: user?.id ?? null,
+        eventName: "second_chance_used",
+        testName: SECOND_CHANCE_COPY_TEST,
+        variant: getAbVariant(user?.id, SECOND_CHANCE_COPY_TEST),
+        metadata: {
+          surface: "discover_action_bar",
+          restored: true,
+        },
+      });
+    } finally {
+      setRewindBusy(false);
+    }
+  }
+
+  function handleMessage() {}
+
   async function loadCrossings() {
     if (!currentUserId) return;
     setCrossingsLoading(true);
@@ -2165,12 +2298,16 @@ export default function Discover() {
     }
   }
 
-  async function runRewindFlow() {
+  async function runRewindFlow(optimistic: DiscoverSwipeHistoryEntry | null) {
     setRewindBusy(true);
     setRewindError(null);
     try {
       const res = await rewindLastDiscoverSwipe();
       if (!res.ok || !res.target_id) {
+        if (optimistic) {
+          setProfiles((p) => p.filter((x) => x.id !== optimistic.profile.id));
+          setSwipeHistory((prev) => [...prev, optimistic]);
+        }
         const err = (res.error ?? "generic").toLowerCase();
         if (err.includes("time_window") || err.includes("rewind_rate")) {
           setRewindError(t("discover_rewind_err_upgrade"));
@@ -2182,9 +2319,8 @@ export default function Discover() {
         return;
       }
       void refetchProfile();
-      const h = swipeHistoryRef.current;
-      const last = h[h.length - 1];
-      const fromLocal = last && last.profile.id === res.target_id ? last.profile : null;
+      const fromLocal =
+        optimistic && optimistic.profile.id === res.target_id ? optimistic.profile : null;
 
       const me = profile as Profile | null;
       if (!me?.id) {
@@ -2204,14 +2340,18 @@ export default function Discover() {
         setRewindError(t("discover_rewind_restore_failed"));
         return;
       }
-      setSwipeHistory((prev) => {
-        if (prev.length && prev[prev.length - 1].profile.id === res.target_id) {
-          return prev.slice(0, -1);
-        }
-        return prev;
-      });
+      if (!optimistic) {
+        setSwipeHistory((prev) => {
+          if (prev.length && prev[prev.length - 1].profile.id === res.target_id) {
+            return prev.slice(0, -1);
+          }
+          return prev;
+        });
+      }
       const card = restored;
       setProfiles((p) => (p.some((x) => x.id === card.id) ? p : [card, ...p]));
+      setRewindRestoredId(card.id);
+      setRewindToast("Profil restaure");
       refreshRewindStatus();
     } finally {
       setRewindBusy(false);
@@ -2219,34 +2359,19 @@ export default function Discover() {
   }
 
   async function handleRewind() {
-    if (!currentUserId || rewindBusy || rewindPurchaseBusy) return;
+    if (!currentUserId || rewindBusy) return;
     const latest = await getDiscoverRewindStatus();
     if (latest) setRewindStatus(latest);
-    const gate = latest ?? rewindStatus;
-    if (gate?.suggest_paywall && !gate.can_rewind) {
-      setRewindPurchaseOpen(true);
-      return;
+    const h = swipeHistoryRef.current;
+    const last = h[h.length - 1] ?? null;
+    if (last) {
+      setSwipeHistory((prev) => prev.slice(0, -1));
+      setProfiles((p) => (p.some((x) => x.id === last.profile.id ? true : false) ? p : [last.profile, ...p]));
+      setRewindRestoredId(last.profile.id);
+      setRewindRestoredFrom(last.action === "pass" ? "left" : "right");
+      setRewindToast("Profil restaure");
     }
-    void runRewindFlow();
-  }
-
-  async function handleRewindCreditPurchase() {
-    if (!currentUserId || rewindPurchaseBusy) return;
-    setRewindPurchaseBusy(true);
-    setRewindError(null);
-    try {
-      const buy = await purchaseDiscoverRewindCredit();
-      if (!buy.ok) {
-        setRewindError(t("discover_rewind_err_no_credits"));
-        return;
-      }
-      setRewindPurchaseOpen(false);
-      const latest = await getDiscoverRewindStatus();
-      if (latest) setRewindStatus(latest);
-      await runRewindFlow();
-    } finally {
-      setRewindPurchaseBusy(false);
-    }
+    void runRewindFlow(last);
   }
 
   if (!authLoading && user?.id && isProfileLoading) {
@@ -2275,14 +2400,11 @@ export default function Discover() {
         className={`mx-auto max-w-md px-4 pt-1 ${currentUserId && !errorMessage && !loading ? "pb-24" : "pb-8"}`}
       >
         <section className="mb-5 px-0.5 text-center">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-app-muted">
-            {t("discover_real_meetups")}
-          </p>
           <p className="mt-2.5 text-xl font-bold leading-snug tracking-tight text-app-text">
-            {t("discover_heading")}
+            {t("discover.aliveHeaderTitle")}
           </p>
           <p className="mx-auto mt-2 max-w-[21rem] text-[13px] leading-relaxed text-app-muted">
-            {t("discover_subheading")}
+            {t("discover.aliveHeaderSubtitle")}
           </p>
           {formatViewerRadiusLabel(myDiscoveryRadiusKm) ? (
             <p className="mx-auto mt-1.5 max-w-[21rem] text-[11px] font-medium text-app-muted">
@@ -2450,48 +2572,78 @@ export default function Discover() {
           </p>
         ) : null}
 
+        {currentUserId && !loading && !errorMessage && profiles.length <= 3 ? (
+          <div className="mb-4">
+            <ReferralCard
+              variant={referralVariant}
+              onInvite={() => {
+                void trackReferralEvent("invite_click", {
+                  variant: referralVariant,
+                  source: "discover",
+                });
+                setReferralModalOpen(true);
+              }}
+            />
+          </div>
+        ) : null}
+
         {!loading && !errorMessage && profiles.length === 0 && (
           <div className="rounded-2xl border border-app-border bg-app-card px-5 py-8 text-center shadow-sm ring-1 ring-app-border">
             <p className="text-base font-semibold leading-snug text-app-text">
-              {t("no_profiles")}
+              {t("discover.emptyAliveTitle")}
             </p>
-            <p className="mx-auto mt-2 max-w-[18rem] text-sm leading-relaxed text-app-muted">
-              {t("no_profiles_hint")}
+            <p className="mx-auto mt-2 max-w-[20rem] text-sm leading-relaxed text-app-muted">
+              {t("discover.emptyAliveText")}
             </p>
-            <Link
-              to="/profile"
+            <button
+              type="button"
+              onClick={() => void loadProfiles()}
               className="mx-auto mt-5 block w-full max-w-xs rounded-xl px-4 py-3 text-[15px] font-bold shadow-md transition hover:opacity-95 active:scale-[0.99]"
               style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              {t("edit_profile")}
-            </Link>
-            <Link
-              to="/splove-plus"
-              className="mt-3 inline-block text-[12px] font-medium text-app-muted underline decoration-app-border underline-offset-2 hover:text-app-text"
-            >
-              {t("see_splove_plus")}
-            </Link>
+              {t("discover.emptyAliveButton")}
+            </button>
+            <p className="mx-auto mt-3 max-w-[20rem] text-[12px] leading-relaxed text-app-muted">
+              {t("discover.emptyAliveTip")}
+            </p>
           </div>
         )}
 
         {!loading &&
           !errorMessage &&
           profiles.map((profile) => (
-            <DiscoverSwipeCard
+            <div
               key={profile.id}
-              profile={profile}
-              viewerCity={myCity}
-              mySportMatchKeys={mySportMatchKeys}
-              discoverMenuProfileId={discoverMenuProfileId}
-              setDiscoverMenuProfileId={setDiscoverMenuProfileId}
-              onPass={handlePass}
-              onLike={handleLike}
-              onOpenDetail={handleViewProfileFromSuggestion}
-              onReport={setReportProfileId}
-              onReportPhoto={openReportPhotoFromDiscover}
-              onBlock={handleBlock}
-              language={language}
-            />
+              style={
+                rewindRestoredId === profile.id
+                  ? {
+                      animation:
+                        rewindRestoredFrom === "right"
+                          ? "splove-rewind-in-right 260ms ease-out"
+                          : "splove-rewind-in-left 260ms ease-out",
+                    }
+                  : undefined
+              }
+            >
+              <DiscoverSwipeCard
+                profile={profile}
+                viewerCity={myCity}
+                mySportMatchKeys={mySportMatchKeys}
+                discoverMenuProfileId={discoverMenuProfileId}
+                setDiscoverMenuProfileId={setDiscoverMenuProfileId}
+                onPass={handlePass}
+                onLike={handleLike}
+                onOpenDetail={handleViewProfileFromSuggestion}
+                onReport={setReportProfileId}
+                onReportPhoto={openReportPhotoFromDiscover}
+                onBlock={handleBlock}
+                language={language}
+                handleUndo={() => void handleUndo()}
+                handleMessage={handleMessage}
+                canUndo={canUndo}
+                restoredProfileId={restoredProfileId}
+              />
+            </div>
           ))}
 
         {!loading && !errorMessage && weeklySuggestions.length > 0 && (
@@ -2595,17 +2747,6 @@ export default function Discover() {
         </div>
       ) : null}
 
-      <DiscoverRewindPurchaseModal
-        open={rewindPurchaseOpen}
-        busy={rewindPurchaseBusy}
-        onBuy={() => void handleRewindCreditPurchase()}
-        onGoPlus={() => {
-          setRewindPurchaseOpen(false);
-          setRewindError(t("discover_rewind_err_upgrade"));
-        }}
-        onClose={() => setRewindPurchaseOpen(false)}
-      />
-
       {previewProfile ? (
         <DiscoverProfileDetailPreview
           profile={previewProfile}
@@ -2644,6 +2785,13 @@ export default function Discover() {
         />
       )}
 
+      <ReferralModal
+        open={referralModalOpen}
+        onClose={() => setReferralModalOpen(false)}
+        referralCode={referralCodeState}
+        variant={referralVariant}
+      />
+
       <SecondChanceMessageModal
         open={secondChanceModalOpen && secondChanceTarget != null}
         recipientFirstName={secondChanceTarget?.first_name?.trim() || t("unnamed_profile")}
@@ -2678,6 +2826,25 @@ export default function Discover() {
           aria-label={t("discover_rewind")}
         />
       ) : null}
+
+      {rewindToast ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-24 z-[92] flex justify-center px-4">
+          <div className="rounded-xl border border-app-border bg-app-card px-4 py-2 text-sm font-semibold text-app-text shadow-lg">
+            {rewindToast}
+          </div>
+        </div>
+      ) : null}
+
+      <style>{`
+        @keyframes splove-rewind-in-left {
+          from { opacity: 0; transform: translateX(-22px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+        @keyframes splove-rewind-in-right {
+          from { opacity: 0; transform: translateX(22px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+      `}</style>
     </div>
   );
 }

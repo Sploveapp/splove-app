@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "../i18n/useTranslation";
 import { useSplovePlus } from "../hooks/useSplovePlus";
 import { useAuth } from "../contexts/AuthContext";
+import { getAbVariant, trackEvent, SECOND_CHANCE_COPY_TEST } from "../lib/analytics";
 
 const BETA_METRICS_KEY = "splove_plus_beta_metrics";
 
@@ -12,7 +13,16 @@ type BetaMetrics = {
   featureUsage: Record<string, number>;
 };
 
-type ModalId = "boost" | "ghost" | "priority" | "places" | "reminder" | null;
+type ModalId =
+  | "boost"
+  | "ghost"
+  | "priority"
+  | "places"
+  | "reminder"
+  | "second_chance"
+  | null;
+
+type SecondChancePackId = "pack_3" | "pack_10" | "pack_unlimited";
 
 function readBetaMetrics(): BetaMetrics {
   try {
@@ -68,6 +78,92 @@ export default function SplovePlus() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalId>(null);
   const [boostDuration, setBoostDuration] = useState<"30" | "60">("30");
+  const [secondChancePack, setSecondChancePack] = useState<SecondChancePackId>("pack_3");
+  const secondChanceImpressionTrackedRef = useRef(false);
+
+  const secondChanceVariant = useMemo(
+    () => getAbVariant(user?.id, SECOND_CHANCE_COPY_TEST),
+    [user?.id],
+  );
+
+  const secondChanceLabel =
+    language === "en"
+      ? secondChanceVariant === "B"
+        ? "Second chance"
+        : "Review this profile"
+      : secondChanceVariant === "B"
+        ? "Seconde chance"
+        : "Revoir ce profil";
+
+  const secondChanceListSubtitle =
+    language === "en"
+      ? secondChanceVariant === "B"
+        ? "Recover a profile you skipped too quickly."
+        : "Return to a profile you skipped too quickly."
+      : secondChanceVariant === "B"
+        ? "Retrouve un profil que tu as passé trop vite."
+        : "Reviens sur un profil que tu as passé trop vite.";
+
+  const secondChanceModalTitle =
+    language === "en"
+      ? secondChanceVariant === "B"
+        ? "Second chance"
+        : "Review this profile"
+      : secondChanceVariant === "B"
+        ? "Seconde chance"
+        : "Revoir ce profil";
+
+  const secondChanceModalSubtitle =
+    language === "en"
+      ? secondChanceVariant === "B"
+        ? "You may have skipped someone interesting. Choose how many rewinds you want."
+        : "Did you swipe too fast? Choose how many rewinds you want."
+      : secondChanceVariant === "B"
+        ? `Tu as peut-être laissé passer quelqu'un d'intéressant. Choisis combien de retours tu veux.`
+        : "Tu as passé trop vite ? Choisis combien de retours tu veux.";
+
+  const secondChancePackLines: Record<
+    SecondChancePackId,
+    { fr: string; en: string }
+  > = {
+    pack_3: { fr: "3 retours — 1,99 €", en: "3 rewinds — €1.99" },
+    pack_10: { fr: "10 retours — 3,99 €", en: "10 rewinds — €3.99" },
+    pack_unlimited: {
+      fr: "Retours illimités — inclus dans SPLove+",
+      en: "Unlimited rewinds — included in SPLove+",
+    },
+  };
+
+  function openSecondChanceModal() {
+    void trackEvent({
+      userId: user?.id ?? null,
+      eventName: "second_chance_click",
+      testName: SECOND_CHANCE_COPY_TEST,
+      variant: secondChanceVariant,
+      metadata: {
+        surface: "splove_plus_test_options",
+      },
+    });
+    setSecondChancePack("pack_3");
+    setModal("second_chance");
+  }
+
+  function confirmSecondChanceActivation() {
+    void trackEvent({
+      userId: user?.id ?? null,
+      eventName: "second_chance_activate",
+      testName: SECOND_CHANCE_COPY_TEST,
+      variant: secondChanceVariant,
+      metadata: {
+        selected_pack: secondChancePack,
+        beta: true,
+        simulated_payment: true,
+      },
+    });
+    trackBetaEvent("activation");
+    setModal(null);
+    setToastMessage(t("one_shot_activated"));
+  }
   const {
     isActive,
     activate,
@@ -99,6 +195,21 @@ export default function SplovePlus() {
     const timer = window.setTimeout(() => setToastMessage(null), 2500);
     return () => window.clearTimeout(timer);
   }, [toastMessage]);
+
+  useEffect(() => {
+    if (secondChanceImpressionTrackedRef.current) return;
+    secondChanceImpressionTrackedRef.current = true;
+    void trackEvent({
+      userId: user?.id ?? null,
+      eventName: "second_chance_impression",
+      testName: SECOND_CHANCE_COPY_TEST,
+      variant: secondChanceVariant,
+      metadata: {
+        surface: "splove_plus_test_options",
+        beta: true,
+      },
+    });
+  }, [secondChanceVariant, user?.id]);
 
   useEffect(() => {
     trackBetaEvent("paywall_view");
@@ -152,7 +263,7 @@ export default function SplovePlus() {
   const intelligenceTitle = language === "en" ? "Intelligence" : "Intelligence";
   const controlTitle = language === "en" ? "Control & freedom" : "Controle & liberte";
   const rewindUnlimitedTitle =
-    language === "en" ? "Go back with no limits" : "Reviens en arriere sans limite";
+    language === "en" ? "Go back with no limits" : "Reviens en arrière sans limite";
   const rewindUnlimitedDescription =
     language === "en"
       ? "Correct your swipes and recover profiles you missed."
@@ -378,14 +489,15 @@ export default function SplovePlus() {
             />
             <MiniOfferCard
               icon="↩"
-              title={language === "en" ? "Go back" : "Reviens en arriere"}
-              subtitle={
+              title={secondChanceLabel}
+              subtitle={secondChanceListSubtitle}
+              price={
                 language === "en"
-                  ? "Recover a profile you missed"
-                  : "Retrouve un profil que tu as manque"
+                  ? secondChancePackLines.pack_3.en
+                  : secondChancePackLines.pack_3.fr
               }
-              price={language === "en" ? "3 rewinds - 1,99€" : "3 retours - 1,99€"}
               isActive={false}
+              onClick={openSecondChanceModal}
             />
             <MiniOfferCard
               title={t("one_shot_ghost")}
@@ -444,6 +556,29 @@ export default function SplovePlus() {
             className="w-full max-w-md rounded-t-3xl border border-white/10 bg-[#12121a] p-5 shadow-2xl sm:rounded-3xl"
             onClick={(e) => e.stopPropagation()}
           >
+            {modal === "second_chance" ? (
+              <>
+                <h2 className="text-lg font-semibold text-white">{secondChanceModalTitle}</h2>
+                <p className="mt-2 text-sm leading-relaxed text-white/80">{secondChanceModalSubtitle}</p>
+                <div className="mt-4 space-y-2">
+                  {(["pack_3", "pack_10", "pack_unlimited"] as const).map((pk) => (
+                    <button
+                      key={pk}
+                      type="button"
+                      onClick={() => setSecondChancePack(pk)}
+                      className={`w-full rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition ${
+                        secondChancePack === pk
+                          ? "border-[#FF3B3B] bg-[#FF3B3B]/20 text-white"
+                          : "border-white/10 bg-white/[0.04] text-white/85 hover:bg-white/[0.06]"
+                      }`}
+                    >
+                      {language === "en" ? secondChancePackLines[pk].en : secondChancePackLines[pk].fr}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
             {modal === "boost" ? (
               <>
                 <h2 className="text-lg font-semibold text-white">{t("one_shot_boost_visibility")}</h2>
@@ -506,9 +641,16 @@ export default function SplovePlus() {
               </>
             ) : null}
 
-            <p className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2.5 text-xs leading-snug text-amber-100/90">
-              {t("beta_payment_disabled")}
-            </p>
+            {modal === "second_chance" ? (
+              <div className="mt-5 space-y-2 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2.5 text-xs leading-snug text-amber-100/90">
+                <p>{language === "en" ? "Payments are disabled during beta." : "Paiement désactivé pendant la bêta"}</p>
+                <p>{language === "en" ? "This action simulates activation." : "Cette action simule l’activation."}</p>
+              </div>
+            ) : (
+              <p className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2.5 text-xs leading-snug text-amber-100/90">
+                {t("beta_payment_disabled")}
+              </p>
+            )}
 
             <div className="mt-5 flex gap-2">
               <button
@@ -520,18 +662,22 @@ export default function SplovePlus() {
               </button>
               <button
                 type="button"
-                onClick={confirmOneShot}
+                onClick={modal === "second_chance" ? confirmSecondChanceActivation : confirmOneShot}
                 className="flex-1 rounded-2xl bg-[#FF3B3B] py-3 text-sm font-semibold text-white"
               >
-                {modal === "boost"
-                  ? t("activate_boost")
-                  : modal === "ghost"
-                    ? t("activate_ghost_24h")
-                    : modal === "priority"
-                      ? t("prioritize_next_proposal")
-                      : modal === "places"
-                        ? t("unlock_common_places_24h")
-                        : t("activate_smart_reminder")}
+                {modal === "second_chance"
+                  ? t("activate")
+                  : modal === "boost"
+                    ? t("activate_boost")
+                    : modal === "ghost"
+                      ? t("activate_ghost_24h")
+                      : modal === "priority"
+                        ? t("prioritize_next_proposal")
+                        : modal === "places"
+                          ? t("unlock_common_places_24h")
+                          : modal === "reminder"
+                            ? t("activate_smart_reminder")
+                            : t("activate")}
               </button>
             </div>
           </div>

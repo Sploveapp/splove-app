@@ -21,6 +21,7 @@ import MesRencontres from "./pages/MesRencontres";
 import AuthCallback from "./pages/AuthCallback";
 import SecondChancesInbox from "./pages/SecondChancesInbox";
 import SecondChanceDecision from "./pages/SecondChanceDecision";
+import Analytics from "./pages/Analytics";
 function App() {
   if (window.location.pathname === "/auth/callback" && !window.location.hash) {
     window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/auth/callback${window.location.search}`);
@@ -60,6 +61,7 @@ function App() {
                     <Route path="/chat/:conversationId" element={<Chat />} />
                     <Route path="/second-chances" element={<SecondChancesInbox />} />
                     <Route path="/second-chance/:requestId" element={<SecondChanceDecision />} />
+                    <Route path="/analytics" element={<Analytics />} />
                   </Route>
                 </Routes>
               </ProtectedRoute>

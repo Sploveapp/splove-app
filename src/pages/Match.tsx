@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
@@ -14,6 +14,8 @@ import { buildCreateActivityProposalRpcArgs } from "../lib/messages/activityProp
 import { createAutoProposalForMatchIfEligible } from "../services/activityProposals.service";
 import { useTranslation } from "../i18n/useTranslation";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import ReferralModal from "../components/referral/ReferralModal";
+import { getOrCreateReferralCode, getReferralVariant } from "../lib/referral";
 
 export type MatchLocationState = {
   partnerFirstName?: string | null;
@@ -26,10 +28,10 @@ export type MatchLocationState = {
 
 export default function Match() {
   const { t } = useTranslation();
+  const { user, profile } = useAuth();
   const { conversationId } = useParams<{ conversationId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
   const state = (location.state ?? null) as MatchLocationState | null;
   const partnerName = state?.partnerFirstName?.trim() || null;
   const partnerPhoto = state?.partnerMainPhotoUrl?.trim() || null;
@@ -40,6 +42,23 @@ export default function Match() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [activeProposalStatus, setActiveProposalStatus] = useState<string | null>(null);
+  const [referralModalOpen, setReferralModalOpen] = useState(false);
+  const [referralCodeMatch, setReferralCodeMatch] = useState<string | null>(null);
+  const matchReferralVariant = useMemo(
+    () => (user?.id ? getReferralVariant(user.id) : "A"),
+    [user?.id],
+  );
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    void getOrCreateReferralCode(user.id, profile?.first_name ?? null).then((c) => {
+      if (!cancelled) setReferralCodeMatch(c);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, profile?.first_name]);
 
   useEffect(() => {
     if (conversationId) touchMatchOpenedAt(conversationId);
@@ -197,6 +216,20 @@ export default function Match() {
               {t("send_message")}
             </button>
           </div>
+          <div className="mt-5 rounded-2xl border border-[#FF1E2D]/25 bg-[#0f0f14]/80 px-4 py-4 text-left ring-1 ring-white/[0.04]">
+            <p className="text-[14px] font-bold text-app-text">🔥 Bon début...</p>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-app-muted">
+              Fais venir quelqu’un et multiplie tes chances de match
+            </p>
+            <p className="mt-2 text-[12px] font-semibold text-[#FF1E2D]">Boost offert pour vous deux</p>
+            <button
+              type="button"
+              onClick={() => setReferralModalOpen(true)}
+              className="mt-3 w-full rounded-xl border border-app-border bg-app-card py-2.5 text-[14px] font-bold text-app-text transition hover:bg-app-border"
+            >
+              Accélérer mes matchs
+            </button>
+          </div>
           {!BETA_MODE ? (
             <div className="mt-4 text-left">
               <PriorityProposalUpsell
@@ -216,6 +249,13 @@ export default function Match() {
           await sendActivity(p);
           goChat();
         }}
+      />
+
+      <ReferralModal
+        open={referralModalOpen}
+        onClose={() => setReferralModalOpen(false)}
+        referralCode={referralCodeMatch}
+        variant={matchReferralVariant}
       />
     </div>
   );
