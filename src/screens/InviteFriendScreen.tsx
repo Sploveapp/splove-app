@@ -14,8 +14,10 @@ import {
 import { useTranslation } from "../i18n/useTranslation";
 import {
   buildPublicSploveInviteLink,
+  buildStableReferralCodeFromUserId,
   countReferralsAsReferrer,
   fetchGrowthProfileFields,
+  tryPersistProfileReferralCode,
 } from "../services/referral.service";
 
 function isAbortError(err: unknown): boolean {
@@ -54,7 +56,7 @@ export default function InviteFriendScreen() {
   const [inviteCount, setInviteCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [ctaBusy, setCtaBusy] = useState(false);
-  const [flash, setFlash] = useState<"copied" | null>(null);
+  const [flash, setFlash] = useState<"link_copied" | "code_copied" | null>(null);
 
   const inviteUrl = useMemo(
     () => (referralCode ? buildPublicSploveInviteLink(referralCode) : ""),
@@ -70,6 +72,7 @@ export default function InviteFriendScreen() {
 
   const load = useCallback(async () => {
     if (!user?.id) {
+      setReferralCode(null);
       setLoading(false);
       return;
     }
@@ -80,7 +83,14 @@ export default function InviteFriendScreen() {
         countReferralsAsReferrer(user.id),
       ]);
       setInviteCount(count);
-      setReferralCode(growth?.referral_code?.trim() ? growth.referral_code.trim().toUpperCase() : null);
+      const fromDb = growth?.referral_code?.trim() ? growth.referral_code.trim().toUpperCase() : null;
+      if (fromDb) {
+        setReferralCode(fromDb);
+      } else {
+        const generated = buildStableReferralCodeFromUserId(user.id);
+        setReferralCode(generated);
+        void tryPersistProfileReferralCode(user.id, generated);
+      }
     } finally {
       setLoading(false);
     }
@@ -91,7 +101,7 @@ export default function InviteFriendScreen() {
   }, [load]);
 
   useEffect(() => {
-    if (flash !== "copied") return;
+    if (!flash) return;
     const id = window.setTimeout(() => setFlash(null), 2200);
     return () => window.clearTimeout(id);
   }, [flash]);
@@ -101,7 +111,7 @@ export default function InviteFriendScreen() {
     setCtaBusy(true);
     try {
       const outcome = await shareOrCopy(inviteUrl, "SPLove", shareSnippet);
-      if (outcome === "copied") setFlash("copied");
+      if (outcome === "copied") setFlash("link_copied");
     } finally {
       setCtaBusy(false);
     }
@@ -121,7 +131,17 @@ export default function InviteFriendScreen() {
     if (!inviteUrl) return;
     try {
       await navigator.clipboard.writeText(inviteUrl);
-      setFlash("copied");
+      setFlash("link_copied");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function copyReferralCode() {
+    if (!referralCode) return;
+    try {
+      await navigator.clipboard.writeText(referralCode);
+      setFlash("code_copied");
     } catch {
       /* ignore */
     }
@@ -188,6 +208,8 @@ export default function InviteFriendScreen() {
 
         {loading ? (
           <p style={{ margin: 0, fontSize: "14px", color: APP_TEXT_MUTED }}>{t("invite_friend_loading")}</p>
+        ) : !user?.id ? (
+          <p style={{ margin: 0, fontSize: "14px", color: APP_TEXT_MUTED }}>{t("not_connected")}</p>
         ) : referralCode ? (
           <>
             <section style={{ marginBottom: "22px" }}>
@@ -198,6 +220,48 @@ export default function InviteFriendScreen() {
                 {t("invite_friend_hero_2")}
               </p>
             </section>
+
+            <div
+              style={{
+                background: APP_CARD,
+                borderRadius: "14px",
+                padding: "14px 16px",
+                marginBottom: "18px",
+                border: `1px solid ${APP_BORDER}`,
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+              }}
+            >
+              <p style={{ margin: 0, fontSize: "12px", fontWeight: 600, color: APP_TEXT_MUTED, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                {t("growth_your_code")}
+              </p>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                <span
+                  style={{
+                    fontSize: "18px",
+                    fontWeight: 700,
+                    color: APP_TEXT,
+                    letterSpacing: "0.06em",
+                    fontFamily: "ui-monospace, monospace",
+                  }}
+                >
+                  {referralCode}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void copyReferralCode()}
+                  style={{
+                    ...secondaryBtn,
+                    width: "auto",
+                    padding: "10px 14px",
+                    fontSize: "13px",
+                  }}
+                >
+                  {t("invite_friend_copy_code")}
+                </button>
+              </div>
+            </div>
 
             <p style={{ margin: "0 0 10px 0", fontSize: "13px", fontWeight: 600, color: APP_TEXT }}>
               {t("invite_friend_invited_count", { n: inviteCount })}
@@ -269,7 +333,7 @@ export default function InviteFriendScreen() {
               </button>
             </div>
 
-            {flash === "copied" ? (
+            {flash === "link_copied" ? (
               <p
                 style={{
                   margin: "-12px 0 18px 0",
@@ -279,6 +343,17 @@ export default function InviteFriendScreen() {
                 }}
               >
                 {t("rl_session_link_copied")}
+              </p>
+            ) : flash === "code_copied" ? (
+              <p
+                style={{
+                  margin: "-12px 0 18px 0",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  color: "rgb(52 211 153)",
+                }}
+              >
+                {t("invite_friend_code_copied")}
               </p>
             ) : null}
 

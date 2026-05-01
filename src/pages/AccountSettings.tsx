@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
-import { env, hasSupabaseEnv } from "../lib/env";
 import { supabase } from "../lib/supabase";
 import {
   APP_BG,
@@ -20,7 +19,7 @@ const CONFIRM_WORD = "SUPPRIMER";
 export default function AccountSettings() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { user, refetchProfile, signOut } = useAuth();
+  const { user, refetchProfile } = useAuth();
   const [pauseLoading, setPauseLoading] = useState(false);
   const [deactivateLoading, setDeactivateLoading] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -29,17 +28,20 @@ export default function AccountSettings() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
-  const canSubmitDelete =
-    deleteInput === CONFIRM_WORD && !deleteLoading && hasSupabaseEnv && Boolean(env.supabaseUrl);
+  const canSubmitDelete = deleteInput === CONFIRM_WORD && !deleteLoading;
 
   async function handlePause() {
     if (!user?.id || pauseLoading) return;
     setActionMessage(null);
     setPauseLoading(true);
     try {
-      const { error } = await supabase.from("profiles").update({ is_paused: true }).eq("id", user.id);
+      const { error } = await supabase
+        .from("profiles")
+        .update({ is_paused: true, is_active: false })
+        .eq("id", user.id);
       if (error) {
-        setActionMessage(error.message || t("action_impossible"));
+        console.warn("[account] pause", error.message);
+        setActionMessage(t("action_impossible"));
         return;
       }
       await refetchProfile();
@@ -51,12 +53,18 @@ export default function AccountSettings() {
 
   async function handleDeactivate() {
     if (!user?.id || deactivateLoading) return;
+    if (!window.confirm(t("account_deactivate_confirm_message"))) return;
     setActionMessage(null);
     setDeactivateLoading(true);
     try {
-      const { error } = await supabase.from("profiles").update({ is_active: false }).eq("id", user.id);
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from("profiles")
+        .update({ is_active: false, deactivated_at: now })
+        .eq("id", user.id);
       if (error) {
-        setActionMessage(error.message || t("action_impossible"));
+        console.warn("[account] deactivate", error.message);
+        setActionMessage(t("action_impossible"));
         return;
       }
       await refetchProfile();
@@ -75,36 +83,24 @@ export default function AccountSettings() {
     setDeleteError(null);
     setDeleteLoading(true);
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session?.access_token) {
-        setDeleteError(t("session_expired_relogin"));
-        return;
-      }
-      const url = `${env.supabaseUrl}/functions/v1/delete-account`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          apikey: env.supabaseAnonKey ?? "",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ confirmPhrase: CONFIRM_WORD }),
-      });
-      if (!res.ok) {
-        let msg = t("delete_unavailable");
-        try {
-          const j = (await res.json()) as { error?: string };
-          if (typeof j.error === "string" && j.error) msg = j.error;
-        } catch {
-          /* ignore */
-        }
-        setDeleteError(msg);
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          is_active: false,
+          deleted_at: now,
+          delete_requested_at: now,
+        })
+        .eq("id", user.id);
+      if (error) {
+        console.warn("[account] delete request", error.message);
+        setDeleteError(t("delete_unavailable"));
         return;
       }
       setDeleteModalOpen(false);
-      await signOut();
+      setDeleteInput("");
+      setActionMessage(t("account_delete_requested"));
+      await refetchProfile();
     } finally {
       setDeleteLoading(false);
     }
@@ -275,7 +271,7 @@ export default function AccountSettings() {
                 margin: "14px 0 0 0",
                 fontSize: "13px",
                 fontWeight: 500,
-                color: actionMessage.includes("impossible") ? "#F87171" : "rgb(52 211 153)",
+                color: actionMessage === t("action_impossible") ? "#F87171" : "rgb(52 211 153)",
                 lineHeight: 1.45,
               }}
             >
@@ -336,7 +332,7 @@ export default function AccountSettings() {
               }}
             >
               {t("delete_confirm_desc")}{" "}
-              <strong style={{ color: APP_TEXT }}>{CONFIRM_WORD}</strong> ci-dessous.
+              <strong style={{ color: APP_TEXT }}>{CONFIRM_WORD}</strong> {t("delete_confirm_suffix")}
             </p>
             <input
               type="text"

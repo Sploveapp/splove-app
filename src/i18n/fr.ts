@@ -100,11 +100,18 @@ const fr = {
   account_deactivate: "Désactiver le compte",
   account_delete_forever: "Supprimer définitivement le compte",
   account_in_progress: "En cours...",
-  account_paused: "Compte mis en pause.",
-  account_deactivated: "Compte désactivé.",
+  account_paused:
+    "Ton compte est en pause : il est marqué inactif et ne se comporte plus comme un profil actif. Tu pourras reprendre quand tu le réactiveras.",
+  account_deactivated:
+    "Ton compte est désactivé (inactif dès maintenant). Ta connexion reste ouverte tant que tu ne te déconnectes pas. Contacte le support pour une réactivation si besoin.",
+  account_deactivate_confirm_message:
+    "Désactiver ton compte ? Il sera marqué inactif tout de suite. Ta session reste ouverte.",
+  account_delete_requested:
+    "Demande de suppression définitive enregistrée. Ton compte est marqué inactif ; l’équipe traitera la suite. Tu restes connecté.",
   action_impossible: "Action impossible.",
   delete_confirm_title: "Supprimer definitivement ?",
   delete_confirm_desc: "Cette action est irréversible. Pour confirmer, tape",
+  delete_confirm_suffix: "ci-dessous.",
   delete_confirm_button: "Confirmer la suppression",
   delete_now: "Suppression...",
   delete_input_error: "Tape exactement SUPPRIMER pour confirmer.",
@@ -157,6 +164,8 @@ const fr = {
   invite_friend_whatsapp: "WhatsApp",
   invite_friend_sms: "SMS",
   invite_friend_copy_link: "Copier le lien",
+  invite_friend_copy_code: "Copier le code",
+  invite_friend_code_copied: "Code copié",
   invite_friend_bonus_footer:
     "Les bonus sont activés dès que ton ami crée son profil.",
   invite_friend_invited_count: "Déjà invité : {{n}} ami(s)",

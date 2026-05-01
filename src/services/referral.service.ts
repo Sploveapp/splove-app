@@ -88,6 +88,26 @@ export async function tryCompletePendingReferral(userId: string): Promise<{ ok: 
   return { ok: Boolean(j?.ok), error: j?.error };
 }
 
+/** Code stable SPLOVE + 6 caractères (début de l’UUID sans tirets, en majuscules). */
+export function buildStableReferralCodeFromUserId(userId: string): string {
+  const hex = userId.replace(/-/g, "").slice(0, 6).toUpperCase();
+  return `SPLOVE${hex}`;
+}
+
+/** Met à jour profiles.referral_code si la colonne et les droits le permettent ; sinon noop (le code reste utilisable localement). */
+export async function tryPersistProfileReferralCode(userId: string, code: string): Promise<void> {
+  const { error } = await supabase.from("profiles").update({ referral_code: code }).eq("id", userId);
+  if (!error) return;
+  const low = (error.message ?? "").toLowerCase();
+  const missingColumn =
+    error.code === "42703" ||
+    low.includes("does not exist") ||
+    (low.includes("column") && low.includes("referral_code"));
+  if (!missingColumn) {
+    console.warn("[referral] tryPersistProfileReferralCode", error.message);
+  }
+}
+
 export type GrowthProfileRow = {
   referral_code: string | null;
   referred_by_user_id: string | null;

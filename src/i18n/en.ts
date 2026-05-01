@@ -98,11 +98,18 @@ const en = {
   account_deactivate: "Deactivate account",
   account_delete_forever: "Delete account permanently",
   account_in_progress: "In progress...",
-  account_paused: "Account paused.",
-  account_deactivated: "Account deactivated.",
+  account_paused:
+    "Your account is paused: it’s marked inactive and won’t behave as an active profile. You can use the app again when you re-enable it.",
+  account_deactivated:
+    "Your account is deactivated (inactive from now). Your login is unchanged — you stay signed in. Contact support if you need help reactivating.",
+  account_deactivate_confirm_message:
+    "Deactivate your account? It will be marked inactive immediately. Your session will stay open.",
+  account_delete_requested:
+    "Permanent deletion request saved. Your account is marked inactive; our team will process it. You stay signed in.",
   action_impossible: "Action unavailable.",
   delete_confirm_title: "Delete permanently?",
   delete_confirm_desc: "This action is irreversible. To confirm, type",
+  delete_confirm_suffix: "below.",
   delete_confirm_button: "Confirm deletion",
   delete_now: "Deleting...",
   delete_input_error: "Type SUPPRIMER exactly to confirm.",
@@ -153,6 +160,8 @@ const en = {
   invite_friend_whatsapp: "WhatsApp",
   invite_friend_sms: "SMS",
   invite_friend_copy_link: "Copy link",
+  invite_friend_copy_code: "Copy code",
+  invite_friend_code_copied: "Code copied",
   invite_friend_bonus_footer: "Rewards unlock once your friend creates their profile.",
   invite_friend_invited_count: "Already invited: {{n}} friend(s)",
   invite_friend_loading: "Loading…",
