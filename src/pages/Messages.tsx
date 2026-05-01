@@ -247,6 +247,12 @@ export default function Messages() {
             >
               {t("discover_profiles")}
             </button>
+            <Link
+              to="/profile"
+              className="mt-3 block text-center text-sm font-semibold text-app-text underline underline-offset-2"
+            >
+              {t("messages_empty_secondary_cta")}
+            </Link>
           </div>
         )}
 

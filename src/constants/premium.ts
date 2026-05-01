@@ -6,6 +6,9 @@ export const PREMIUM_PLAN_ID = "plus";
 
 export const BOOST_DURATION_MINUTES = 30;
 
+/** Date de fin de bêta (UTC). */
+export const BETA_END_DATE = "2026-06-30T23:59:59.000Z";
+
 export const PREMIUM_FEATURE_KEYS = [
   "likes_you",
   "advanced_filters",
@@ -26,3 +29,13 @@ export const PAYWALL_FEATURES = [
 /** Paywall — prix (modifiable) */
 export const PAYWALL_PRICE_MONTHLY = "9,99";
 export const PAYWALL_PRICE_PERIOD = "mois";
+export const PAYWALL_PRICE_MONTHLY_FOUNDER = "9,99";
+export const PAYWALL_PRICE_MONTHLY_STANDARD = "13,99";
+
+export const ONE_SHOT_SECOND_CHANCE_OFFER = {
+  id: "second_chance",
+  featureKey: "second_chance",
+  price: "1,49 €",
+  packPrice: "3,99 €",
+  monthlyIncluded: 1,
+} as const;

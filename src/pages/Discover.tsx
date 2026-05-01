@@ -6,19 +6,16 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type PointerEvent,
   type SetStateAction,
 } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { ReportModal } from "../components/ReportModal";
 import { ReportPhotoModal } from "../components/ReportPhotoModal";
 import { PremiumSuggestionsSection } from "../components/PremiumSuggestionsSection";
-import {
-  BLOCK_PROFILE_CONFIRM,
-  BLOCK_PROFILE_LINK_LABEL,
-  REPORT_LINK_LABEL,
-} from "../constants/copy";
+import { BLOCK_PROFILE_CONFIRM, BLOCK_PROFILE_LINK_LABEL } from "../constants/copy";
 
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import {
@@ -34,6 +31,7 @@ import { VerifiedBadge } from "../components/VerifiedBadge";
 import { isPhotoVerified } from "../lib/profileVerification";
 import {
   collectSportMatchKeysFromProfile,
+  getDiscoverSportChips,
   getSharedSportLabelsForMatch,
 } from "../lib/sportMatchGroups";
 import {
@@ -56,7 +54,8 @@ import { usePremium } from "../hooks/usePremium";
 import { useSplovePlus } from "../hooks/useSplovePlus";
 import { useTranslation } from "../i18n/useTranslation";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
-import { DiscoverActionBar } from "@/components/DiscoverActionBar";
+import { DiscoverProfileCard } from "../components/discover/DiscoverProfileCard";
+import { EmptyDiscoverState } from "../components/discover/EmptyDiscoverState";
 import { ProfilePhotoViewerModal } from "../components/ProfilePhotoViewerModal";
 import { DiscoverRewindButton } from "../components/DiscoverRewindButton";
 import { SecondChancePassCard } from "../components/SecondChancePassCard";
@@ -70,13 +69,20 @@ import {
   rewindLastDiscoverSwipe,
   type DiscoverRewindStatus,
 } from "../services/discoverSwipes.service";
+import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
 import ReferralCard from "../components/referral/ReferralCard";
 import ReferralModal from "../components/referral/ReferralModal";
+import { DiscoverLocalImpactCard } from "../components/discover/DiscoverLocalImpactCard";
 import {
   getOrCreateReferralCode,
   getReferralVariant,
   trackReferralEvent,
 } from "../lib/referral";
+import {
+  countReferralsAsReferrer,
+  countReferralsRowsByReferrer,
+  fetchGrowthProfileFields,
+} from "../services/referral.service";
 import { trackEvent, getAbVariant, SECOND_CHANCE_COPY_TEST } from "../lib/analytics";
 
 type Profile = {
@@ -105,6 +111,8 @@ type Profile = {
   /** Badge « vérifié » : `photo_status === 'approved'` (MVP). */
   photo_status?: string | null;
   needs_adapted_activities?: boolean | null;
+  /** Rythme de pratique affiché sur Discover : solo | adapted | flexible */
+  sport_practice_type?: string | null;
   profile_sports?: { sports: { label: string | null; slug?: string | null } | null }[];
   profile_completed?: boolean | null;
   last_active_at?: string | null;
@@ -146,6 +154,7 @@ function getSecondaryPhotoUrl(p: Profile): string | null {
 type ProfileWithAffinity = Profile & {
   commonSportsCount: number;
   discoverScore: number;
+  practice_score: number;
   distanceKm: number | null;
   discover_reasons: string[];
   discover_excluded: boolean;
@@ -163,33 +172,6 @@ type DiscoverAliveRow = {
   vibe_label: string | null;
   feed_reason: string | null;
 };
-
-const activityLabelKeyMap: Record<string, string> = {
-  "vient de rejoindre": "discover.activityNew",
-  "actif recemment": "discover.activityRecently",
-  "actif récemment": "discover.activityRecently",
-  "actif aujourd'hui": "discover.activityToday",
-  "actif aujourd’hui": "discover.activityToday",
-  "profil a decouvrir": "discover.activityDiscover",
-  "profil à découvrir": "discover.activityDiscover",
-};
-
-const availabilityLabelKeyMap: Record<string, string> = {
-  "dispo cette semaine": "discover.availableThisWeek",
-  "a voir selon dispo": "discover.availabilityFlexible",
-  "à voir selon dispo": "discover.availabilityFlexible",
-};
-
-const vibeLabelKeyMap: Record<string, string> = {
-  "bonne vibe sportive": "discover.sportyVibe",
-};
-
-function normalizeAliveLabel(value: string | null | undefined): string {
-  return String(value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
-}
 
 /** Dernière(s) action(s) Discover locales — miroir du stack pour un rewind instantané. */
 type DiscoverSwipeHistoryEntry = { profile: ProfileWithAffinity; action: "like" | "pass" };
@@ -241,7 +223,8 @@ function DiscoverProfileDetailPreview({
   const [photoViewerInitial, setPhotoViewerInitial] = useState(0);
   const nameForViewer = profile.first_name?.trim() || null;
   const age = getAgeFromBirthDate(profile.birth_date ?? null);
-  const sharedSports = getSharedSportsFromProfile(mySportMatchKeys, profile).slice(0, 3);
+  const phraseTrimPreview = (profile.sport_phrase ?? "").trim();
+  const sportChipsPreview = getDiscoverSportChips(profile, mySportMatchKeys);
   const intentPreview = intentLabelShort(profile.intent);
   function openPhotoViewerFromRaw(raw: string | null) {
     if (raw == null) return;
@@ -346,7 +329,6 @@ function DiscoverProfileDetailPreview({
               {profile.first_name ?? t("unnamed_profile")}
               {age != null ? <span className="font-semibold text-app-muted">, {age}</span> : null}
             </h2>
-            {isPhotoVerified(profile) ? <VerifiedBadge /> : null}
             {intentPreview ? (
               <span className="rounded-full bg-app-border/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-app-text ring-1 ring-app-border">
                 {intentPreview}
@@ -358,14 +340,29 @@ function DiscoverProfileDetailPreview({
               </span>
             ) : null}
           </div>
-          {sharedSports.length > 0 ? (
-            <div className="flex max-h-[4.5rem] flex-wrap gap-1.5 overflow-hidden">
-              {sharedSports.map((name) => (
+          <div className="flex flex-wrap gap-1.5">
+            {profile.is_active_mode === true ? (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-900 ring-1 ring-emerald-200/90">
+                {t("discover.badgeReadyToMeet")}
+              </span>
+            ) : null}
+            <span className="rounded-full bg-app-border/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-app-text ring-1 ring-app-border">
+              {t("discover.badge48h")}
+            </span>
+            {isPhotoVerified(profile) ? <VerifiedBadge variant="compact" /> : null}
+          </div>
+          {sportChipsPreview.length > 0 ? (
+            <div className="flex max-h-[5rem] flex-wrap gap-1.5 overflow-hidden">
+              {sportChipsPreview.map(({ label: sportLabel, shared }) => (
                 <span
-                  key={name}
-                  className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-900 ring-1 ring-emerald-200/90"
+                  key={sportLabel}
+                  className={
+                    shared
+                      ? "rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-900 ring-1 ring-emerald-200/90"
+                      : "rounded-full bg-app-border/60 px-2.5 py-1 text-[11px] font-semibold text-app-text ring-1 ring-app-border"
+                  }
                 >
-                  {name}
+                  {sportLabel}
                 </span>
               ))}
             </div>
@@ -373,7 +370,7 @@ function DiscoverProfileDetailPreview({
           {(() => {
             const fc = firstCommonSportName(profile, mySportMatchKeys);
             const guidedPv = guidedProfileSentence({
-              sport_phrase: profile.sport_phrase,
+              sport_phrase: phraseTrimPreview ? null : profile.sport_phrase,
               sport_feeling: profile.sport_feeling,
               firstCommonSport: fc,
               commonSportLineSuffix: t("discover.real_outing_intent"),
@@ -402,6 +399,12 @@ function DiscoverProfileDetailPreview({
                   <p className="text-[11px] font-semibold leading-snug text-app-muted">
                     {reasonsPv.join(" · ")}
                   </p>
+                ) : null}
+                {phraseTrimPreview ? (
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-app-muted">{t("discover.momentWish")}</p>
+                    <p className="mt-0.5 line-clamp-3 text-[13px] font-medium leading-snug text-app-text">{phraseTrimPreview}</p>
+                  </div>
                 ) : null}
                 <p className="line-clamp-3 text-[13px] font-medium leading-snug text-app-text">{guidedPv}</p>
                 {locPv.line1 ? (
@@ -677,30 +680,30 @@ function discoverFetchFailedMsg(language: "fr" | "en"): string {
 function DiscoverProfileCardSkeleton() {
   return (
     <article
-      className="mb-7 flex max-h-[min(88vh,820px)] min-h-[min(520px,85svh)] flex-col overflow-hidden rounded-3xl bg-app-card shadow-lg ring-1 ring-app-border/90"
+      className="mb-7 flex max-h-[min(92vh,840px)] min-h-[min(560px,88svh)] flex-col overflow-hidden rounded-3xl bg-app-card shadow-lg ring-1 ring-app-border/90"
       aria-hidden
     >
-      <div className="relative min-h-[240px] w-full flex-[4] basis-0 overflow-hidden bg-app-border">
-        <div className="absolute inset-0 bg-gradient-to-br from-zinc-800/95 via-zinc-700/45 to-zinc-800/95 animate-pulse" />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 space-y-2.5 px-4 pb-5 pt-16 sm:px-5 sm:pb-6">
-          <div className="h-8 w-[62%] max-w-[14rem] rounded-md bg-white/14" />
-          <div className="h-3 w-[38%] max-w-[9rem] rounded-md bg-white/10" />
-          <div className="h-3 w-[78%] max-w-[17rem] rounded-md bg-white/10" />
+      <div className="relative min-h-[min(58vh,420px)] w-full flex-1 basis-0 overflow-hidden bg-zinc-950 sm:min-h-[min(52vh,480px)]">
+        <div className="absolute inset-0 bg-gradient-to-br from-zinc-800/95 via-zinc-700/45 to-zinc-900/95 animate-pulse" />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[10] pb-28 pt-12">
+          <div className="flex flex-wrap gap-1.5 px-4">
+            <div className="h-5 w-[4.25rem] rounded-full bg-white/12" />
+            <div className="h-5 w-[5.5rem] rounded-full bg-white/10" />
+          </div>
+          <div className="mt-3 space-y-2 px-4">
+            <div className="h-10 w-[65%] max-w-[13rem] rounded-lg bg-white/14" />
+            <div className="h-4 w-[72%] max-w-[14rem] rounded-md bg-emerald-400/25" />
+            <div className="h-3.5 w-[88%] max-w-[18rem] rounded-md bg-white/10" />
+          </div>
+        </div>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[11] flex items-center justify-between px-8 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <div className="h-14 w-14 shrink-0 rounded-full bg-white/12 animate-pulse" />
+          <div className="h-12 w-12 shrink-0 rounded-full bg-white/10 animate-pulse" />
+          <div className="h-[3.65rem] w-[3.65rem] shrink-0 rounded-full bg-white/14 animate-pulse" />
         </div>
       </div>
-      <div className="flex min-h-[96px] flex-1 flex-col justify-end gap-3 border-t border-app-border/90 bg-app-card px-3 py-3 sm:px-4">
-        <div className="flex items-stretch gap-2 sm:gap-2.5">
-          <div className="flex w-[3.25rem] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl py-2">
-            <div className="h-5 w-5 rounded-full bg-app-border/90 animate-pulse" />
-            <div className="h-2 w-8 rounded bg-app-border/90 animate-pulse" />
-          </div>
-          <div className="min-h-[52px] min-w-0 flex-1 rounded-2xl bg-app-border/95 animate-pulse" />
-          <div className="flex w-[3.25rem] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-app-border bg-app-card py-2">
-            <div className="h-5 w-5 rounded-full bg-app-border/90 animate-pulse" />
-            <div className="h-2 w-7 rounded bg-app-border/90 animate-pulse" />
-          </div>
-        </div>
-        <div className="mx-auto h-2.5 w-24 rounded bg-app-border/85 animate-pulse" />
+      <div className="border-t border-app-border/85 bg-app-card px-3 py-2.5">
+        <div className="mx-auto h-3 w-28 rounded-md bg-app-border/80 animate-pulse" />
       </div>
     </article>
   );
@@ -721,20 +724,12 @@ function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremiu
   return Date.now() - ts <= maxHours * 60 * 60 * 1000;
 }
 
-function hasAvailabilityTodaySignal(sportTime: string | null | undefined): boolean {
-  const v = typeof sportTime === "string" ? sportTime.trim().toLowerCase() : "";
-  if (!v) return false;
-  return ["today", "aujourd", "soir", "evening", "matin", "morning", "apres", "after"].some((k) =>
-    v.includes(k),
-  );
-}
-
 /**
  * Colonnes Discover depuis `public.profiles` uniquement — pas de colonnes optionnelles absentes en prod.
  * Badge « vérifié » : uniquement `photo_status === 'approved'`.
  */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, is_active_mode, profile_sports(sports(label, slug))";
+  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, is_active_mode, sport_practice_type, profile_sports(sports(label, slug))";
 
 /** Reconstruit une carte Discover après rewind (hors re-score filtre feed). */
 async function buildAffinityProfileForRewind(input: {
@@ -775,6 +770,10 @@ async function buildAffinityProfileForRewind(input: {
     ...pRow,
     commonSportsCount: discover.sharedSportsCount || (Number.isFinite(common) ? common : 0),
     discoverScore: discover.score,
+    practice_score: practiceCompatibilityScore(
+      input.meProfile.sport_practice_type,
+      pRow.sport_practice_type,
+    ),
     distanceKm: discover.distanceKm,
     discover_reasons: discover.reasons,
     discover_excluded: discover.excluded,
@@ -862,9 +861,7 @@ type DiscoverSwipeCardProps = {
   onReport: (id: string) => void;
   onReportPhoto: (p: ProfileWithAffinity) => void;
   onBlock: (id: string) => void | Promise<void>;
-  language: "fr" | "en";
   handleUndo: () => void;
-  handleMessage: () => void;
   canUndo: boolean;
   restoredProfileId: string | null;
 };
@@ -881,75 +878,20 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   onReport,
   onReportPhoto,
   onBlock,
-  language,
   handleUndo,
-  handleMessage,
   canUndo,
   restoredProfileId,
 }: DiscoverSwipeCardProps) {
-  const { t } = useTranslation();
-  const handlePass = onPass;
-  const handleLike = onLike;
-  const age = getAgeFromBirthDate(profile.birth_date ?? null);
-  const firstCommon = firstCommonSportName(profile, mySportMatchKeys);
-  const sharedSports = getSharedSportsFromProfile(mySportMatchKeys, profile);
-  const sportsShown = sharedSports.slice(0, 3);
-  const guided = guidedProfileSentence({
-    sport_phrase: profile.sport_phrase,
-    sport_feeling: profile.sport_feeling,
-    firstCommonSport: firstCommon,
-    commonSportLineSuffix: t("discover.real_outing_intent"),
-  });
-  const areaHint = softAreaHint(viewerCity, profile.city, {
-    nearby: t("discover.nearby_area_hint"),
-    twoSectors: t("discover.two_sectors_hint"),
-  });
-  const locLines = buildDiscoverLocationLines({
-    distanceKm: profile.distanceKm,
-    viewerCity,
-    profileCity: profile.city ?? null,
-    labels: {
-      zoneHintPrefix: t("discover.zone_hint"),
-      sameSector: t("discover.same_sector"),
-    },
-  });
-  const intentShort = intentLabelShort(profile.intent);
-  const discoverReasonsDisplay = filterDiscoverReasonsForDisplay(
-    profile.discover_reasons ?? [],
-    locLines.line1,
-  );
-  const reliabilityHints = getReliabilityUiHints(profile);
-  const strongAffinity = profile.commonSportsCount >= 2;
   const photoRaw = getProfileDisplayPhotoUrl(profile);
   const photo = useProfilePhotoSignedUrl(photoRaw) ?? "";
-  const reliabilityLabel = (() => {
-    const raw = String(profile.reliability_label ?? "").trim().toLowerCase();
-    if (raw === "high") return { label: "High", className: "bg-emerald-500/90 text-white" };
-    if (raw === "low") return { label: "Low", className: "bg-rose-500/90 text-white" };
-    return { label: "Medium", className: "bg-amber-500/90 text-white" };
-  })();
-  const activeNowBadge = language === "en" ? "Active now" : "Actif maintenant";
-  const availableTodayBadge = language === "en" ? "Available today" : "Disponible aujourd'hui";
-  const sharedLocationBadge = language === "en" ? "Shared location" : "Lieu commun";
-  const sharedTimingBadge = language === "en" ? "Shared timing" : "Timing commun";
-  const activityLabelKey =
-    activityLabelKeyMap[normalizeAliveLabel(profile.activity_label)] ?? "discover.activityDiscover";
-  const availabilityLabelKey =
-    availabilityLabelKeyMap[normalizeAliveLabel(profile.availability_label)] ??
-    "discover.availabilityFlexible";
-  const vibeLabelKey = vibeLabelKeyMap[normalizeAliveLabel(profile.vibe_label)] ?? "discover.sportyVibe";
-  const aliveBadgeKeys = [activityLabelKey, availabilityLabelKey, vibeLabelKey];
-  const showActiveNow = isProfileActiveRecently(profile.last_active_at);
-  const showAvailableToday = hasAvailabilityTodaySignal(profile.sport_time);
-  const showSharedLocation = hasSharedPlace(profile);
-  const showSharedTiming = showAvailableToday && profile.commonSportsCount > 0;
+  const strongAffinity = profile.commonSportsCount >= 2;
 
   const [dx, setDx] = useState(0);
   const [dragging, setDragging] = useState(false);
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const swipeT0Ref = useRef<number | null>(null);
 
-  function onSwipeZonePointerDown(e: React.PointerEvent) {
+  function onSwipeZonePointerDown(e: PointerEvent<HTMLDivElement>) {
     if ((e.target as HTMLElement).closest("button")) return;
     startRef.current = { x: e.clientX, y: e.clientY };
     swipeT0Ref.current = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -957,7 +899,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
-  function onSwipeZonePointerMove(e: React.PointerEvent) {
+  function onSwipeZonePointerMove(e: PointerEvent<HTMLDivElement>) {
     if (startRef.current == null) return;
     const rdx = e.clientX - startRef.current.x;
     const rdy = e.clientY - startRef.current.y;
@@ -967,7 +909,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
     setDx(rdx * SWIPE_DAMP);
   }
 
-  function onSwipeZonePointerUp(e: React.PointerEvent) {
+  function onSwipeZonePointerUp(e: PointerEvent<HTMLDivElement>) {
     if (startRef.current == null) return;
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
@@ -1018,7 +960,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
     setDx(0);
   }
 
-  function onSwipeZonePointerCancel(e: React.PointerEvent) {
+  function onSwipeZonePointerCancel(e: PointerEvent<HTMLDivElement>) {
     startRef.current = null;
     swipeT0Ref.current = null;
     setDragging(false);
@@ -1035,7 +977,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
 
   return (
     <article
-      className={`mb-7 flex max-h-[min(88vh,820px)] min-h-[min(520px,85svh)] flex-col overflow-hidden rounded-3xl bg-app-card shadow-lg ring-1 ring-app-border/90 ${
+      className={`mb-7 flex max-h-[min(92vh,840px)] min-h-[min(560px,88svh)] flex-col overflow-hidden rounded-3xl bg-app-card shadow-lg ring-1 ring-app-border/90 ${
         strongAffinity ? "ring-2 ring-emerald-200/70" : ""
       } ${
         profile.is_boost_active
@@ -1043,233 +985,33 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
           : ""
       }`}
     >
-      <div
-        className="relative min-h-[240px] w-full flex-[4] basis-0 cursor-grab touch-none bg-app-border active:cursor-grabbing"
-        style={{
+      <DiscoverProfileCard
+        profile={profile}
+        viewerCity={viewerCity}
+        mySportMatchKeys={mySportMatchKeys}
+        photoUrl={photo}
+        discoverMenuProfileId={discoverMenuProfileId}
+        setDiscoverMenuProfileId={setDiscoverMenuProfileId}
+        restoredProfileId={restoredProfileId}
+        dx={dx}
+        swipeZoneStyle={{
           transform: `translateX(${dx}px) rotate(${rot}deg)`,
           transition: dragging ? "none" : "transform 0.2s ease-out, opacity 0.2s ease-out",
           opacity: liftOpacity,
         }}
-        onPointerDown={onSwipeZonePointerDown}
-        onPointerMove={onSwipeZonePointerMove}
-        onPointerUp={onSwipeZonePointerUp}
-        onPointerCancel={onSwipeZonePointerCancel}
-      >
-        {photo ? (
-          <img
-            src={photo}
-            alt={profile.first_name ? `Photo de ${profile.first_name}` : "Photo du profil"}
-            className="absolute inset-0 h-full w-full object-cover pointer-events-none"
-          />
-        ) : (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-app-border">
-            <IconProfileAvatarPlaceholder className="text-app-muted/80" size={88} />
-          </div>
-        )}
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-[55%] bg-gradient-to-t from-black/85 via-black/35 to-transparent"
-          aria-hidden
-        />
-        {restoredProfileId === profile.id ? (
-          <div className="pointer-events-none absolute left-1/2 top-3 z-[12] -translate-x-1/2 rounded-full bg-emerald-600/95 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-md backdrop-blur-sm">
-            {t("discover_second_chance_badge")}
-          </div>
-        ) : null}
-        {strongAffinity ? (
-          <div
-            className={`pointer-events-none absolute left-3 z-10 rounded-full bg-app-card/95 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-800 shadow-sm backdrop-blur-sm ${
-              restoredProfileId === profile.id ? "top-14" : "top-3"
-            }`}
-          >
-            Plusieurs sports
-          </div>
-        ) : null}
-        {showActiveNow ? (
-          <div className="pointer-events-none absolute left-3 top-10 z-10 rounded-full bg-[#FF1E2D]/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm backdrop-blur-sm">
-            {activeNowBadge}
-          </div>
-        ) : null}
-        {profile.is_boost_active === true ? (
-          <div className="pointer-events-none absolute left-3 top-[4.2rem] z-10 rounded-full bg-fuchsia-500/85 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm backdrop-blur-sm">
-            {activeNowBadge}
-          </div>
-        ) : null}
-        <div
-          className={`pointer-events-none absolute right-3 top-10 z-10 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide shadow-sm backdrop-blur-sm ${reliabilityLabel.className}`}
-        >
-          {reliabilityLabel.label}
-        </div>
-        <div className="absolute right-2 top-2 z-20" data-discover-menu-root>
-          <button
-            type="button"
-            aria-haspopup="menu"
-            aria-expanded={discoverMenuProfileId === profile.id}
-            aria-label={t("more_actions")}
-            onPointerDown={(ev) => ev.stopPropagation()}
-            onClick={() =>
-              setDiscoverMenuProfileId((id) => (id === profile.id ? null : profile.id))
-            }
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-black/35 text-lg font-bold leading-none text-white backdrop-blur-sm hover:bg-black/45"
-          >
-            ⋯
-          </button>
-          {discoverMenuProfileId === profile.id ? (
-            <div
-              role="menu"
-              className="absolute right-0 mt-1 min-w-[10rem] overflow-hidden rounded-xl border border-app-border/90 bg-app-card py-1 shadow-lg"
-            >
-              <button
-                type="button"
-                role="menuitem"
-                className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium text-app-text hover:bg-app-border"
-                onClick={() => void onBlock(profile.id)}
-              >
-                <IconBanSoft size={18} className="shrink-0 text-app-muted" />
-                {BLOCK_PROFILE_LINK_LABEL}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium text-app-text hover:bg-app-border"
-                onClick={() => {
-                  setDiscoverMenuProfileId(null);
-                  onReportPhoto(profile);
-                }}
-              >
-                {t("report_photo")}
-              </button>
-            </div>
-          ) : null}
-        </div>
-        {Math.abs(dx) > 36 ? (
-          <div
-            className="pointer-events-none absolute inset-y-0 left-0 flex w-14 items-center justify-center text-[11px] font-bold uppercase tracking-wide text-white/85 opacity-40"
-            aria-hidden
-          >
-            {dx < 0 ? t("pass") : ""}
-          </div>
-        ) : null}
-        {Math.abs(dx) > 36 ? (
-          <div
-            className="pointer-events-none absolute inset-y-0 right-0 flex w-14 items-center justify-center text-[11px] font-bold uppercase tracking-wide text-white/85 opacity-40"
-            aria-hidden
-          >
-            {dx > 0 ? t("like") : ""}
-          </div>
-        ) : null}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 px-4 pb-5 pt-20 sm:px-5 sm:pb-6">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-[1.65rem] font-bold leading-none tracking-tight text-white drop-shadow-md sm:text-3xl">
-              {profile.first_name ?? t("unnamed_profile")}
-              {age != null ? <span className="font-bold text-white/95">, {age}</span> : null}
-            </h2>
-            {isPhotoVerified(profile) ? (
-              <span className="pointer-events-auto shrink-0">
-                <VerifiedBadge className="!bg-app-card/95 !text-emerald-900 !ring-emerald-600/25" />
-              </span>
-            ) : null}
-            {intentShort ? (
-              <span className="pointer-events-none rounded-full bg-white/18 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/95 ring-1 ring-white/25">
-                {intentShort}
-              </span>
-            ) : null}
-          </div>
-          {sportsShown.length > 0 || showSharedLocation || showAvailableToday || showSharedTiming ? (
-            <div className="mt-2.5 flex flex-wrap gap-1.5">
-              {sportsShown.map((name) => (
-                <span
-                  key={name}
-                  className="rounded-full bg-app-card/22 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-white shadow-sm ring-1 ring-white/35 backdrop-blur-[2px]"
-                >
-                  {name}
-                </span>
-              ))}
-              {showSharedLocation ? (
-                <span className="rounded-full bg-white/12 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/95 shadow-sm ring-1 ring-amber-200/35 backdrop-blur-[2px]">
-                  📍 {sharedLocationBadge}
-                </span>
-              ) : null}
-              {showAvailableToday ? (
-                <span className="rounded-full bg-white/12 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/95 shadow-sm ring-1 ring-white/35 backdrop-blur-[2px]">
-                  {availableTodayBadge}
-                </span>
-              ) : null}
-              {showSharedTiming ? (
-                <span className="rounded-full bg-white/12 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/95 shadow-sm ring-1 ring-white/35 backdrop-blur-[2px]">
-                  ⏱ {sharedTimingBadge}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-          {aliveBadgeKeys.length > 0 ? (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {aliveBadgeKeys.map((badgeKey) => (
-                <span
-                  key={badgeKey}
-                  className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/90 ring-1 ring-white/25 backdrop-blur-[2px]"
-                >
-                  {t(badgeKey)}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          {discoverReasonsDisplay.length > 0 ? (
-            <p className="mt-1.5 line-clamp-2 text-[10px] font-semibold leading-snug tracking-wide text-white/85 drop-shadow-sm">
-              {discoverReasonsDisplay.join(" · ")}
-            </p>
-          ) : null}
-          <p className="mt-2 line-clamp-3 text-[15px] font-medium leading-snug text-white/95 drop-shadow-sm">
-            {guided}
-          </p>
-          {locLines.line1 || locLines.line2 ? (
-            <>
-              {locLines.line1 ? (
-                <p className="mt-1 text-[11px] font-medium tracking-wide text-white/75">{locLines.line1}</p>
-              ) : null}
-              {locLines.line2 ? (
-                <p className="mt-0.5 text-[11px] font-medium tracking-wide text-white/60">{locLines.line2}</p>
-              ) : null}
-            </>
-          ) : areaHint ? (
-            <p className="mt-1 text-[11px] font-medium tracking-wide text-white/65">{areaHint}</p>
-          ) : profile.city?.trim() ? (
-            <p className="mt-1 text-[11px] font-medium tracking-wide text-white/55">
-              {t("discover.zone_hint")} · {profile.city.trim()}
-            </p>
-          ) : null}
-          {reliabilityHints.length > 0 ? (
-            <div className="mt-2 space-y-0.5">
-              {reliabilityHints.map((line) => (
-                <p
-                  key={line}
-                  className="text-[10px] font-medium leading-snug text-emerald-100/85 drop-shadow-sm"
-                >
-                  {line}
-                </p>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="flex min-h-[96px] flex-1 flex-col justify-end gap-3 border-t border-app-border/90 bg-app-card px-3 py-3 sm:px-4">
-        <DiscoverActionBar
-          canUndo={canUndo}
-          isBetaTester={true}
-          isOnline={(profile as { is_online?: boolean | null }).is_online === true}
-          onPass={() => handlePass(profile.id, 0)}
-          onLike={() => void handleLike(profile, 0)}
-          onUndo={handleUndo}
-          onMessage={handleMessage}
-        />
-        <button
-          type="button"
-          onClick={() => onReport(profile.id)}
-          className="w-full py-0.5 text-center text-[11px] text-app-muted underline decoration-app-border underline-offset-2 hover:text-app-muted"
-        >
-          {REPORT_LINK_LABEL}
-        </button>
-      </div>
+        onSwipeZonePointerDown={onSwipeZonePointerDown}
+        onSwipeZonePointerMove={onSwipeZonePointerMove}
+        onSwipeZonePointerUp={onSwipeZonePointerUp}
+        onSwipeZonePointerCancel={onSwipeZonePointerCancel}
+        onOpenDetail={() => onOpenDetail(profile)}
+        onBlock={onBlock}
+        onReportPhoto={() => onReportPhoto(profile)}
+        onPass={(decisionTimeMs) => onPass(profile.id, decisionTimeMs)}
+        onLike={(decisionTimeMs) => void onLike(profile, decisionTimeMs)}
+        onUndo={handleUndo}
+        canUndo={canUndo}
+        onReport={() => onReport(profile.id)}
+      />
     </article>
   );
 });
@@ -1291,6 +1033,9 @@ export default function Discover() {
   const location = useLocation();
   const handledPreviewNavKeyRef = useRef<string | null>(null);
   const { user, session, isLoading: authLoading, profile, isProfileLoading, refetchProfile } = useAuth();
+  const viewerMeetActive =
+    Boolean(profile) &&
+    (profile as { is_active_mode?: boolean | null }).is_active_mode === true;
   const currentUserId = user?.id ?? "";
   const { hasPlus } = usePremium(currentUserId || null);
   const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
@@ -1322,8 +1067,6 @@ export default function Discover() {
   const [rewindToast, setRewindToast] = useState<string | null>(null);
   const [rewindRestoredId, setRewindRestoredId] = useState<string | null>(null);
   const [rewindRestoredFrom, setRewindRestoredFrom] = useState<"left" | "right">("left");
-  const passUndoSessionStackRef = useRef(0);
-  const [canUndo, setCanUndo] = useState(false);
   const [restoredProfileId, setRestoredProfileId] = useState<string | null>(null);
   const [lastRestoredProfileId, setLastRestoredProfileId] = useState<string | null>(null);
   const [swipeHistory, setSwipeHistory] = useState<DiscoverSwipeHistoryEntry[]>([]);
@@ -1334,6 +1077,14 @@ export default function Discover() {
   useEffect(() => {
     swipeHistoryRef.current = swipeHistory;
   }, [swipeHistory]);
+
+  /** Dernière interaction annulable côté serveur uniquement après un pass (pas un like). */
+  const canUndo = useMemo(() => {
+    if (!rewindStatus) return false;
+    if (rewindStatus.last_is_match) return false;
+    if (!rewindStatus.last_swipe_at) return false;
+    return String(rewindStatus.last_action ?? "").toLowerCase() === "pass";
+  }, [rewindStatus]);
   const [crossingsOpen, setCrossingsOpen] = useState(false);
   const [crossingsLoading, setCrossingsLoading] = useState(false);
   const [crossingList, setCrossingList] = useState<
@@ -1346,6 +1097,31 @@ export default function Discover() {
   const [referralModalOpen, setReferralModalOpen] = useState(false);
   const [referralCodeState, setReferralCodeState] = useState<string | null>(null);
   const inviteViewTrackedRef = useRef(false);
+  const referralModalWasOpenRef = useRef(false);
+  const [localImpact, setLocalImpact] = useState({
+    invitesCount: 0,
+    successfulReferrals: 0,
+    boostCredits: 0,
+  });
+  const [localImpactLoading, setLocalImpactLoading] = useState(false);
+
+  const loadLocalImpact = useCallback(async () => {
+    if (!currentUserId) return;
+    setLocalImpactLoading(true);
+    try {
+      const [invitesCount, successfulReferrals, growth] = await Promise.all([
+        countReferralsRowsByReferrer(currentUserId),
+        countReferralsAsReferrer(currentUserId),
+        fetchGrowthProfileFields(currentUserId),
+      ]);
+      const bc = growth?.boost_credits;
+      const boostCredits =
+        typeof bc === "number" && Number.isFinite(bc) ? Math.max(0, Math.floor(bc)) : 0;
+      setLocalImpact({ invitesCount, successfulReferrals, boostCredits });
+    } finally {
+      setLocalImpactLoading(false);
+    }
+  }, [currentUserId]);
 
   const refreshRewindStatus = useCallback(() => {
     void getDiscoverRewindStatus().then(setRewindStatus);
@@ -1376,6 +1152,18 @@ export default function Discover() {
       cancelled = true;
     };
   }, [currentUserId, profile?.first_name]);
+
+  useEffect(() => {
+    if (!currentUserId) return;
+    void loadLocalImpact();
+  }, [currentUserId, loadLocalImpact]);
+
+  useEffect(() => {
+    if (referralModalWasOpenRef.current && !referralModalOpen && currentUserId) {
+      void loadLocalImpact();
+    }
+    referralModalWasOpenRef.current = referralModalOpen;
+  }, [referralModalOpen, currentUserId, loadLocalImpact]);
 
   useEffect(() => {
     const eligible =
@@ -1503,7 +1291,7 @@ export default function Discover() {
           supabase
             .from("profiles")
             .select(
-              "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, profile_sports(sports(label, slug))",
+              "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, sport_practice_type, profile_sports(sports(label, slug))",
             )
             .eq("id", currentUserId)
             .maybeSingle(),
@@ -1571,6 +1359,7 @@ export default function Discover() {
           ...p,
           commonSportsCount: discover.sharedSportsCount || (Number.isFinite(common) ? common : 0),
           discoverScore: discover.score,
+          practice_score: practiceCompatibilityScore(meProfile.sport_practice_type, p.sport_practice_type),
           distanceKm: discover.distanceKm,
           discover_reasons: discover.reasons,
           discover_excluded: discover.excluded,
@@ -1689,7 +1478,7 @@ export default function Discover() {
         supabase
         .from("profiles")
         .select(
-          "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, profile_sports(sports(label, slug))"
+          "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, sport_practice_type, profile_sports(sports(label, slug))"
         )
         .eq("id", currentUserId)
         .maybeSingle(),
@@ -1836,6 +1625,29 @@ export default function Discover() {
         }
       }
 
+      if (stage.length > 0) {
+        const paceIds = stage.map((p) => p.id);
+        const { data: paceData, error: paceErr } = await supabase
+          .from("profiles")
+          .select("id, sport_practice_type")
+          .in("id", paceIds);
+        if (paceErr) {
+          if (import.meta.env.DEV) {
+            console.warn("[Discover feed] sport_practice_type batch:", paceErr.message);
+          }
+        } else {
+          const paceById = new Map<string, string | null>();
+          for (const row of (paceData ?? []) as { id?: string; sport_practice_type?: string | null }[]) {
+            const pid = typeof row.id === "string" ? row.id : "";
+            if (pid) paceById.set(pid, row.sport_practice_type ?? null);
+          }
+          stage = stage.map((p) => ({
+            ...p,
+            sport_practice_type: paceById.get(p.id) ?? p.sport_practice_type ?? null,
+          }));
+        }
+      }
+
       const discoverFiltered: ProfileWithAffinity[] = scoreAndFilterDiscoverCandidates(
         stage.map((p) => ({ ...p, has_shared_place: sharedPlaceById.get(p.id) === true })),
         {
@@ -1845,6 +1657,7 @@ export default function Discover() {
             gender: meProfile.gender ?? null,
             looking_for: meProfile.looking_for ?? null,
             intent: meProfile.intent ?? null,
+            sport_practice_type: meProfile.sport_practice_type ?? null,
           },
           likedIds,
           matchedIds,
@@ -1921,8 +1734,6 @@ export default function Discover() {
       console.log("[Discover feed] final profiles count:", resultCount);
       setProfiles(slice);
       setSwipeHistory([]);
-      passUndoSessionStackRef.current = 0;
-      setCanUndo(false);
     } catch (e) {
       console.error("[Discover] loadProfiles erreur inattendue:", e);
       setErrorMessage(discoverFetchFailedMsg(language));
@@ -1957,8 +1768,6 @@ export default function Discover() {
         setRewindError(t("discover_rewind_err_generic"));
         return;
       }
-      passUndoSessionStackRef.current += 1;
-      setCanUndo(true);
       setRewindToast(t("discover_profile_passed"));
     }
     let removed: ProfileWithAffinity | undefined;
@@ -2131,6 +1940,7 @@ export default function Discover() {
           partnerMainPhotoUrl: getProfileDisplayPhotoUrl(profile),
           matchedByUserId: currentUserId,
           sharedSports: shared,
+          partnerSportPracticeType: profile.sport_practice_type ?? null,
         },
       });
       return;
@@ -2163,13 +1973,6 @@ export default function Discover() {
     setPreviewProfile(null);
   };
 
-  /** Affiche le CTA dès qu’il y a un dernier like/pass non-match (rewind actif, crédit ou paywall). */
-  const canShowRewind = useMemo(() => {
-    if (!rewindStatus) return false;
-    if (rewindStatus.last_is_match) return false;
-    return Boolean(rewindStatus.last_swipe_at);
-  }, [rewindStatus]);
-
   const rewindBarHint = useMemo(() => {
     if (!rewindStatus) return null;
     if (rewindStatus.suggest_paywall && !rewindStatus.can_rewind) {
@@ -2182,95 +1985,27 @@ export default function Discover() {
     return null;
   }, [rewindStatus, t]);
 
-  async function handleUndo() {
-    if (!currentUserId) return;
-    setRewindBusy(true);
-    setRewindError(null);
-    try {
-      const { data, error } = await supabase.rpc("undo_last_pass");
-      if (error) {
-        console.error("[Discover] undo_last_pass", error);
-        setRewindError(
-          language === "en" ? "Could not go back." : "Impossible de revenir en arriere.",
-        );
-        passUndoSessionStackRef.current = 0;
-        setCanUndo(false);
-        return;
-      }
-      const row =
-        data && typeof data === "object"
-          ? (data as {
-              restored_profile_id?: string | null;
-            })
-          : null;
-      const restoredId =
-        row?.restored_profile_id != null && String(row.restored_profile_id).trim() !== ""
-          ? String(row.restored_profile_id)
-          : "";
-      if (!restoredId) {
-        passUndoSessionStackRef.current = 0;
-        setCanUndo(false);
-        setRewindToast(t("discover_pass_nothing_to_revisit"));
-        refreshRewindStatus();
-        return;
-      }
+  /** Retour (rewind) : si droit ou crédit → `handleRewind` ; sinon écran SPLove+ (fonction Retour). */
+  async function handleUndoTap() {
+    if (!currentUserId || rewindBusy) return;
+    const latest = await getDiscoverRewindStatus();
+    if (latest) setRewindStatus(latest);
 
-      passUndoSessionStackRef.current = Math.max(0, passUndoSessionStackRef.current - 1);
-      setCanUndo(passUndoSessionStackRef.current > 0);
-
-      void refetchProfile();
-      const me = profile as Profile | null;
-      if (!me?.id) {
-        setRewindError(t("discover_rewind_restore_failed"));
-        return;
-      }
-
-      const restoredCard = await buildAffinityProfileForRewind({
-        currentUserId,
-        targetId: restoredId,
-        meProfile: me,
-        mySportMatchKeys,
-      });
-
-      if (!restoredCard) {
-        setRewindError(t("discover_rewind_restore_failed"));
-        return;
-      }
-
-      setSwipeHistory((prev) => {
-        const last = prev[prev.length - 1];
-        if (last?.profile.id === restoredId && last.action === "pass") {
-          return prev.slice(0, -1);
-        }
-        return prev;
-      });
-      const card = restoredCard;
-      setProfiles((p) =>
-        p.some((x) => x.id === card.id) ? [card, ...p.filter((x) => x.id !== card.id)] : [card, ...p],
-      );
-      setRewindRestoredId(card.id);
-      setRewindRestoredFrom("left");
-      setRestoredProfileId(card.id);
-      setRewindToast(t("discover_second_chance_activated"));
-      refreshRewindStatus();
-      setSecondChanceTarget(card);
-      setLastRestoredProfileId(card.id);
-      void trackEvent({
-        userId: user?.id ?? null,
-        eventName: "second_chance_used",
-        testName: SECOND_CHANCE_COPY_TEST,
-        variant: getAbVariant(user?.id, SECOND_CHANCE_COPY_TEST),
-        metadata: {
-          surface: "discover_action_bar",
-          restored: true,
-        },
-      });
-    } finally {
-      setRewindBusy(false);
+    if (
+      !latest?.last_swipe_at ||
+      latest.last_is_match ||
+      String(latest.last_action ?? "").toLowerCase() !== "pass"
+    ) {
+      return;
     }
-  }
 
-  function handleMessage() {}
+    if (!latest.can_rewind) {
+      navigate("/splove-plus", { state: { sploveHighlightFeature: "undo_swipe_return" } });
+      return;
+    }
+
+    await handleRewind();
+  }
 
   async function loadCrossings() {
     if (!currentUserId) return;
@@ -2400,11 +2135,14 @@ export default function Discover() {
         className={`mx-auto max-w-md px-4 pt-1 ${currentUserId && !errorMessage && !loading ? "pb-24" : "pb-8"}`}
       >
         <section className="mb-5 px-0.5 text-center">
-          <p className="mt-2.5 text-xl font-bold leading-snug tracking-tight text-app-text">
-            {t("discover.aliveHeaderTitle")}
+          <p className="mt-2.5 text-center text-xl font-semibold leading-tight tracking-tight text-app-text">
+            {t("discover.heroTitle")}
           </p>
           <p className="mx-auto mt-2 max-w-[21rem] text-[13px] leading-relaxed text-app-muted">
-            {t("discover.aliveHeaderSubtitle")}
+            {t("discover.heroSubtitle")}
+          </p>
+          <p className="mx-auto mt-2 max-w-[22rem] text-[12px] font-medium italic leading-snug text-app-muted/90">
+            {t("discover.heroTagline")}
           </p>
           {formatViewerRadiusLabel(myDiscoveryRadiusKm) ? (
             <p className="mx-auto mt-1.5 max-w-[21rem] text-[11px] font-medium text-app-muted">
@@ -2412,7 +2150,38 @@ export default function Discover() {
             </p>
           ) : null}
           {myCity ? (
-            <p className="mx-auto mt-0.5 max-w-[21rem] text-[11px] text-app-muted">Ta ville · {myCity}</p>
+            <p className="mx-auto mt-0.5 max-w-[21rem] text-[11px] text-app-muted">{t("discover.yourCityLine", { city: myCity })}</p>
+          ) : null}
+          {currentUserId ? (
+            <div className="mx-auto mt-4 w-full max-w-[21rem] rounded-2xl border border-emerald-500/35 bg-emerald-500/[0.07] px-3 py-3 text-left shadow-sm ring-1 ring-emerald-500/[0.12] dark:bg-emerald-950/35">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-900 dark:text-emerald-100/95">
+                {t("discover.meetModeHeading")}
+              </p>
+              <p className="mt-1.5 text-[12px] leading-snug text-app-text">
+                {viewerMeetActive ? t("discover.meetModeOnBody") : t("discover.meetModeOffBody")}
+              </p>
+              <Link
+                to="/profile"
+                className="mt-2 inline-block text-[12px] font-semibold text-emerald-700 underline decoration-emerald-500/50 underline-offset-2 dark:text-emerald-200"
+              >
+                {t("discover.meetModeProfileCta")}
+              </Link>
+            </div>
+          ) : null}
+          {currentUserId ? (
+            <DiscoverLocalImpactCard
+              invitesCount={localImpact.invitesCount}
+              successfulReferrals={localImpact.successfulReferrals}
+              boostCredits={localImpact.boostCredits}
+              loading={localImpactLoading}
+              onInviteClick={() => {
+                void trackReferralEvent("invite_click", {
+                  variant: referralVariant,
+                  source: "discover_local_impact",
+                });
+                setReferralModalOpen(true);
+              }}
+            />
           ) : null}
           {currentUserId ? (
             <div className="mx-auto mt-3 flex max-w-[21rem] flex-wrap items-center justify-center gap-2">
@@ -2450,7 +2219,7 @@ export default function Discover() {
               <p className="mt-0.5 text-[11px] text-fuchsia-200/90">
                 {language === "en"
                   ? "You're getting more visibility now"
-                  : "Tu gagnes en visibilite maintenant"}
+                  : "Tu gagnes en visibilité maintenant"}
               </p>
               <p className="mt-0.5 text-[11px] text-fuchsia-200/85">
                 {language === "en" ? "Time left:" : "Temps restant :"}{" "}
@@ -2499,7 +2268,7 @@ export default function Discover() {
               className="mx-auto mt-5 block w-full max-w-xs rounded-xl px-4 py-3 text-[15px] font-bold shadow-md transition hover:opacity-95 active:scale-[0.99]"
               style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              {t("retry")}
+              {t("discover.retryExplore")}
             </button>
           </div>
         )}
@@ -2587,27 +2356,9 @@ export default function Discover() {
           </div>
         ) : null}
 
-        {!loading && !errorMessage && profiles.length === 0 && (
-          <div className="rounded-2xl border border-app-border bg-app-card px-5 py-8 text-center shadow-sm ring-1 ring-app-border">
-            <p className="text-base font-semibold leading-snug text-app-text">
-              {t("discover.emptyAliveTitle")}
-            </p>
-            <p className="mx-auto mt-2 max-w-[20rem] text-sm leading-relaxed text-app-muted">
-              {t("discover.emptyAliveText")}
-            </p>
-            <button
-              type="button"
-              onClick={() => void loadProfiles()}
-              className="mx-auto mt-5 block w-full max-w-xs rounded-xl px-4 py-3 text-[15px] font-bold shadow-md transition hover:opacity-95 active:scale-[0.99]"
-              style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
-            >
-              {t("discover.emptyAliveButton")}
-            </button>
-            <p className="mx-auto mt-3 max-w-[20rem] text-[12px] leading-relaxed text-app-muted">
-              {t("discover.emptyAliveTip")}
-            </p>
-          </div>
-        )}
+        {!loading && !errorMessage && profiles.length === 0 ? (
+          <EmptyDiscoverState onRefresh={() => void loadProfiles()} />
+        ) : null}
 
         {!loading &&
           !errorMessage &&
@@ -2637,9 +2388,7 @@ export default function Discover() {
                 onReport={setReportProfileId}
                 onReportPhoto={openReportPhotoFromDiscover}
                 onBlock={handleBlock}
-                language={language}
-                handleUndo={() => void handleUndo()}
-                handleMessage={handleMessage}
+                handleUndo={() => void handleUndoTap()}
                 canUndo={canUndo}
                 restoredProfileId={restoredProfileId}
               />
@@ -2817,13 +2566,14 @@ export default function Discover() {
         }}
       />
 
-      {currentUserId && !errorMessage && !loading && canShowRewind ? (
+      {currentUserId && !errorMessage && !loading && canUndo ? (
         <DiscoverRewindButton
-          onRewind={() => void handleRewind()}
+          onRewind={() => void handleUndoTap()}
           disabled={rewindBusy}
           busy={rewindBusy}
+          actionLabel={t("discover_undo_action")}
           hint={rewindBarHint}
-          aria-label={t("discover_rewind")}
+          aria-label={t("discover_undo_action")}
         />
       ) : null}
 

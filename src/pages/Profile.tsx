@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
-import {
-  ACCESSIBILITY_PREF_BOTH_REQUIRED,
-  VERIFY_OWN_NOT_VERIFIED,
-  VERIFY_OWN_VERIFIED,
-} from "../constants/copy";
+import { ACCESSIBILITY_PREF_BOTH_REQUIRED } from "../constants/copy";
 import { VerifiedBadge } from "../components/VerifiedBadge";
 import { collectPhotoRejectionUserMessages, isPhotoVerified } from "../lib/profileVerification";
 import { bioPublicTextViolatesPolicy } from "../lib/contentModeration";
@@ -31,6 +27,8 @@ const SPORT_PHRASE_MAX_LEN = 120;
 
 const MEETUP_HOUR_MS = 60 * 60 * 1000;
 const MEETUP_DURATION_H = 24;
+const SPORT_PHRASE_SAVED_FLAG = "__phrase_saved__";
+
 const MEETUP_GREEN = "#22C55D";
 const MEETUP_CARD_BG = "#121215";
 const MEETUP_CARD_BORDER_ACTIVE = "rgba(34, 197, 94, 0.42)";
@@ -176,9 +174,9 @@ export default function Profile() {
   }, [accessibilityMessage]);
 
   useEffect(() => {
-    if (phraseMessage !== "Phrase enregistrée.") return;
-    const t = window.setTimeout(() => setPhraseMessage(null), 2000);
-    return () => window.clearTimeout(t);
+    if (phraseMessage !== SPORT_PHRASE_SAVED_FLAG) return;
+    const timer = window.setTimeout(() => setPhraseMessage(null), 2000);
+    return () => window.clearTimeout(timer);
   }, [phraseMessage]);
 
   useEffect(() => {
@@ -283,7 +281,7 @@ export default function Profile() {
         return;
       }
       await refetchProfile();
-      setPhraseMessage("Phrase enregistree.");
+      setPhraseMessage(SPORT_PHRASE_SAVED_FLAG);
     } finally {
       setPhraseSaving(false);
     }
@@ -436,6 +434,26 @@ export default function Profile() {
 
         <button
           type="button"
+          onClick={() => navigate("/invite")}
+          style={{
+            width: "100%",
+            marginBottom: "20px",
+            padding: "14px 16px",
+            borderRadius: "14px",
+            border: `1px solid ${APP_BORDER}`,
+            background: APP_CARD,
+            color: APP_TEXT,
+            fontSize: "15px",
+            fontWeight: 600,
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+        >
+          {t("invite_friend_header")}
+        </button>
+
+        <button
+          type="button"
           onClick={() => navigate("/profile/edit")}
           style={{
             width: "100%",
@@ -577,7 +595,7 @@ export default function Profile() {
                       lineHeight: 1.5,
                     }}
                   >
-                    {VERIFY_OWN_VERIFIED}
+                    {t("profile_verification.verified_body")}
                   </p>
                 </>
               ) : (
@@ -644,7 +662,7 @@ export default function Profile() {
                           lineHeight: 1.5,
                         }}
                       >
-                        {VERIFY_OWN_NOT_VERIFIED}
+                        {t("profile_verification.not_verified_body")}
                       </p>
                     );
                   })()}
@@ -728,7 +746,9 @@ export default function Profile() {
               {phraseSaving ? t("loading") : t("sport_phrase.save")}
             </button>
             {phraseMessage ? (
-              <p style={{ margin: "10px 0 0 0", fontSize: "14px", color: APP_TEXT_MUTED }}>{phraseMessage}</p>
+              <p style={{ margin: "10px 0 0 0", fontSize: "14px", color: APP_TEXT_MUTED }}>
+                {phraseMessage === SPORT_PHRASE_SAVED_FLAG ? t("sport_phrase.saved") : phraseMessage}
+              </p>
             ) : null}
           </div>
 

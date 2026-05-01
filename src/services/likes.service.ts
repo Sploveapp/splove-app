@@ -263,6 +263,14 @@ export async function getLikesReceived(
   return filtered;
 }
 
+/** Compteur léger pour badge onglet (likes entrants hors bloqués ; sans filtre préférences comme l’écran Likes). */
+export async function fetchIncomingNonBlockedLikesCount(currentUserId: string): Promise<number> {
+  const blocked = await fetchBlockedRelatedUserIds();
+  const { rows, error } = await fetchIncomingLikeRows(currentUserId);
+  if (error || !rows?.length) return 0;
+  return rows.filter((l) => !blocked.has(l.liker_id)).length;
+}
+
 function extractLikeRpcRow(data: unknown): Record<string, unknown> | null {
   if (data == null) return null;
   if (typeof data === "string") {

@@ -181,7 +181,56 @@ export default function LikesYou() {
         )}
 
         {!loading && likesForRender.length === 0 && (
-          <p style={{ color: "#64748b", fontSize: "15px" }}>{t("likes_you_empty")}</p>
+          <div
+            style={{
+              marginTop: "12px",
+              borderRadius: "16px",
+              border: `1px dashed ${APP_BORDER}`,
+              background: APP_CARD,
+              padding: "36px 20px",
+              textAlign: "center",
+            }}
+          >
+            <p style={{ margin: 0, color: APP_TEXT_MUTED, fontSize: "15px", lineHeight: 1.55 }}>
+              {t("likes_you_empty")}
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate("/discover")}
+              style={{
+                marginTop: "16px",
+                width: "100%",
+                borderRadius: "999px",
+                border: "none",
+                cursor: "pointer",
+                padding: "10px 16px",
+                fontSize: "14px",
+                fontWeight: 600,
+                background: BRAND_BG,
+                color: TEXT_ON_BRAND,
+              }}
+            >
+              {t("likes_empty_primary_cta")}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/profile")}
+              style={{
+                marginTop: "12px",
+                width: "100%",
+                borderRadius: "999px",
+                border: `1px solid ${APP_BORDER}`,
+                cursor: "pointer",
+                padding: "10px 16px",
+                fontSize: "14px",
+                fontWeight: 600,
+                background: APP_CARD,
+                color: APP_TEXT,
+              }}
+            >
+              {t("likes_empty_profile_cta")}
+            </button>
+          </div>
         )}
 
         {!loading && likesForRender.length > 0 &&

@@ -10,7 +10,10 @@ import { IconSend } from "../components/ui/Icon";
 import { ProposalCard } from "../components/ProposalCard";
 import { ActivityResponseBubble } from "../components/chat/ActivityResponseBubble";
 import { ActivityProposalBubble } from "../components/chat/ActivityProposalBubble";
+import { MeetupEngagementChatBlock } from "../components/MeetupEngagementChatBlock";
+import { MeetingConfirmationPanel } from "../components/MeetingConfirmationPanel";
 import { ProposalComposerModal } from "../components/ProposalComposerModal";
+import { MatchActivitySuggestionCard } from "../components/MatchActivitySuggestionCard";
 import { ChatEmojiPicker } from "../components/ChatEmojiPicker";
 import { ChatPostMatchPanel } from "../components/ChatPostMatchPanel";
 import { RealLifeSessionPanel } from "../components/RealLifeSessionPanel";
@@ -73,6 +76,17 @@ import {
   type MessageBubbleTheme,
 } from "../lib/messageBubbleTheme";
 import { useTranslation } from "../i18n/useTranslation";
+import {
+  getActivitySuggestion,
+  isActivitySuggestionDismissedInStorage,
+  setActivitySuggestionDismissedInStorage,
+} from "../lib/matchActivitySuggestion";
+import {
+  parseMeetupConfirmationFromRow,
+  tryParseMeetupFromMessageBody,
+  type MeetupConfirmationPayload,
+} from "../lib/meetupConfirmation";
+import { saveMeetupConfirmation } from "../services/meetupConfirmation.service";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import {
   fetchRealLifeSessionCheckin,
@@ -101,6 +115,7 @@ type ChatLocationState = {
   partnerMainPhotoUrl?: string | null;
   sharedSports?: string[];
   matchedByUserId?: string | null;
+  partnerSportPracticeType?: string | null;
 };
 
 type ProposalStatus = "pending" | "accepted" | "declined" | "expired" | "reschedule_requested" | "cancelled";
@@ -114,6 +129,7 @@ type ProposalRow = {
   time_slot: string;
   location: string | null;
   note: string | null;
+  meetup_confirmation?: unknown | null;
   created_at: string;
   updated_at: string;
   status?: ProposalStatus | string | null;
@@ -295,6 +311,7 @@ export default function Chat() {
   /** Retours utilisateur sur une proposition (clé = proposal id). */
   const [myActivityOutcomes, setMyActivityOutcomes] = useState<Record<string, ActivityFeedbackSentiment>>({});
   const [outcomeSubmitting, setOutcomeSubmitting] = useState(false);
+  const [meetupEngageBusy, setMeetupEngageBusy] = useState(false);
   /** Genres + intentions des deux profils — règle du premier message texte. */
   const [pairChatMeta, setPairChatMeta] = useState<{
     myGender: string | null;
@@ -304,7 +321,27 @@ export default function Chat() {
   } | null>(null);
   const [autoRelanceEnabled, setAutoRelanceEnabled] = useState(false);
   const [autoRelanceRunning, setAutoRelanceRunning] = useState(false);
+  const [mineSportPracticeType, setMineSportPracticeType] = useState<string | null>(null);
+  const [partnerSportPracticeTypeChat, setPartnerSportPracticeTypeChat] = useState<string | null>(() => {
+    const v = navState?.partnerSportPracticeType;
+    return typeof v === "string" && v.trim() ? v.trim() : null;
+  });
+  const [suggestionModalExtras, setSuggestionModalExtras] = useState<{
+    title: string;
+    subtitle: string;
+  } | null>(null);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(() =>
+    conversationId ? isActivitySuggestionDismissedInStorage(conversationId) : false,
+  );
   const { hasPlus } = usePremium(user?.id ?? null);
+
+  useEffect(() => {
+    setSuggestionDismissed(conversationId ? isActivitySuggestionDismissedInStorage(conversationId) : false);
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!modalOpen) setSuggestionModalExtras(null);
+  }, [modalOpen]);
 
   const appendEmojiToDraft = useCallback((emoji: string) => {
     setDraftMessage((d) => d + emoji);
@@ -620,7 +657,7 @@ export default function Chat() {
         const { data: pairProfiles } = await supabase
           .from("profiles")
           .select(
-            "id, first_name, main_photo_url, portrait_url, avatar_url, is_photo_verified, photo_status, gender, intent",
+            "id, first_name, main_photo_url, portrait_url, avatar_url, is_photo_verified, photo_status, gender, intent, sport_practice_type",
           )
           .in("id", [user.id, other]);
         if (!cancelled && pairProfiles && pairProfiles.length > 0) {
@@ -628,6 +665,7 @@ export default function Chat() {
             | {
                 gender?: string | null;
                 intent?: unknown;
+                sport_practice_type?: string | null;
               }
             | undefined;
           const theirs = pairProfiles.find((r) => r.id === other) as
@@ -640,6 +678,7 @@ export default function Chat() {
                 photo_status?: string | null;
                 gender?: string | null;
                 intent?: unknown;
+                sport_practice_type?: string | null;
               }
             | undefined;
           if (theirs) {
@@ -659,6 +698,15 @@ export default function Chat() {
               partnerGender: theirs.gender ?? null,
               partnerIntent: theirs.intent,
             });
+          }
+          if (mine?.sport_practice_type != null) {
+            const mv = typeof mine.sport_practice_type === "string" ? mine.sport_practice_type.trim() : "";
+            if (mv) setMineSportPracticeType(mv);
+          }
+          if (theirs?.sport_practice_type != null) {
+            const pv =
+              typeof theirs.sport_practice_type === "string" ? theirs.sport_practice_type.trim() : "";
+            if (pv) setPartnerSportPracticeTypeChat(pv);
           }
         }
 
@@ -918,6 +966,62 @@ export default function Chat() {
     () => sortedProposalsDesc.find((p) => normalizeProposalStatus(p) === "accepted") ?? null,
     [sortedProposalsDesc],
   );
+
+  const meetupFromProposal = useMemo(
+    () =>
+      acceptedProposalForRl
+        ? parseMeetupConfirmationFromRow(acceptedProposalForRl.meetup_confirmation)
+        : null,
+    [acceptedProposalForRl],
+  );
+
+  const meetupFromMessageFallback = useMemo(() => {
+    for (let i = chatMessages.length - 1; i >= 0; i -= 1) {
+      const parsed = tryParseMeetupFromMessageBody(chatMessages[i]?.body ?? "");
+      if (parsed) return parsed;
+    }
+    return null;
+  }, [chatMessages]);
+
+  const effectiveMeetupPayload = meetupFromProposal ?? meetupFromMessageFallback;
+
+  const confirmedMeetingCardProposalId =
+    acceptedProposalForRl?.id ??
+    (effectiveMeetupPayload ? `msg-${effectiveMeetupPayload.confirmed_at}` : "");
+
+  const modifyMeetupOpen = Boolean(effectiveMeetupPayload?.engagement?.modify_flow_open);
+
+  const persistMeetupConfirmation = useCallback(
+    async (next: MeetupConfirmationPayload) => {
+      if (!conversationId || !user?.id) return;
+      const pid = acceptedProposalForRl?.id;
+      if (!pid || String(pid).startsWith("msg-")) {
+        console.warn("[Chat] meetup engagement persist skipped (no proposal id)");
+        return;
+      }
+      setMeetupEngageBusy(true);
+      try {
+        await saveMeetupConfirmation({
+          proposalId: pid,
+          conversationId,
+          senderId: user.id,
+          payload: next,
+        });
+        await reloadProposals(conversationId);
+        await reloadChatMessages(conversationId);
+      } finally {
+        setMeetupEngageBusy(false);
+      }
+    },
+    [
+      acceptedProposalForRl?.id,
+      conversationId,
+      reloadChatMessages,
+      reloadProposals,
+      user?.id,
+    ],
+  );
+
   const latestProposal = latestProposalTop ?? sortedProposalsDesc[0] ?? null;
   const productState = getProductState({ hasProposal: hasPendingProposal });
 
@@ -951,6 +1055,26 @@ export default function Chat() {
     chatMessages.length,
     proposals.length,
   ]);
+
+  const sharedSportLead = sharedSports[0]?.trim() ?? "";
+  const activityMatchSuggestion = useMemo(
+    () =>
+      getActivitySuggestion({
+        sharedSport: sharedSportLead || "—",
+        currentUserPracticeType: mineSportPracticeType,
+        matchedUserPracticeType: partnerSportPracticeTypeChat,
+        locale: language,
+      }),
+    [language, mineSportPracticeType, partnerSportPracticeTypeChat, sharedSportLead],
+  );
+
+  const showMatchActivitySuggestion =
+    Boolean(sharedSportLead) &&
+    chatSessionPhase === "new_match" &&
+    !hasPendingProposal &&
+    !hasAcceptedProposal &&
+    !pairBlocked &&
+    !suggestionDismissed;
 
   const proposalWindowRemainingLabel = useMemo(() => {
     const baseExpiresAt =
@@ -1341,6 +1465,7 @@ export default function Chat() {
       setMessagePolicyError(t("chat_error_activity_confirmed"));
       return;
     }
+    setSuggestionModalExtras(null);
     setModalOpen(true);
   }
 
@@ -1572,6 +1697,28 @@ export default function Chat() {
             )}
           </div>
         ) : null}
+        {!pairBlocked && showMatchActivitySuggestion ? (
+          <div className="mb-3">
+            <MatchActivitySuggestionCard
+              suggestion={activityMatchSuggestion}
+              tone={activityMatchSuggestion.tone}
+              sectionLabel={t("match_suggestion.section_label")}
+              proposeLabel={t("match_suggestion.use_idea_cta")}
+              chooseOtherLabel={t("match_suggestion.other_cta")}
+              onPropose={() => {
+                setSuggestionModalExtras({
+                  title: activityMatchSuggestion.title,
+                  subtitle: activityMatchSuggestion.subtitle,
+                });
+                setModalOpen(true);
+              }}
+              onChooseOther={() => {
+                if (conversationId) setActivitySuggestionDismissedInStorage(conversationId);
+                setSuggestionDismissed(true);
+              }}
+            />
+          </div>
+        ) : null}
         {!pairBlocked && chatSessionPhase === "new_match" && !hasPlus ? (
           <PriorityProposalUpsell
             onActivate={() => navigate("/splove-plus")}
@@ -1605,16 +1752,45 @@ export default function Chat() {
             )}
           </div>
         ) : null}
-        {!pairBlocked && hasAcceptedProposal ? (
-          <div className="mb-3 rounded-2xl border border-emerald-400/20 bg-emerald-950/35 px-4 py-3 text-center shadow-sm ring-1 ring-emerald-400/10">
-            <p className="text-[13px] font-semibold text-emerald-100">{`${t("chat_activity_confirmed")} ✅`}</p>
-            <Link
-              to="/mes-rencontres"
-              className="mt-2 inline-flex rounded-xl border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-[12px] font-semibold text-emerald-100 transition hover:bg-emerald-300/20"
-            >
-              {t("chat_see_meetups")}
-            </Link>
+        {!pairBlocked &&
+        hasAcceptedProposal &&
+        acceptedProposalForRl &&
+        conversationId &&
+        user?.id &&
+        (!effectiveMeetupPayload || modifyMeetupOpen) ? (
+          <div className="mb-3">
+            <MeetingConfirmationPanel
+              key={`${acceptedProposalForRl.id}-${modifyMeetupOpen ? "rev" : "new"}`}
+              proposalId={acceptedProposalForRl.id}
+              conversationId={conversationId}
+              currentUserId={user.id}
+              otherParticipantId={partnerUserId}
+              sport={acceptedProposalForRl.sport}
+              timeSlot={acceptedProposalForRl.time_slot}
+              initialLocation={acceptedProposalForRl.location}
+              meetupDraft={modifyMeetupOpen ? effectiveMeetupPayload ?? null : null}
+              language={language}
+              onSaved={async () => {
+                await reloadProposals(conversationId);
+                await reloadChatMessages(conversationId);
+              }}
+            />
           </div>
+        ) : null}
+        {!pairBlocked &&
+        effectiveMeetupPayload &&
+        confirmedMeetingCardProposalId &&
+        user?.id &&
+        !modifyMeetupOpen ? (
+          <MeetupEngagementChatBlock
+            payload={effectiveMeetupPayload}
+            proposalId={confirmedMeetingCardProposalId}
+            currentUserId={user.id}
+            partnerUserId={partnerUserId}
+            nowMs={nowTick}
+            persistBusy={meetupEngageBusy}
+            onPersistPayload={persistMeetupConfirmation}
+          />
         ) : null}
         {!pairBlocked && hasAcceptedProposal && acceptedProposalForRl && matchPair && user?.id ? (
           <RealLifeSessionPanel
@@ -2028,8 +2204,12 @@ export default function Chat() {
           setModalOpen(false);
         }}
         sharedSports={sharedSports}
-        titleOverride={counterReplaceProposalId ? t("proposal_counter_modal_title") : undefined}
-        descriptionOverride={counterReplaceProposalId ? t("proposal_counter_modal_desc") : undefined}
+        titleOverride={
+          counterReplaceProposalId ? t("proposal_counter_modal_title") : suggestionModalExtras?.title
+        }
+        descriptionOverride={
+          counterReplaceProposalId ? t("proposal_counter_modal_desc") : suggestionModalExtras?.subtitle
+        }
         submitLabel={counterReplaceProposalId ? t("proposal_counter_submit") : undefined}
         onBack={
           counterReplaceProposalId
@@ -2043,7 +2223,10 @@ export default function Chat() {
               }
             : undefined
         }
-        initialSport={counterPrefill?.sport}
+        initialSport={
+          counterPrefill?.sport ??
+          (!counterReplaceProposalId && suggestionModalExtras && sharedSportLead ? sharedSportLead : undefined)
+        }
         initialPlace={counterPrefill?.place}
         suggestedSlots={suggestedSlots}
         onSubmit={async (p) => {

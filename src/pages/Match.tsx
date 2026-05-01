@@ -16,6 +16,13 @@ import { useTranslation } from "../i18n/useTranslation";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import ReferralModal from "../components/referral/ReferralModal";
 import { getOrCreateReferralCode, getReferralVariant } from "../lib/referral";
+import { MatchActivitySuggestionCard } from "../components/MatchActivitySuggestionCard";
+import {
+  getActivitySuggestion,
+  isActivitySuggestionDismissedInStorage,
+  setActivitySuggestionDismissedInStorage,
+} from "../lib/matchActivitySuggestion";
+import { fetchPairSportPracticeTypes } from "../lib/matchPairPracticeTypes";
 
 export type MatchLocationState = {
   partnerFirstName?: string | null;
@@ -24,10 +31,11 @@ export type MatchLocationState = {
   /** User qui a déclenché le match (2e like côté RPC). */
   matchedByUserId?: string | null;
   sharedSports?: string[];
+  partnerSportPracticeType?: string | null;
 };
 
 export default function Match() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const { user, profile } = useAuth();
   const { conversationId } = useParams<{ conversationId: string }>();
   const navigate = useNavigate();
@@ -40,8 +48,60 @@ export default function Match() {
   const sharedSports = state?.sharedSports ?? [];
   const momentum = matchMomentumLine(sharedSports);
 
+  const [minePracticeType, setMinePracticeType] = useState<string | null>(() => {
+    const raw = profile && typeof profile === "object" ? (profile as { sport_practice_type?: unknown }).sport_practice_type : null;
+    return typeof raw === "string" && raw.trim() ? raw : null;
+  });
+  const [partnerPracticeType, setPartnerPracticeType] = useState<string | null>(
+    typeof state?.partnerSportPracticeType === "string" && state.partnerSportPracticeType.trim()
+      ? state.partnerSportPracticeType.trim()
+      : null,
+  );
+  const [suggestionDismissed, setSuggestionDismissed] = useState(() =>
+    conversationId ? isActivitySuggestionDismissedInStorage(conversationId) : false,
+  );
+
+  useEffect(() => {
+    setSuggestionDismissed(conversationId ? isActivitySuggestionDismissedInStorage(conversationId) : false);
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId || !user?.id) return;
+    let cancelled = false;
+    void (async () => {
+      const rows = await fetchPairSportPracticeTypes({ conversationId, currentUserId: user.id });
+      if (cancelled || !rows) return;
+      setMinePracticeType(rows.mine);
+      setPartnerPracticeType((prev) => rows.partner ?? prev);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, user?.id]);
+
+  useEffect(() => {
+    const raw = profile && typeof profile === "object" ? (profile as { sport_practice_type?: unknown }).sport_practice_type : null;
+    if (typeof raw === "string" && raw.trim()) setMinePracticeType(raw.trim());
+  }, [profile]);
+
   const [modalOpen, setModalOpen] = useState(false);
+  const [proposalModalFromSuggestion, setProposalModalFromSuggestion] = useState(false);
   const [activeProposalStatus, setActiveProposalStatus] = useState<string | null>(null);
+
+  const sharedSportLabel = sharedSports[0]?.trim() ?? "";
+  const suggestion = useMemo(
+    () =>
+      getActivitySuggestion({
+        sharedSport: sharedSportLabel || "—",
+        currentUserPracticeType: minePracticeType,
+        matchedUserPracticeType: partnerPracticeType,
+        locale: language,
+      }),
+    [language, minePracticeType, partnerPracticeType, sharedSportLabel],
+  );
+
+  const showActivitySuggestionCard =
+    Boolean(sharedSportLabel) && !activeProposalStatus && !suggestionDismissed;
   const [referralModalOpen, setReferralModalOpen] = useState(false);
   const [referralCodeMatch, setReferralCodeMatch] = useState<string | null>(null);
   const matchReferralVariant = useMemo(
@@ -151,6 +211,7 @@ export default function Match() {
         partnerMainPhotoUrl: partnerPhoto,
         sharedSports,
         matchedByUserId,
+        partnerSportPracticeType: partnerPracticeType,
       },
     });
   }
@@ -193,6 +254,25 @@ export default function Match() {
           <p className="mt-1.5 text-sm leading-relaxed text-app-muted">
             {t("no_novel_needed")}
           </p>
+          {showActivitySuggestionCard ? (
+            <div className="mt-5 text-left">
+              <MatchActivitySuggestionCard
+                suggestion={suggestion}
+                tone={suggestion.tone}
+                sectionLabel={t("match_suggestion.section_label")}
+                proposeLabel={t("match_suggestion.use_idea_cta")}
+                chooseOtherLabel={t("match_suggestion.other_cta")}
+                onPropose={() => {
+                  setProposalModalFromSuggestion(true);
+                  setModalOpen(true);
+                }}
+                onChooseOther={() => {
+                  if (conversationId) setActivitySuggestionDismissedInStorage(conversationId);
+                  setSuggestionDismissed(true);
+                }}
+              />
+            </div>
+          ) : null}
           {activeProposalStatus && (
             <p className="mt-3 inline-flex rounded-full bg-[#FF1E2D]/10 px-3 py-1 text-[12px] font-semibold text-[#FF1E2D]">
               {t("activity_proposal_in_progress")}
@@ -202,7 +282,10 @@ export default function Match() {
           <div className="mt-8 flex flex-col gap-3">
             <button
               type="button"
-              onClick={() => setModalOpen(true)}
+              onClick={() => {
+                setProposalModalFromSuggestion(false);
+                setModalOpen(true);
+              }}
               className="w-full rounded-2xl py-3.5 text-[15px] font-bold shadow-md transition hover:opacity-95"
               style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
             >
@@ -243,8 +326,14 @@ export default function Match() {
 
       <ActivityProposalModal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={() => {
+          setProposalModalFromSuggestion(false);
+          setModalOpen(false);
+        }}
         sharedSports={sharedSports}
+        titleOverride={proposalModalFromSuggestion ? suggestion.title : undefined}
+        descriptionOverride={proposalModalFromSuggestion ? suggestion.subtitle : undefined}
+        initialSport={proposalModalFromSuggestion ? sharedSportLabel || undefined : undefined}
         onSubmit={async (p) => {
           await sendActivity(p);
           goChat();

@@ -25,9 +25,9 @@ export function BoostPresenceModal({ open, onClose, onActivate }: Props) {
         className="w-full max-w-md rounded-3xl bg-app-card p-5 shadow-2xl ring-1 ring-app-border"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <h2 className="text-base font-semibold text-app-text">Booster ma presence</h2>
+        <h2 className="text-base font-semibold text-app-text">Booster ma présence</h2>
         <p className="mt-1 text-sm text-app-muted">
-          Sois visible en priorite autour de ton sport pendant un temps limite.
+          Sois visible en priorité autour de ton sport pendant un temps limité.
         </p>
 
         <div className="mt-4 grid grid-cols-2 gap-2">
@@ -56,7 +56,7 @@ export function BoostPresenceModal({ open, onClose, onActivate }: Props) {
         </div>
 
         <p className="mt-3 text-xs text-app-muted">
-          Ideal quand vous etes disponible maintenant ou juste avant une session sport.
+          Idéal quand vous êtes disponible maintenant ou juste avant une session sport.
         </p>
 
         <button

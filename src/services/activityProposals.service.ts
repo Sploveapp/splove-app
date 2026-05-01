@@ -24,10 +24,11 @@ export type ActivityProposal = {
   expired_notified: boolean | null;
   created_at: string;
   updated_at: string;
+  meetup_confirmation?: unknown | null;
 };
 
 const ACTIVITY_PROPOSAL_SELECT =
-  "id, conversation_id, proposer_id, match_id, sport, time_slot, location, note, status, expires_at, responded_at, reminder_6h_sent, reminder_18h_sent, expired_notified, created_at, updated_at";
+  "id, conversation_id, proposer_id, match_id, sport, time_slot, location, note, status, expires_at, responded_at, reminder_6h_sent, reminder_18h_sent, expired_notified, created_at, updated_at, meetup_confirmation";
 
 function defaultExpiryIso(): string {
   return new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();

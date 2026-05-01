@@ -33,6 +33,7 @@ export type FeaturePurchaseRow = {
 
 /** Clés catalogue (alignées sur public.features) — extensible. */
 export const FeatureKey = {
+  secondChance: "second_chance",
   secondChanceReturn: "second_chance_return",
   undoSwipeReturn: "undo_swipe_return",
 } as const;

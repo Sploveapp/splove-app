@@ -20,6 +20,8 @@ export const APP_SURFACE_DARK = APP_BG;
 
 /** Barre d’onglets bas */
 export const NAV_BAR_BG = APP_BG;
+/** Fond navbar bas (charte premium SPLove) */
+export const SPLove_BOTTOM_NAV_BG = "#0B0B0F";
 /** Icônes inactives */
 export const NAV_ICON_DEFAULT = "rgba(255, 255, 255, 0.55)";
 export const NAV_ICON_HOVER = "rgba(255, 255, 255, 0.88)";

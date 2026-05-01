@@ -1,19 +1,42 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
-import { APP_BG, NAV_BAR_BG } from "../constants/theme";
+import { APP_BG } from "../constants/theme";
 import { GlobalHeader } from "./GlobalHeader";
-import { BottomNav } from "./BottomNav";
+import { SPLoveBottomNav } from "./navigation/SPLoveBottomNav";
+import { useAuth } from "../contexts/AuthContext";
+import { fetchIncomingNonBlockedLikesCount } from "../services/likes.service";
 import { INBOX_REFRESH_EVENT } from "../constants";
 import { CHAT_MESSAGES_TABLE, supabase } from "../lib/supabase";
 import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
+import { pulseInAppNotifications } from "../services/inAppNotifications.service";
 
 export function AppLayout() {
   console.log("[AppLayout] render");
   const location = useLocation();
+  const { isProfileComplete, isProfileLoading } = useAuth();
   const [inboxCount, setInboxCount] = useState(0);
+  const [likesCount, setLikesCount] = useState(0);
+  const [inAppUnread, setInAppUnread] = useState(0);
   const isChat = location.pathname.startsWith("/chat/");
   /** Agenda autonome : pas de bandeau global ; fond clair sur tout le shell (évite l’encadrement sombre type Discover). */
   const isMesRencontres = /^\/mes-rencontres\/?$/.test(location.pathname);
+
+  const pulseAppNotifications = useCallback(async () => {
+    const n = await pulseInAppNotifications();
+    setInAppUnread(n);
+  }, []);
+
+  const loadLikesBadgeCount = useCallback(async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.id) {
+      setLikesCount(0);
+      return;
+    }
+    const n = await fetchIncomingNonBlockedLikesCount(user.id);
+    setLikesCount(n);
+  }, []);
 
   const loadInboxCount = useCallback(async () => {
     const {
@@ -65,19 +88,43 @@ export function AppLayout() {
     void (async () => {
       if (cancelled) return;
       await loadInboxCount();
+      if (cancelled) return;
+      await loadLikesBadgeCount();
     })();
     return () => {
       cancelled = true;
     };
-  }, [location.pathname, loadInboxCount]);
+  }, [location.pathname, loadInboxCount, loadLikesBadgeCount]);
 
   useEffect(() => {
     const onRefresh = () => {
       void loadInboxCount();
+      void loadLikesBadgeCount();
     };
     window.addEventListener(INBOX_REFRESH_EVENT, onRefresh);
     return () => window.removeEventListener(INBOX_REFRESH_EVENT, onRefresh);
-  }, [loadInboxCount]);
+  }, [loadInboxCount, loadLikesBadgeCount]);
+
+  useEffect(() => {
+    void pulseAppNotifications();
+  }, [location.pathname, pulseAppNotifications]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void pulseAppNotifications();
+    }, 120_000);
+    return () => clearInterval(id);
+  }, [pulseAppNotifications]);
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        void pulseAppNotifications();
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [pulseAppNotifications]);
 
   const inboxRealtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
@@ -132,14 +179,19 @@ export function AppLayout() {
         background: shellBg,
       }}
     >
-      {!isChat && !isMesRencontres ? <GlobalHeader /> : null}
+      {!isChat && !isMesRencontres ? <GlobalHeader inAppUnreadCount={inAppUnread} /> : null}
 
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <Outlet />
       </div>
 
-      <div style={{ background: NAV_BAR_BG, flexShrink: 0 }}>
-        <BottomNav inboxCount={inboxCount} />
+      <div style={{ flexShrink: 0 }}>
+        <SPLoveBottomNav
+          activeRoute={location.pathname}
+          unreadMessagesCount={inboxCount}
+          likesCount={likesCount}
+          profileNeedsAction={!isProfileLoading && !isProfileComplete}
+        />
       </div>
     </div>
   );

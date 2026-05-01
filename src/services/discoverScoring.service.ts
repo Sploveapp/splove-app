@@ -1,3 +1,8 @@
+import {
+  PRACTICE_SCORE_GOOD,
+  PRACTICE_SCORE_VERY_HIGH,
+  practiceCompatibilityScore,
+} from "../lib/sportPracticeCompatibilityScore";
 import { getSharedSportLabelsForMatch } from "../lib/sportMatchGroups";
 
 type DiscoverProfile = {
@@ -26,6 +31,7 @@ type ViewerProfile = {
   gender?: string | null;
   looking_for?: string | null;
   intent?: string | null;
+  sport_practice_type?: string | null;
 };
 
 export type DiscoverScoringContext = {
@@ -41,6 +47,7 @@ export type DiscoverScoringContext = {
 export type DiscoverScoredCandidate<T extends DiscoverProfile> = T & {
   commonSportsCount: number;
   discoverScore: number;
+  practice_score: number;
   distanceKm: number | null;
   discover_reasons: string[];
   discover_excluded: boolean;
@@ -212,17 +219,26 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       (viewerIntent === "both" || candidateIntent === "both" || viewerIntent === candidateIntent);
 
     const distanceKm = ctx.distanceById.get(candidate.id) ?? null;
-    const score =
+    const practice_score = practiceCompatibilityScore(
+      ctx.viewer.sport_practice_type,
+      (candidate as { sport_practice_type?: string | null }).sport_practice_type,
+    );
+    const baseScore =
       getSportsPoints(sharedCount) +
       (intentCompatible ? 20 : 0) +
       getDistancePoints(distanceKm) +
       getActivityPoints(candidate.last_active_at) +
       getCompletenessBonus(candidate);
+    const score = baseScore + practice_score;
 
     const reasons: string[] = [`${sharedCount} sport(s) en commun`];
     if (intentCompatible) reasons.push("intention compatible");
     const distancePts = getDistancePoints(distanceKm);
     if (distancePts > 0 && distanceKm != null) reasons.push(`distance ${Math.round(distanceKm)} km`);
+    if (practice_score >= PRACTICE_SCORE_VERY_HIGH)
+      reasons.push("rythme de pratique — très bon alignement");
+    else if (practice_score >= PRACTICE_SCORE_GOOD)
+      reasons.push("rythme de pratique — bon alignement");
 
     if (import.meta.env.DEV) {
       console.debug("[Discover scoring] included", {
@@ -231,6 +247,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
         sharedCount,
         intentCompatible,
         distanceKm,
+        practice_score,
         score,
       });
     }
@@ -239,6 +256,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       ...candidate,
       commonSportsCount: sharedCount,
       discoverScore: score,
+      practice_score,
       distanceKm,
       discover_reasons: reasons,
       discover_excluded: false,
@@ -247,6 +265,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
 
   kept.sort((a, b) => {
     if (b.discoverScore !== a.discoverScore) return b.discoverScore - a.discoverScore;
+    if (b.practice_score !== a.practice_score) return b.practice_score - a.practice_score;
     const bActive = safeTimeMs(b.last_active_at);
     const aActive = safeTimeMs(a.last_active_at);
     if (bActive !== aActive) return bActive - aActive;

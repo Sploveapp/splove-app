@@ -46,6 +46,9 @@ export default function Auth() {
 
   useEffect(() => {
     stashPendingReferralCodeFromSearch(searchParams.get("ref"));
+    if (typeof window !== "undefined") {
+      stashPendingReferralCodeFromSearch(new URLSearchParams(window.location.search).get("ref"));
+    }
   }, [searchParams]);
 
   useEffect(() => {

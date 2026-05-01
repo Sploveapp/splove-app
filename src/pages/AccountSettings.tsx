@@ -5,6 +5,7 @@ import { env, hasSupabaseEnv } from "../lib/env";
 import { supabase } from "../lib/supabase";
 import {
   APP_BG,
+  APP_BORDER,
   APP_CARD,
   APP_TEXT,
   APP_TEXT_MUTED,
@@ -140,6 +141,26 @@ export default function AccountSettings() {
           }}
         >
           {`← ${t("profile_title")}`}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => navigate("/invite")}
+          style={{
+            width: "100%",
+            margin: "0 0 18px 0",
+            padding: "12px 14px",
+            borderRadius: "12px",
+            border: `1px solid ${APP_BORDER}`,
+            background: APP_CARD,
+            color: APP_TEXT,
+            fontSize: "14px",
+            fontWeight: 600,
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+        >
+          {t("invite_friend_header")}
         </button>
 
         <h1

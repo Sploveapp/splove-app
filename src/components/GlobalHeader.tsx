@@ -2,16 +2,19 @@ import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { NAV_ICON_HOVER } from "../constants/theme";
 import { useTranslation } from "../i18n/useTranslation";
+import { HeaderNotificationButton } from "./HeaderNotificationButton";
 
 type GlobalHeaderProps = {
   /** En-tête plus bas pour parcours longs (ex. onboarding). */
   variant?: "default" | "compact";
+  /** Badge notifications in-app (Discover shell). */
+  inAppUnreadCount?: number;
 };
 
 /**
  * En-tête global : marque + déconnexion ; onglets Découvrir / SPLove+ sur les routes concernées.
  */
-export function GlobalHeader({ variant = "default" }: GlobalHeaderProps) {
+export function GlobalHeader({ variant = "default", inAppUnreadCount = 0 }: GlobalHeaderProps) {
   const { t } = useTranslation();
   const { signOut } = useAuth();
   const location = useLocation();
@@ -55,16 +58,19 @@ export function GlobalHeader({ variant = "default" }: GlobalHeaderProps) {
               SPLove
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() => void handleLogout()}
-            aria-label={t("auth.logout")}
-            className={`shrink-0 rounded-lg font-medium text-app-muted transition-colors hover:bg-white/[0.04] hover:text-app-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/25 ${
-              compact ? "px-2 py-1 text-[11px]" : "px-2 py-1.5 text-[11px]"
-            }`}
-          >
-            {t("auth.logout")}
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <HeaderNotificationButton hasNotification={inAppUnreadCount > 0} />
+            <button
+              type="button"
+              onClick={() => void handleLogout()}
+              aria-label={t("auth.logout")}
+              className={`shrink-0 rounded-lg font-medium text-app-muted transition-colors hover:bg-white/[0.04] hover:text-app-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/25 ${
+                compact ? "px-2 py-1 text-[11px]" : "px-2 py-1.5 text-[11px]"
+              }`}
+            >
+              {t("auth.logout")}
+            </button>
+          </div>
         </div>
 
         {/* Niveau 2 — navigation (Découvrir / SPLove+) */}

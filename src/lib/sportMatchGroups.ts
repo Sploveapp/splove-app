@@ -55,7 +55,51 @@ export function collectSportMatchKeysFromProfile(profile: {
   return keys;
 }
 
-/** Libellés affichables du profil cible qui sont compatibles avec au moins une clé « moi ». */
+/** Libellés affichés des sports du profil (tous sports, dédoublonnés). */
+export function getProfileSportDisplayLabels(profile: {
+  profile_sports?: { sports?: SportRow | null }[] | null;
+}): string[] {
+  const list = profile.profile_sports ?? [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const ps of list) {
+    const sp = ps.sports;
+    if (!sp) continue;
+    const display = ((sp.label ?? "").trim() || (sp.slug ?? "").trim() || "").trim();
+    if (!display) continue;
+    const key = display.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(display);
+  }
+  return out.sort((a, b) => a.localeCompare(b, "fr"));
+}
+
+export type DiscoverSportChip = { label: string; shared: boolean };
+
+/** Chips Discover : tous les sports avec indicateur si compatible avec mes clés. */
+export function getDiscoverSportChips(profile: ProfileForSportChips, myMatchKeys: Set<string>): DiscoverSportChip[] {
+  const labels = getProfileSportDisplayLabels(profile);
+  const list = profile.profile_sports ?? [];
+  const sharedByNormalizedLabel = new Map<string, boolean>();
+  for (const ps of list) {
+    const sp = ps.sports;
+    if (!sp) continue;
+    const display = ((sp.label ?? "").trim() || (sp.slug ?? "").trim() || "").trim();
+    if (!display) continue;
+    const k = sportMatchKey(sp.slug ?? null, sp.label ?? null);
+    sharedByNormalizedLabel.set(display.toLowerCase(), myMatchKeys.has(k));
+  }
+  return labels.map((label) => ({
+    label,
+    shared: sharedByNormalizedLabel.get(label.toLowerCase()) === true,
+  }));
+}
+
+type ProfileForSportChips = {
+  profile_sports?: { sports?: SportRow | null }[] | null;
+};
+
 export function getSharedSportLabelsForMatch(
   myMatchKeys: Set<string>,
   profile: { profile_sports?: { sports?: SportRow | null }[] | null },

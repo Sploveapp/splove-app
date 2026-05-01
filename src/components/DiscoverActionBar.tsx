@@ -22,7 +22,7 @@ export function DiscoverActionBar(props: DiscoverActionBarProps) {
   const { t } = useTranslation();
   const { canUndo = false, isBetaTester = false, isOnline = false, onPass, onLike, onUndo } = props;
   void props.onMessage;
-  const undoLabel = t("discover_splove_back");
+  const undoLabel = t("discover_undo_action");
 
   return (
     <>
@@ -78,21 +78,16 @@ export function DiscoverActionBar(props: DiscoverActionBarProps) {
           <span>{t("like")}</span>
         </button>
       </div>
-      {isBetaTester ? (
+      {canUndo ? (
         <div className="mt-2 flex justify-center">
           <button
             type="button"
-            aria-disabled={!canUndo}
-            disabled={!canUndo}
             onClick={() => {
-              if (!canUndo) return;
-              onUndo?.();
+              void onUndo?.();
             }}
-            className={`text-[11px] font-medium underline decoration-app-border underline-offset-2 transition ${
-              canUndo ? "text-app-muted hover:text-app-text" : "cursor-not-allowed text-app-muted/40 no-underline opacity-60"
-            }`}
+            className="text-[11px] font-semibold underline decoration-app-border underline-offset-2 transition text-app-muted hover:text-app-text"
           >
-            ↩ {undoLabel}
+            ↩️ {undoLabel}
           </button>
         </div>
       ) : null}

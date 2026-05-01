@@ -22,6 +22,8 @@ import AuthCallback from "./pages/AuthCallback";
 import SecondChancesInbox from "./pages/SecondChancesInbox";
 import SecondChanceDecision from "./pages/SecondChanceDecision";
 import Analytics from "./pages/Analytics";
+import InviteFriendScreen from "./screens/InviteFriendScreen";
+import Notifications from "./pages/Notifications";
 function App() {
   if (window.location.pathname === "/auth/callback" && !window.location.hash) {
     window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/auth/callback${window.location.search}`);
@@ -48,6 +50,7 @@ function App() {
                     <Route path="/" element={<Navigate to="/discover" replace />} />
                     <Route path="/onboarding" element={<Onboarding />} />
                     <Route path="/discover" element={<Discover />} />
+                    <Route path="/notifications" element={<Notifications />} />
                     <Route path="/activity" element={<Navigate to="/discover" replace />} />
                     <Route path="/messages" element={<Messages />} />
                     <Route path="/mes-rencontres" element={<MesRencontres />} />
@@ -55,6 +58,7 @@ function App() {
                     <Route path="/profile" element={<Profile />} />
                     <Route path="/profile/edit" element={<EditProfile />} />
                     <Route path="/account-settings" element={<AccountSettings />} />
+                    <Route path="/invite" element={<InviteFriendScreen />} />
                     <Route path="/splove-plus" element={<SplovePlus />} />
                     <Route path="/checkout" element={<Checkout />} />
                     <Route path="/match/:conversationId" element={<Match />} />

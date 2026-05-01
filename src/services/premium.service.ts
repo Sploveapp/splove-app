@@ -95,28 +95,41 @@ export async function getActiveSubscription(
   return null;
 }
 
-async function referralPlusActive(profileId: string): Promise<boolean> {
+async function referralPlusOrBeta(profileId: string): Promise<boolean> {
   const { data, error } = await supabase
     .from("profiles")
-    .select("referral_plus_until")
+    .select("referral_plus_until, beta_splove_plus_unlocked")
     .eq("id", profileId)
     .maybeSingle();
   if (error) {
-    const low = (error.message ?? "").toLowerCase();
-    if (error.code === "42703" || low.includes("does not exist")) return false;
+    if (error.code === "42703") {
+      const legacy = await supabase
+        .from("profiles")
+        .select("referral_plus_until")
+        .eq("id", profileId)
+        .maybeSingle();
+      if (legacy.error) return false;
+      const u = (legacy.data as { referral_plus_until?: string | null } | null)?.referral_plus_until;
+      return Boolean(u && new Date(u).getTime() > Date.now());
+    }
     return false;
   }
-  const u = (data as { referral_plus_until?: string | null } | null)?.referral_plus_until;
+  const row = data as {
+    referral_plus_until?: string | null;
+    beta_splove_plus_unlocked?: boolean | null;
+  } | null;
+  if (row?.beta_splove_plus_unlocked === true) return true;
+  const u = row?.referral_plus_until ?? null;
   if (!u) return false;
   return new Date(u).getTime() > Date.now();
 }
 
 /**
- * Indique si l'utilisateur a accès à SPLove+ (abonnement actif ou période parrainage).
+ * Indique si l'utilisateur a accès à SPLove+ (abonnement actif, parrainage temporaire, ou beta via parrain).
  */
 export async function hasPremiumAccess(profileId: string): Promise<boolean> {
   if (BETA_MODE) return true;
   const sub = await getActiveSubscription(profileId);
   if (sub != null) return true;
-  return referralPlusActive(profileId);
+  return referralPlusOrBeta(profileId);
 }

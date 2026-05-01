@@ -33,7 +33,19 @@ import { invokeModeratePhoto } from "../services/photoModeration.service";
 import type { PhotoModerationStatus } from "../types/photoModeration.types";
 import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
-import { stashPendingReferralCodeFromSearch, tryClaimPendingReferralCode } from "../services/referral.service";
+import { stashPendingReferralCodeFromSearch, tryCompletePendingReferral } from "../services/referral.service";
+import {
+  energyOptionsForVariant,
+  type EnergyOptionKey,
+  isEnergySelectionComplete,
+  normalizeIntensityForOnboardingHydrate,
+  type OnboardingVariant,
+  onboardingVariantFromProfile,
+} from "../lib/onboardingEnergyOptions";
+import {
+  orderedQuickPickSports,
+  sportMatchesFirstThreeLetters,
+} from "../lib/onboardingSportsQuickPick";
 
 const genderOptions = [
   { value: "female", label: "gender.female" },
@@ -89,11 +101,6 @@ function serializeInterestedInValues(values: InterestedInValue[]): string | null
 const ONBOARDING_TIME_QUICK_OPTIONS = [
   { value: "Matin", label: "style.morning" },
   { value: "Soir", label: "style.evening" },
-] as const;
-
-const ONBOARDING_INTENSITY_QUICK_OPTIONS = [
-  { value: "chill", label: "style.chill" },
-  { value: "intense", label: "style.intense" },
 ] as const;
 
 /** Aligné `profileCompleteness` + migration 068 */
@@ -269,6 +276,7 @@ function dbIntentFromUiIntent(uiValue: string): string {
 type SportOption = {
   id: string | number;
   name: string;
+  slug?: string | null;
   category?: string | null;
   active?: boolean;
   is_featured?: boolean;
@@ -400,7 +408,7 @@ const inputClassName =
 const labelClassName = "mb-1 block text-sm font-semibold text-app-text";
 
 export default function Onboarding() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const {
@@ -443,7 +451,8 @@ export default function Onboarding() {
   const [sportLevelsById, setSportLevelsById] = useState<Record<string, string>>({});
   const [sportTime, setSportTime] = useState("");
   const [sportMotivations, setSportMotivations] = useState<string[]>([]);
-  const [sportIntensity, setSportIntensity] = useState<"" | "chill" | "intense">("");
+  const [onboardingVariant, setOnboardingVariant] = useState<OnboardingVariant>("A");
+  const [sportIntensity, setSportIntensity] = useState<"" | EnergyOptionKey>("");
   const [planningStyle, setPlanningStyle] = useState<"" | "spontaneous" | "planned">("");
   const [sportPhraseOptional, setSportPhraseOptional] = useState("");
   const [postOnboarding, setPostOnboarding] = useState(false);
@@ -467,6 +476,12 @@ export default function Onboarding() {
   useEffect(() => {
     stashPendingReferralCodeFromSearch(searchParams.get("ref"));
   }, [searchParams]);
+
+  const energyOptions = useMemo(() => energyOptionsForVariant(onboardingVariant), [onboardingVariant]);
+
+  useEffect(() => {
+    console.log("Onboarding variant:", onboardingVariant);
+  }, [onboardingVariant]);
 
   function logDetailedError(
     step: string,
@@ -631,7 +646,7 @@ export default function Onboarding() {
         const queryPromise = (async () => {
           const res = await supabase
             .from("sports")
-            .select("id, label, category, active, is_featured")
+            .select("id, label, slug, category, active, is_featured")
             .eq("active", true)
             .order("label", { ascending: true });
           return res;
@@ -663,9 +678,11 @@ export default function Onboarding() {
 
         const list = (data ?? []).map((r) => {
           const label = String((r.label as string | null) ?? "").trim();
+          const slugRaw = (r as { slug?: string | null }).slug;
           return {
             id: r.id,
             name: label,
+            slug: typeof slugRaw === "string" ? slugRaw : null,
             category: (r.category as string | null) ?? null,
             active: r.active === true,
             is_featured: r.is_featured === true,
@@ -753,8 +770,10 @@ export default function Onboarding() {
         const rawTime = String(row.sport_time ?? "");
         setSportTime(rawTime === "Matin" || rawTime === "Soir" ? rawTime : "");
         setSportMotivations(Array.isArray(row.sport_motivation) ? (row.sport_motivation as string[]) : []);
-        const si = row.sport_intensity;
-        setSportIntensity(si === "chill" || si === "intense" ? si : "");
+        const cohort = onboardingVariantFromProfile(row.onboarding_variant);
+        setOnboardingVariant(cohort);
+        const si = typeof row.sport_intensity === "string" ? row.sport_intensity : "";
+        setSportIntensity(normalizeIntensityForOnboardingHydrate(si, cohort));
         const pl = row.planning_style;
         setPlanningStyle(pl === "spontaneous" || pl === "planned" ? pl : "");
         setPracticePreferences(Array.isArray(row.practice_preferences) ? (row.practice_preferences as string[]) : []);
@@ -823,27 +842,20 @@ export default function Onboarding() {
     }
   }, [postOnboarding, isProfileComplete, authLoading, isAuthInitialized, loading, navigate, user?.id]);
 
-  const featuredSports = useMemo(() => {
-    return [...sportsCatalog]
-      .filter((s) => s.is_featured === true)
-      .sort((a, b) => a.name.localeCompare(b.name, "fr"));
-  }, [sportsCatalog]);
-
-  const otherSports = useMemo(() => {
-    return [...sportsCatalog]
-      .filter((s) => s.is_featured !== true)
-      .sort((a, b) => a.name.localeCompare(b.name, "fr"));
-  }, [sportsCatalog]);
+  const quickPickSportsOrdered = useMemo(
+    () => orderedQuickPickSports(sportsCatalog),
+    [sportsCatalog],
+  );
 
   const searchMatches = useMemo(() => {
-    const q = sportSearch.trim().toLowerCase();
-    if (q.length < 2) return [];
+    const q = sportSearch.trim();
+    if (q.length < 3) return [];
     return sportsCatalog
       .filter((s) => {
-        const hay = `${s.name} ${s.category ?? ""}`.toLowerCase();
-        return hay.includes(q) && !selectedSportIds.includes(s.id);
+        const hay = `${s.name} ${s.category ?? ""}`;
+        return sportMatchesFirstThreeLetters(hay, q) && !selectedSportIds.includes(s.id);
       })
-      .slice(0, 10);
+      .slice(0, 12);
   }, [sportSearch, sportsCatalog, selectedSportIds]);
 
   function toggleSportById(sportId: string | number): void {
@@ -1012,7 +1024,7 @@ export default function Onboarding() {
     selectedSportIds.length <= 3 &&
     selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)])) &&
     (sportTime === "Matin" || sportTime === "Soir") &&
-    (sportIntensity === "chill" || sportIntensity === "intense") &&
+    isEnergySelectionComplete(onboardingVariant, sportIntensity) &&
     (planningStyle === "spontaneous" || planningStyle === "planned") &&
     (portraitSavedUrl.trim() !== "" || portraitFile != null) &&
     (bodySavedUrl.trim() !== "" || bodyFile != null) &&
@@ -1039,7 +1051,7 @@ export default function Onboarding() {
     if (sportTime !== "Matin" && sportTime !== "Soir") {
       return t("onboarding_err_style_time");
     }
-    if (sportIntensity !== "chill" && sportIntensity !== "intense") {
+    if (!isEnergySelectionComplete(onboardingVariant, sportIntensity)) {
       return t("onboarding_err_style_intensity");
     }
     if (planningStyle !== "spontaneous" && planningStyle !== "planned") {
@@ -1269,7 +1281,7 @@ export default function Onboarding() {
         setStepHint(t("onboarding_err_style_time"));
         return false;
       }
-      if (sportIntensity !== "chill" && sportIntensity !== "intense") {
+      if (!isEnergySelectionComplete(onboardingVariant, sportIntensity)) {
         setStepHint(t("onboarding_err_style_intensity"));
         return false;
       }
@@ -1869,7 +1881,7 @@ export default function Onboarding() {
         return;
       }
 
-      void tryClaimPendingReferralCode().then((r) => {
+      void tryCompletePendingReferral(authUserId).then((r) => {
         if (r.ok) void refetchProfile();
       });
 
@@ -2161,11 +2173,11 @@ export default function Onboarding() {
                       ))}
                     </div>
                   )}
-                  {featuredSports.length > 0 ? (
+                  {quickPickSportsOrdered.length > 0 ? (
                     <div>
-                      <span className="mb-1.5 block text-xs font-medium text-app-muted">{t("most_practiced")}</span>
+                      <span className="mb-1.5 block text-xs font-medium text-app-muted">{t("onboarding_sports_quick_section")}</span>
                       <div className="flex flex-wrap gap-1.5">
-                        {featuredSports.map((sport) => {
+                        {quickPickSportsOrdered.map((sport) => {
                           const isSelected = selectedSportIds.some((id) => String(id) === String(sport.id));
                           return (
                             <button
@@ -2185,32 +2197,8 @@ export default function Onboarding() {
                         })}
                       </div>
                     </div>
-                  ) : null}
-
-                  {otherSports.length > 0 ? (
-                    <div>
-                      <span className="mb-1.5 block text-xs font-medium text-app-muted">{t("all_sports")}</span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {otherSports.map((sport) => {
-                          const isSelected = selectedSportIds.some((id) => String(id) === String(sport.id));
-                          return (
-                            <button
-                              key={String(sport.id)}
-                              type="button"
-                              onClick={() => toggleSportById(sport.id)}
-                              className="rounded-xl border-2 py-2 px-3 text-xs font-semibold transition-opacity sm:text-sm"
-                              style={{
-                                borderColor: isSelected ? BRAND_BG : APP_BORDER,
-                                background: isSelected ? BRAND_BG : APP_CARD,
-                                color: isSelected ? TEXT_ON_BRAND : APP_TEXT_MUTED,
-                              }}
-                            >
-                              {sport.name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
+                  ) : !loadingSports && sportsCatalog.length === 0 && !sportsLoadError ? (
+                    <p className="text-xs text-app-muted">{t("onboarding_sports_catalog_unavailable")}</p>
                   ) : null}
 
                   <div>
@@ -2221,7 +2209,7 @@ export default function Onboarding() {
                       id="ob-sport-search"
                       type="search"
                       autoComplete="off"
-                      placeholder={t("search_sport")}
+                      placeholder={t("onboarding_sports_search_placeholder")}
                       value={sportSearch}
                       onChange={(e) => setSportSearch(e.target.value)}
                       onKeyDown={(e) => {
@@ -2232,8 +2220,8 @@ export default function Onboarding() {
                       }}
                       className={inputClassName}
                     />
-                    {sportSearch.trim().length > 0 && sportSearch.trim().length < 2 && (
-                      <p className="mt-1 text-xs text-app-muted">{`${t("remaining_letters")} ${2 - sportSearch.trim().length}`}</p>
+                    {sportSearch.trim().length > 0 && sportSearch.trim().length < 3 && (
+                      <p className="mt-1 text-xs text-app-muted">{t("sport_search_min_letters", { n: 3 - sportSearch.trim().length })}</p>
                     )}
                     {searchMatches.length > 0 && (
                       <ul
@@ -2429,21 +2417,21 @@ export default function Onboarding() {
                   <div>
                     <span className={labelClassName}>{t("style_your_pace")}</span>
                     <div className="mt-2 flex gap-2">
-                      {ONBOARDING_INTENSITY_QUICK_OPTIONS.map((o) => {
-                        const active = sportIntensity === o.value;
+                      {energyOptions.map((option) => {
+                        const active = sportIntensity === option.key;
                         return (
                           <button
-                            key={o.value}
+                            key={option.key}
                             type="button"
-                            onClick={() => setSportIntensity(o.value)}
-                            className="min-h-[48px] flex-1 rounded-xl border-2 px-3 text-sm font-semibold transition-all sm:text-base"
+                            onClick={() => setSportIntensity(option.key)}
+                            className={`option-button min-h-[48px] flex-1 rounded-xl border-2 px-3 text-sm font-semibold transition-all sm:text-base ${active ? "selected" : ""}`}
                             style={{
                               borderColor: active ? BRAND_BG : APP_BORDER,
                               background: active ? BRAND_BG : APP_CARD,
                               color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
                             }}
                           >
-                            {t(o.label)}
+                            {option.label[language]}
                           </button>
                         );
                       })}
@@ -2483,14 +2471,15 @@ export default function Onboarding() {
               {step === 10 && (
                 <div className="space-y-3">
                   <label className={labelClassName} htmlFor="ob-sport-phrase">
-                    {t("onboarding_bio_hero_title")}
+                    {t("sport_phrase.title")}
                   </label>
+                  <p className="text-xs leading-snug text-app-muted">{t("sport_phrase.description")}</p>
                   <textarea
                     id="ob-sport-phrase"
                     rows={4}
                     value={sportPhraseOptional}
                     onChange={(e) => setSportPhraseOptional(e.target.value)}
-                    placeholder={t("onboarding_sport_phrase_placeholder")}
+                    placeholder={t("sport_phrase.placeholder")}
                     className={`${inputClassName} min-h-[100px] resize-y`}
                     autoComplete="off"
                   />
