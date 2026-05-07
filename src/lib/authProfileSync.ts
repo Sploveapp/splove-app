@@ -36,65 +36,36 @@ function missingColumnName(err: {
  * Ne génère jamais d’UUID aléatoire : `profiles.id` doit rester égal à `auth.users.id`.
  * Appeler après signup et lorsque le SELECT profil ne retourne aucune ligne.
  *
- * `onboarding_variant` est fixé uniquement à la première création de ligne (insert) ;
- * en cas de profil déjà existant ou de colonne absente en prod, on ne l’écrit pas via upsert.
+ * Une fois la ligne existe : aucun nouvel INSERT ; mise à jour optionnelle uniquement pour
+ * `onboarding_variant` NULL (cohorte A/B). Les creations concurrentes utilisent un upsert
+ * `IGNORE DUPLICATES` pour ne pas réécraser les champs métier après OAuth / trigger DB.
  */
 export async function ensureProfileRowForAuthUserId(authUserId: string): Promise<boolean> {
   if (!authUserId) return false;
 
-  const { data: existingProfile } = await supabase
-    .from("profiles")
-    .select("onboarding_variant")
-    .eq("id", authUserId)
-    .maybeSingle();
-
-  let variant = existingProfile?.onboarding_variant;
-  if (!variant) {
-    variant = Math.random() < 0.5 ? "A" : "B";
+  async function fetchExisting(): Promise<{ id?: string; onboarding_variant?: string | null } | null> {
+    let res = await supabase
+      .from("profiles")
+      .select("id, onboarding_variant")
+      .eq("id", authUserId)
+      .maybeSingle();
+    if (res.error && isOnboardingVariantColumnMissing(res.error)) {
+      res = await supabase.from("profiles").select("id").eq("id", authUserId).maybeSingle();
+    }
+    if (res.error) {
+      console.warn("[ensureProfileRowForAuthUserId] profile existence check failed", res.error);
+      return null;
+    }
+    return res.data;
   }
 
-  const basePayload: Record<string, unknown> = {
-    id: authUserId,
-    profile_completed: false,
-    onboarding_completed: false,
-    onboarding_done: false,
-    onboarding_variant: variant,
-  };
+  const existingProfile = await fetchExisting();
 
-  const tryInsertWithFallback = async (): Promise<{ ok: boolean; duplicate: boolean }> => {
-    const payload: Record<string, unknown> = { ...basePayload };
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const { error } = await supabase.from("profiles").insert(payload);
-      if (!error) return { ok: true, duplicate: false };
-      if (isDuplicateInsertError(error)) return { ok: false, duplicate: true };
-      const col = missingColumnName(error);
-      if (!col || !(col in payload)) break;
-      delete payload[col];
-    }
-    return { ok: false, duplicate: false };
-  };
-
-  const insertResult = await tryInsertWithFallback();
-  if (insertResult.ok) return true;
-
-  if (insertResult.duplicate) {
-    const upsertPayload: Record<string, unknown> = {
-      id: authUserId,
-      profile_completed: false,
-      onboarding_completed: false,
-      onboarding_done: false,
-    };
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const { error: upsertError } = await supabase.from("profiles").upsert(upsertPayload, { onConflict: "id" });
-      if (!upsertError) break;
-      const col = missingColumnName(upsertError);
-      if (!col || !(col in upsertPayload)) return false;
-      delete upsertPayload[col];
-      if (attempt === 4) return false;
-    }
+  /** Profil déjà présent → jamais d’INSERT / upsert remplaçant la ligne ; backfill cohorte seulement. */
+  if (existingProfile?.id) {
     const { error: assignErr } = await supabase
       .from("profiles")
-      .update({ onboarding_variant: variant })
+      .update({ onboarding_variant: Math.random() < 0.5 ? "A" : "B" })
       .eq("id", authUserId)
       .is("onboarding_variant", null);
     if (assignErr && !isOnboardingVariantColumnMissing(assignErr)) {
@@ -106,18 +77,46 @@ export async function ensureProfileRowForAuthUserId(authUserId: string): Promise
     return true;
   }
 
-  const fallbackPayload: Record<string, unknown> = {
+  const variant = Math.random() < 0.5 ? "A" : "B";
+  const basePayload: Record<string, unknown> = {
     id: authUserId,
     profile_completed: false,
     onboarding_completed: false,
     onboarding_done: false,
+    onboarding_variant: variant,
   };
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const { error } = await supabase.from("profiles").upsert(fallbackPayload, { onConflict: "id" });
-    if (!error) return true;
-    const col = missingColumnName(error);
-    if (!col || !(col in fallbackPayload)) return false;
-    delete fallbackPayload[col];
+
+  /** INSERT si absent ; ON CONFLICT DO NOTHING si une autre transaction a déjà créé la ligne (trigger / OAuth). */
+  const tryUpsertIdempotentInsert = async (): Promise<boolean> => {
+    const payload: Record<string, unknown> = { ...basePayload };
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { error } = await supabase.from("profiles").upsert(payload, {
+        onConflict: "id",
+        ignoreDuplicates: true,
+      });
+      if (!error) return true;
+      if (isDuplicateInsertError(error)) return true;
+      const col = missingColumnName(error);
+      if (!col || !(col in payload)) return false;
+      delete payload[col];
+    }
+    return false;
+  };
+
+  const ok = await tryUpsertIdempotentInsert();
+  if (!ok) return false;
+
+  const { error: assignErr } = await supabase
+    .from("profiles")
+    .update({ onboarding_variant: variant })
+    .eq("id", authUserId)
+    .is("onboarding_variant", null);
+
+  if (assignErr && !isOnboardingVariantColumnMissing(assignErr)) {
+    console.warn("[ensureProfileRowForAuthUserId] onboarding_variant backfill skipped", {
+      code: assignErr.code,
+      message: assignErr.message,
+    });
   }
-  return false;
+  return true;
 }
