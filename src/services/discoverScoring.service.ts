@@ -218,7 +218,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       priorityMeetActive: priorityActive,
     });
 
-    if (v3.outside_radius) {
+    if (v3.outside_radius && !BETA_MODE) {
       if (import.meta.env.DEV) {
         console.debug("[Discover scoring V3] excluded", {
           id: candidate.id,
@@ -246,12 +246,15 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
 
     const cityFallbackBoost = distanceKm == null && isSameCity(ctx.viewer.city, candidate.city) ? 12 : 0;
     const betaSharedSportsBoost = BETA_MODE ? sharedCount * 8 : 0;
-    const totalScore = (v3?.total ?? 0) + cityFallbackBoost + betaSharedSportsBoost;
+    const betaOutsideRadiusPenalty = BETA_MODE && v3.outside_radius ? -18 : 0;
+    const totalScore =
+      (v3?.total ?? 0) + cityFallbackBoost + betaSharedSportsBoost + betaOutsideRadiusPenalty;
     const reasons: string[] = [`V3 ${Math.round(totalScore)} · ${sharedCount} sport(s) en commun`];
     if (distanceKm != null && Number.isFinite(distanceKm))
       reasons.push(`distance ${Math.round(distanceKm)} km`);
     if (cityFallbackBoost > 0) reasons.push("même ville (fallback beta)");
     if (betaSharedSportsBoost > 0) reasons.push(`beta +${betaSharedSportsBoost} sports communs`);
+    if (betaOutsideRadiusPenalty < 0) reasons.push("hors rayon (garde beta)");
     if (boostActive) reasons.push("Boost actif");
     if (priorityActive) reasons.push("Priorité rencontre");
 

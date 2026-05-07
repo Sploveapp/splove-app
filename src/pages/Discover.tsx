@@ -1038,6 +1038,7 @@ export default function Discover() {
   const [myDiscoveryRadiusKm] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  const [betaRadiusFallbackActive, setBetaRadiusFallbackActive] = useState(false);
   const [reportProfileId, setReportProfileId] = useState<string | null>(null);
   const [reportPhotoTarget, setReportPhotoTarget] = useState<{
     profileId: string;
@@ -1448,6 +1449,7 @@ export default function Discover() {
     }
     setLoading(true);
     setErrorMessage("");
+    setBetaRadiusFallbackActive(false);
     let resultCount = 0;
     try {
       console.log("[Discover feed] currentUserId:", currentUserId);
@@ -1772,6 +1774,42 @@ export default function Discover() {
 
       discoverFiltered.sort((a, b) => sortDiscoverProfileStack(a, b, hasPlus));
 
+      let discoverOrdered = discoverFiltered;
+      if (BETA_MODE) {
+        const viewerRadiusRaw =
+          typeof meProfile.discovery_radius_km === "number" && Number.isFinite(meProfile.discovery_radius_km)
+            ? meProfile.discovery_radius_km
+            : null;
+        const viewerRadius = viewerRadiusRaw != null && viewerRadiusRaw > 0 ? viewerRadiusRaw : null;
+        if (viewerRadius != null) {
+          const inside: ProfileWithAffinity[] = [];
+          const slightlyOutside: ProfileWithAffinity[] = [];
+          const farOutside: ProfileWithAffinity[] = [];
+          const noGps: ProfileWithAffinity[] = [];
+          for (const p of discoverFiltered) {
+            const d = p.distanceKm;
+            if (d == null || !Number.isFinite(d)) {
+              noGps.push(p);
+            } else if (d <= viewerRadius) {
+              inside.push(p);
+            } else if (d <= viewerRadius * 2) {
+              slightlyOutside.push(p);
+            } else {
+              farOutside.push(p);
+            }
+          }
+          const minInsideTarget = Math.min(DISCOVER_DISPLAY_LIMIT, 6);
+          if (inside.length < minInsideTarget) {
+            setBetaRadiusFallbackActive(
+              slightlyOutside.length > 0 || noGps.length > 0 || farOutside.length > 0,
+            );
+            discoverOrdered = [...inside, ...slightlyOutside, ...noGps, ...farOutside];
+          } else {
+            discoverOrdered = [...inside, ...slightlyOutside, ...noGps, ...farOutside];
+          }
+        }
+      }
+
       if (import.meta.env.DEV && discoverFiltered.length > 0) {
         for (const p of discoverFiltered.slice(0, 12)) {
           console.debug("[Discover score V3]", p.first_name ?? p.id, {
@@ -1785,7 +1823,7 @@ export default function Discover() {
         }
       }
 
-      const safe = discoverFiltered.filter((p) => p?.id && isValidProfileId(p.id));
+      const safe = discoverOrdered.filter((p) => p?.id && isValidProfileId(p.id));
       const slice = safe.slice(0, DISCOVER_DISPLAY_LIMIT);
       resultCount = slice.length;
       console.log("[Discover feed] final profiles count:", resultCount);
@@ -2208,6 +2246,11 @@ export default function Discover() {
           ) : null}
           {myCity ? (
             <p className="mx-auto mt-0.5 max-w-[21rem] text-[11px] text-app-muted">{t("discover.yourCityLine", { city: myCity })}</p>
+          ) : null}
+          {betaRadiusFallbackActive ? (
+            <p className="mx-auto mt-1.5 max-w-[22rem] text-[12px] font-medium text-app-muted">
+              On élargit un peu ta zone pour te proposer plus de profils.
+            </p>
           ) : null}
           {currentUserId ? (
             <div className="mx-auto mt-4 w-full max-w-[21rem] rounded-2xl border border-emerald-500/35 bg-emerald-500/[0.07] px-3 py-3 text-left shadow-sm ring-1 ring-emerald-500/[0.12] dark:bg-emerald-950/35">
