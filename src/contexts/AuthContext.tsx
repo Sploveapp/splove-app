@@ -49,51 +49,12 @@ export type Profile = {
   photo_moderation_overall?: string | null;
   is_under_review?: boolean | null;
   moderation_strikes_count?: number | null;
-  /** Activités adaptées — optionnel, voir migration 005 / 041. */
+  /** Activités adaptées — optionnel, voir migrations 005, 094. */
   needs_adapted_activities?: boolean | null;
+  /** Ouverture à une pratique adaptée (codes onboarding), migration 094. */
+  open_to_adapted_activities?: string | null;
   [key: string]: unknown;
 };
-
-function hasText(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function getProfilePhotoCount(p: Profile | null): number {
-  if (!p) return 0;
-  let count = 0;
-  if (hasText(p.main_photo_url)) count += 1;
-  if (hasText(p.portrait_url) && p.portrait_url !== p.main_photo_url) count += 1;
-  if (hasText(p.fullbody_url) && p.fullbody_url !== p.main_photo_url && p.fullbody_url !== p.portrait_url) count += 1;
-  return count;
-}
-
-async function fetchProfileSportsCount(userId: string): Promise<number> {
-  const { count, error } = await supabase
-    .from("profile_sports")
-    .select("sport_id", { count: "exact", head: true })
-    .eq("profile_id", userId);
-  if (error) {
-    console.warn("[AuthContext] fetchProfileSportsCount:", error.message);
-    return 0;
-  }
-  return count ?? 0;
-}
-
-function getStrictProfileIncompleteReason(profile: Profile | null, sportsCount: number): string | null {
-  if (!profile) return "profile_missing";
-  if (!hasText(profile.first_name)) return "first_name_missing";
-  if (!hasText(profile.birth_date)) return "birth_date_missing";
-  if (!hasText(profile.gender)) return "gender_missing";
-
-  const hasFinalCompletionFlag =
-    profile.profile_completed === true || (profile as { onboarding_completed?: unknown }).onboarding_completed === true;
-  if (hasFinalCompletionFlag) return null;
-
-  // Keep diagnostics for observability without blocking on non-critical fields.
-  void sportsCount;
-  void getProfilePhotoCount(profile);
-  return "completion_flag_missing";
-}
 
 type AuthState = {
   user: User | null;
@@ -138,11 +99,9 @@ function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T | "timeo
 }
 
 function profileRowToProfile(row: AppProfile): Profile {
-  const onboardingCompleted = (row as { onboarding_completed?: unknown }).onboarding_completed === true;
-  const canonicalProfileCompleted = row.profile_completed === true || onboardingCompleted;
   return {
     ...row,
-    profile_completed: canonicalProfileCompleted,
+    profile_completed: row.profile_completed === true,
     is_photo_verified: !!(row as { is_photo_verified?: boolean | null }).is_photo_verified,
   } as Profile;
 }
@@ -185,23 +144,6 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
   }
 
   const normalized = profileRowToProfile(data as AppProfile);
-  const onboardingCompleted = (data as { onboarding_completed?: unknown }).onboarding_completed === true;
-  if (normalized.profile_completed && data.profile_completed !== true && onboardingCompleted) {
-    console.debug("[AuthContext] backfill profile_completed from onboarding_completed", {
-      userId: userId.slice(0, 8) + "…",
-      profile_completed: data.profile_completed,
-      onboarding_completed: onboardingCompleted,
-    });
-    void supabase
-      .from("profiles")
-      .update({ profile_completed: true, updated_at: new Date().toISOString() })
-      .eq("id", userId)
-      .then(({ error: backfillError }) => {
-        if (backfillError) {
-          console.warn("[AuthContext] backfill profile_completed failed:", backfillError.message);
-        }
-      });
-  }
 
   return normalized;
 }
@@ -215,7 +157,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(true);
-  const [profileSportsCount, setProfileSportsCount] = useState(0);
 
   /** Incrémenté à chaque loadProfile — ignore les réponses obsolètes. */
   const profileLoadGenRef = useRef(0);
@@ -250,11 +191,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         onboarding_completed: (p as { onboarding_completed?: unknown } | null)?.onboarding_completed ?? null,
       });
       setProfile(p);
-      const sportsCount = await fetchProfileSportsCount(userId);
-      if (gen !== profileLoadGenRef.current) {
-        return;
-      }
-      setProfileSportsCount(sportsCount);
     } catch (e) {
       console.warn("[AuthContext] profile load error", e);
     } finally {
@@ -282,10 +218,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const p = await fetchProfile(user.id);
       if (p) {
-        const sportsCount = await fetchProfileSportsCount(user.id);
         flushSync(() => {
           setProfile(p);
-          setProfileSportsCount(sportsCount);
         });
       }
       return p;
@@ -333,7 +267,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
         setSession(null);
         setProfile(null);
-        setProfileSportsCount(0);
         setIsProfileLoading(false);
         setIsLoading(false);
         setIsAuthInitialized(true);
@@ -396,7 +329,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setSession(null);
           setUser(null);
           setProfile(null);
-          setProfileSportsCount(0);
           setIsProfileLoading(false);
           setError(null);
         });
@@ -416,27 +348,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  /** Profil: arrière-plan uniquement, ne bloque pas `isLoading` ni `ProtectedRoute`. */
   useEffect(() => {
     const uid = session?.user?.id;
     if (!uid) {
       setIsProfileLoading(false);
       setProfile(null);
-      setProfileSportsCount(0);
       return;
     }
     setIsProfileLoading(true);
     void loadProfile(uid);
   }, [session?.user?.id, loadProfile]);
 
-  /**
-   * Accès app (Discover, etc.) : source de vérité BDD `profile_completed`
-   * (écrit à la fin d’onboarding) + âge ≥ 18 sur `birth_date`.
-   * Ne pas recalculer via `isOnboardingComplete` : trop fragile si une colonne
-   * manque au fetch (ou schéma partiel) — repli côté cascade `PROFILE_LOAD_TIERS_FOR_AUTH`.
-   */
-  const profileIncompleteReason = getStrictProfileIncompleteReason(profile, profileSportsCount);
-  const isProfileComplete = profileIncompleteReason === null;
+  /** Garde navigation : uniquement la colonne BDD `profile_completed === true` (onboarding success). */
+  const isProfileComplete = profile?.profile_completed === true;
+  const profileIncompleteReason = isProfileComplete ? null : "profile_not_completed";
 
   const value: AuthState = {
     user,

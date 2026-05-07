@@ -1,17 +1,15 @@
 import { type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { Heart, HeartHandshake, MessageCircle, UserRound } from "lucide-react";
-import { SPLove_BOTTOM_NAV_BG } from "../../constants/theme";
 import { formatBadge } from "../../lib/formatBadge";
 import { useTranslation } from "../../i18n/useTranslation";
 
-const ACTIVE = "#E11D2E";
-const ICON_INACTIVE = "rgba(255, 255, 255, 0.52)";
-const LABEL_ACTIVE = "#FFFFFF";
-const LABEL_INACTIVE = "#A1A1AA";
+const ACTIVE = "#FF3B3B";
+const INACTIVE = "#9CA3AF";
+const NAV_BACKGROUND = "#0B0B0F";
+const NAV_BORDER_TOP = "rgba(255,255,255,0.08)";
 
-const ICON_PX = 22;
-const STROKE = 1.5;
+const ICON_PX = 24;
+const STROKE = 1.75;
 
 export type SPLoveBottomNavProps = {
   activeRoute: string;
@@ -36,6 +34,10 @@ function matchActiveProfile(pathname: string): boolean {
   return pathname === "/profile" || pathname.startsWith("/profile/");
 }
 
+function matchActiveEncounters(pathname: string): boolean {
+  return pathname === "/mes-rencontres" || pathname.startsWith("/match/");
+}
+
 export function SPLoveBottomNav({
   activeRoute,
   unreadMessagesCount,
@@ -50,6 +52,7 @@ export function SPLoveBottomNav({
   const isMessages = matchActiveMessages(path);
   const isLikes = matchActiveLikes(path);
   const isProfile = matchActiveProfile(path);
+  const isEncounters = matchActiveEncounters(path);
 
   const msgBadgeShown = unreadMessagesCount > 0;
   const likesBadgeShown = likesCount > 0;
@@ -58,13 +61,13 @@ export function SPLoveBottomNav({
 
   return (
     <nav
-      className="w-full border-t border-white/[0.08]"
-      style={{ backgroundColor: SPLove_BOTTOM_NAV_BG }}
+      className="w-full border-t"
+      style={{ backgroundColor: NAV_BACKGROUND, borderTopColor: NAV_BORDER_TOP }}
       role="navigation"
       aria-label={navLabel}
     >
       <div
-        className="mx-auto flex w-full max-w-lg items-stretch justify-between gap-1 px-1"
+        className="mx-auto flex w-full max-w-lg items-stretch justify-between gap-0.5 px-1"
         style={{
           paddingBottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
           paddingTop: 8,
@@ -75,8 +78,29 @@ export function SPLoveBottomNav({
           label={t("nav_tab_discover")}
           ariaLabel={t("nav_tab_discover")}
           active={isDiscover}
-          icon={(c) => <Heart aria-hidden absoluteStrokeWidth size={ICON_PX} strokeWidth={STROKE} color={c} />}
+          icon={(c) => <DiscoverIcon color={c} />}
           onActivate={() => navigate("/discover")}
+        />
+        <BottomItem
+          label={t("nav_tab_likes")}
+          ariaLabel={
+            likesCount <= 0
+              ? t("nav_tab_likes")
+              : likesCount > 9
+                ? `${t("nav_tab_likes")}, 9+`
+                : `${t("nav_tab_likes")}, ${likesCount}`
+          }
+          active={isLikes}
+          badge={likesBadgeShown ? formatBadge(likesCount) : null}
+          icon={(c) => <PulsesIcon color={c} />}
+          onActivate={() => navigate("/likes-you")}
+        />
+        <BottomItem
+          label={t("nav_tab_encounters")}
+          ariaLabel={t("nav_tab_encounters")}
+          active={isEncounters}
+          icon={(c) => <EncountersIcon color={c} />}
+          onActivate={() => navigate("/mes-rencontres")}
         />
         <BottomItem
           label={t("messages_title")}
@@ -89,20 +113,8 @@ export function SPLoveBottomNav({
           }
           active={isMessages}
           badge={msgBadgeShown ? formatBadge(unreadMessagesCount) : null}
-          icon={(c) => (
-            <MessageCircle aria-hidden absoluteStrokeWidth size={ICON_PX} strokeWidth={STROKE} color={c} />
-          )}
+          icon={(c) => <MessagesIcon color={c} />}
           onActivate={() => navigate("/messages")}
-        />
-        <BottomItem
-          label={t("nav_tab_likes")}
-          ariaLabel={t("nav_tab_likes")}
-          active={isLikes}
-          badge={likesBadgeShown ? formatBadge(likesCount) : null}
-          icon={(c) => (
-            <HeartHandshake aria-hidden absoluteStrokeWidth size={ICON_PX} strokeWidth={STROKE} color={c} />
-          )}
-          onActivate={() => navigate("/likes-you")}
         />
         <BottomItem
           label={t("nav_tab_profile")}
@@ -110,9 +122,7 @@ export function SPLoveBottomNav({
             profileNeedsAction ? `${t("nav_tab_profile")}, ${t("nav_profile_action_aria")}` : t("nav_tab_profile")
           }
           active={isProfile}
-          icon={(c) => (
-            <UserRound aria-hidden absoluteStrokeWidth size={ICON_PX} strokeWidth={STROKE} color={c} />
-          )}
+          icon={(c) => <ProfileIcon color={c} />}
           indicator={profileNeedsAction}
           onActivate={() => navigate("/profile")}
         />
@@ -140,13 +150,13 @@ function BottomItem({
   indicator = false,
   onActivate,
 }: BottomItemProps) {
-  const stroke = active ? ACTIVE : ICON_INACTIVE;
-  const labelColor = active ? LABEL_ACTIVE : LABEL_INACTIVE;
+  const stroke = active ? ACTIVE : INACTIVE;
+  const labelColor = active ? ACTIVE : INACTIVE;
 
   return (
     <button
       type="button"
-      className="flex min-h-[52px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 px-1 py-0.5 [&:focus-visible]:outline [&:focus-visible]:outline-2 [&:focus-visible]:outline-offset-[-2px] [&:focus-visible]:outline-white/30"
+      className="flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 px-1 py-0.5 [&:focus-visible]:outline [&:focus-visible]:outline-2 [&:focus-visible]:outline-offset-[-2px] [&:focus-visible]:outline-white/30"
       style={{
         WebkitTapHighlightColor: "transparent",
         background: "transparent",
@@ -160,13 +170,6 @@ function BottomItem({
     >
       <span className="relative inline-flex shrink-0 items-center justify-center pb-1">
         <span aria-hidden>{icon(stroke)}</span>
-        {active ? (
-          <span
-            aria-hidden
-            className="pointer-events-none absolute bottom-0 left-1/2 h-[3px] w-[3px] -translate-x-1/2 rounded-full"
-            style={{ backgroundColor: ACTIVE }}
-          />
-        ) : null}
         {badge ? (
           <span
             className="pointer-events-none absolute -right-1.5 -top-1 flex h-[17px] min-w-[17px] items-center justify-center rounded-full px-[5px] text-[10px] font-semibold leading-none text-white"
@@ -182,7 +185,7 @@ function BottomItem({
             className="pointer-events-none absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full"
             style={{
               backgroundColor: ACTIVE,
-              boxShadow: `0 0 0 2px ${SPLove_BOTTOM_NAV_BG}`,
+              boxShadow: `0 0 0 2px ${NAV_BACKGROUND}`,
             }}
           />
         ) : null}
@@ -194,5 +197,71 @@ function BottomItem({
         {label}
       </span>
     </button>
+  );
+}
+
+function IconFrame({ children, color }: { children: ReactNode; color: string }) {
+  return (
+    <svg
+      aria-hidden
+      width={ICON_PX}
+      height={ICON_PX}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth={STROKE}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {children}
+    </svg>
+  );
+}
+
+function DiscoverIcon({ color }: { color: string }) {
+  return (
+    <IconFrame color={color}>
+      <path d="M12 20.2c-3-2.25-5.6-4.45-5.6-7.2A3.1 3.1 0 0 1 9.6 9.8c1 0 1.8.45 2.4 1.15.6-.7 1.4-1.15 2.4-1.15A3.1 3.1 0 0 1 17.6 13c0 2.75-2.6 4.95-5.6 7.2Z" />
+      <circle cx="12" cy="12" r="8.2" />
+      <path d="M18.3 5.7 20.6 3.4" />
+    </IconFrame>
+  );
+}
+
+function PulsesIcon({ color }: { color: string }) {
+  return (
+    <IconFrame color={color}>
+      <path d="M12 20.2c-3-2.25-5.6-4.45-5.6-7.2A3.1 3.1 0 0 1 9.6 9.8c1 0 1.8.45 2.4 1.15.6-.7 1.4-1.15 2.4-1.15A3.1 3.1 0 0 1 17.6 13c0 2.75-2.6 4.95-5.6 7.2Z" />
+      <path d="M5 12h2.3l1.4-2.3 2.1 4.8 1.7-3.1H15l1.1-1.7L19 12h0" />
+    </IconFrame>
+  );
+}
+
+function EncountersIcon({ color }: { color: string }) {
+  return (
+    <IconFrame color={color}>
+      <rect x="4.5" y="6.5" width="15" height="13" rx="2.5" />
+      <path d="M8 4.8v3.2M16 4.8v3.2M4.5 10h15" />
+      <path d="M15.5 15.8 17.2 14l-1.15-.05.55-1.2-1.65 1.8 1.1.05Z" />
+    </IconFrame>
+  );
+}
+
+function MessagesIcon({ color }: { color: string }) {
+  return (
+    <IconFrame color={color}>
+      <path d="M5.5 6.5h13a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H12l-3.5 2.5v-2.5H5.5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z" />
+      <path d="M9 12h1.7l.8-1.3 1.2 2.3 1-1.6H16" />
+    </IconFrame>
+  );
+}
+
+function ProfileIcon({ color }: { color: string }) {
+  return (
+    <IconFrame color={color}>
+      <circle cx="12" cy="8.2" r="2.9" />
+      <path d="M6.2 18.1c.7-2.3 2.9-3.8 5.8-3.8 2.9 0 5.1 1.5 5.8 3.8" />
+      <path d="M6.4 9.5c-.7 2.1-.5 4.2.7 6" />
+    </IconFrame>
   );
 }

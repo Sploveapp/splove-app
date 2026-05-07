@@ -23,6 +23,7 @@ import {
   setActivitySuggestionDismissedInStorage,
 } from "../lib/matchActivitySuggestion";
 import { fetchPairSportPracticeTypes } from "../lib/matchPairPracticeTypes";
+import "../styles/animations.css";
 
 export type MatchLocationState = {
   partnerFirstName?: string | null;
@@ -219,14 +220,14 @@ export default function Match() {
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-app-bg font-sans">
       <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-5 py-10">
-        <div className="rounded-3xl border border-app-border bg-app-card px-6 py-10 text-center shadow-sm ring-1 ring-app-border">
+        <div className="match-premium-reveal rounded-3xl border border-app-border bg-app-card px-6 py-10 text-center shadow-sm ring-1 ring-app-border">
           {partnerPhoto && (
-            <div className="mx-auto w-28 overflow-hidden rounded-2xl ring-2 ring-app-border">
+            <div className="match-avatar-glow mx-auto w-28 overflow-hidden rounded-2xl ring-2 ring-app-border">
               {partnerPhotoDisplay ? (
                 <img
                   src={partnerPhotoDisplay}
                   alt={partnerName ? `${t("photo_of")} ${partnerName}` : t("profile_photo")}
-                  className="aspect-[3/4] h-full w-full object-cover"
+                  className="match-avatar-micro aspect-[3/4] h-full w-full object-cover"
                 />
               ) : (
                 <div className="aspect-[3/4] w-full bg-app-border" />

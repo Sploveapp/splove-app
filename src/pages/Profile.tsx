@@ -21,8 +21,6 @@ import { reverseGeocodeCity } from "../lib/geocoding";
 import { updateProfileLocation } from "../lib/profileLocation";
 import { IconSignOut } from "../components/ui/Icon";
 
-const FEATURE_COMING_SOON_MESSAGE = "Fonction bientot disponible";
-
 const SPORT_PHRASE_MAX_LEN = 120;
 
 const MEETUP_HOUR_MS = 60 * 60 * 1000;
@@ -110,7 +108,7 @@ export default function Profile() {
   const mainPhoto = profile?.main_photo_url?.trim() || null;
   const mainPhotoDisplay = useProfilePhotoSignedUrl(mainPhoto) ?? null;
   const [imageError, setImageError] = useState(false);
-  const [comingSoonOpen, setComingSoonOpen] = useState(false);
+  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null);
   const [growth, setGrowth] = useState<GrowthProfileRow | null>(null);
   const [growthLinkCopied, setGrowthLinkCopied] = useState(false);
   const [needsAdaptedActivities, setNeedsAdaptedActivities] = useState(false);
@@ -159,13 +157,13 @@ export default function Profile() {
   }, [profile]);
 
   useEffect(() => {
-    if (!comingSoonOpen) return;
+    if (!selectedPhotoUrl) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setComingSoonOpen(false);
+      if (e.key === "Escape") setSelectedPhotoUrl(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [comingSoonOpen]);
+  }, [selectedPhotoUrl]);
 
   useEffect(() => {
     if (accessibilityMessage !== ACCESSIBILITY_SAVE_SUCCESS) return;
@@ -483,19 +481,22 @@ export default function Profile() {
               marginBottom: "20px",
             }}
           >
-            <button
-              type="button"
-              style={sectionHeadingButtonStyle}
-              onClick={() => setComingSoonOpen(true)}
-              aria-haspopup="dialog"
+            <span
+              style={{
+                ...sectionHeadingButtonStyle,
+                cursor: "default",
+              }}
+              className="select-none"
             >
               {t("photos.primary")}
-            </button>
+            </span>
             {mainPhoto && !imageError ? (
               <button
                 type="button"
-                onClick={() => setComingSoonOpen(true)}
-                aria-label={`${FEATURE_COMING_SOON_MESSAGE}. ${t("photos.primary")}.`}
+                onClick={() => {
+                  if (mainPhotoDisplay) setSelectedPhotoUrl(mainPhotoDisplay);
+                }}
+                aria-label={t("view_photo")}
                 style={{
                   marginBottom: "16px",
                   padding: 0,
@@ -540,15 +541,10 @@ export default function Profile() {
                 )}
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={() => setComingSoonOpen(true)}
+              <p
                 style={{
                   margin: "0 0 16px 0",
                   padding: 0,
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
                   display: "block",
                   width: "100%",
                   textAlign: "left",
@@ -559,7 +555,7 @@ export default function Profile() {
                 {mainPhoto && imageError
                   ? "La photo principale existe mais ne peut pas être chargée."
                   : "Aucune photo principale enregistrée."}
-              </button>
+              </p>
             )}
             <div>
               <span
@@ -1439,75 +1435,35 @@ export default function Profile() {
           </>
         )}
       </main>
-      {comingSoonOpen ? (
+      {selectedPhotoUrl ? (
         <div
           role="presentation"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 60,
-            background: "rgba(15, 23, 42, 0.45)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "20px",
-          }}
-          onClick={() => setComingSoonOpen(false)}
+          className="fixed inset-0 z-50 bg-black/80"
+          onClick={() => setSelectedPhotoUrl(null)}
         >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="profile-coming-soon-title"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "100%",
-              maxWidth: "340px",
-              borderRadius: "20px",
-              background: APP_CARD,
-              padding: "24px",
-              boxShadow: "0 12px 40px rgba(0,0,0,0.18)",
+          <button
+            type="button"
+            className="absolute right-4 top-4 z-[60] flex h-11 min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-white/20 bg-black/60 text-[28px] font-light leading-none text-white shadow-lg hover:bg-black/75 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+            aria-label={t("close")}
+            onClick={(e) => {
+              e.stopPropagation();
+              setSelectedPhotoUrl(null);
             }}
           >
-            <h2
-              id="profile-coming-soon-title"
-              style={{
-                margin: "0 0 10px 0",
-                fontSize: "18px",
-                fontWeight: 700,
-                color: APP_TEXT,
-                lineHeight: 1.3,
-              }}
+            ×
+          </button>
+          <div className="pointer-events-none flex h-full w-full touch-manipulation items-center justify-center p-4">
+            <div
+              className="pointer-events-auto"
+              role="presentation"
+              onClick={(e) => e.stopPropagation()}
             >
-              {FEATURE_COMING_SOON_MESSAGE}
-            </h2>
-            <p
-              style={{
-                margin: "0 0 20px 0",
-                fontSize: "14px",
-                fontWeight: 500,
-                color: APP_TEXT_MUTED,
-                lineHeight: 1.5,
-              }}
-            >
-              {t("profile_coming_soon_desc")}
-            </p>
-            <button
-              type="button"
-              onClick={() => setComingSoonOpen(false)}
-              style={{
-                width: "100%",
-                padding: "12px 14px",
-                borderRadius: "12px",
-                border: "none",
-                background: BRAND_BG,
-                color: TEXT_ON_BRAND,
-                fontSize: "14px",
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              {t("ok")}
-            </button>
+              <img
+                src={selectedPhotoUrl}
+                alt=""
+                className="max-h-[85vh] max-w-[95vw] object-contain shadow-2xl"
+              />
+            </div>
           </div>
         </div>
       ) : null}

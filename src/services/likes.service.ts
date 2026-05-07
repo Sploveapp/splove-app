@@ -15,7 +15,27 @@ export type CreateLikeRpcResult = {
 };
 
 const PROFILE_SELECT =
-  "id, first_name, city, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, sport_time, is_photo_verified, photo_status, profile_sports(sports(label, slug))";
+  "id, first_name, city, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, sport_time, is_photo_verified, photo_status, profile_completed, is_active, is_paused, is_banned, deleted_at, profile_sports(sports(label, slug))";
+
+type LikesProfileVisibilityFields = {
+  profile_completed?: boolean | null;
+  is_active?: boolean | null;
+  is_paused?: boolean | null;
+  is_banned?: boolean | null;
+  deleted_at?: string | null;
+};
+
+function isLikeProfileVisible(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const p = raw as LikesProfileVisibilityFields;
+  return (
+    p.profile_completed === true &&
+    p.is_active === true &&
+    p.is_paused === false &&
+    p.is_banned === false &&
+    p.deleted_at == null
+  );
+}
 
 /** Préférences viewer — alignées Discover / `useAuth().profile` (prioritaires sur la ligne DB si fournies). */
 export type ViewerPreferenceFields = {
@@ -250,8 +270,9 @@ export async function getLikesReceived(
     profile: profileMap.get(l.liker_id),
   })) as LikeReceived[];
 
-  const beforeCompat = mapped.length;
-  const filtered = filterLikeRowsByViewerPreference(meForCompat, mapped);
+  const withVisibleProfilesOnly = mapped.filter((row) => isLikeProfileVisible(row.profile));
+  const beforeCompat = withVisibleProfilesOnly.length;
+  const filtered = filterLikeRowsByViewerPreference(meForCompat, withVisibleProfilesOnly);
   logPreferenceCompatibilityPipeline(
     "LikesYou",
     meForCompat,
@@ -259,16 +280,26 @@ export async function getLikesReceived(
     filtered.length,
     filtered.map((r) => r.profile?.first_name?.trim() ?? "").filter(Boolean),
   );
+  console.log("[VISIBLE_LIKES_COUNT] list_consistency", {
+    incoming_raw: likesData.length,
+    after_block_filter: visible.length,
+    with_profile_visibility_rules: withVisibleProfilesOnly.length,
+    final_visible: filtered.length,
+  });
 
   return filtered;
 }
 
-/** Compteur léger pour badge onglet (likes entrants hors bloqués ; sans filtre préférences comme l’écran Likes). */
+/** Badge strictement aligné avec la liste réellement visible (mêmes filtres). */
 export async function fetchIncomingNonBlockedLikesCount(currentUserId: string): Promise<number> {
-  const blocked = await fetchBlockedRelatedUserIds();
-  const { rows, error } = await fetchIncomingLikeRows(currentUserId);
-  if (error || !rows?.length) return 0;
-  return rows.filter((l) => !blocked.has(l.liker_id)).length;
+  const visible = await getLikesReceived(currentUserId, null);
+  const count = visible.length;
+  console.log("[VISIBLE_LIKES_COUNT] badge_consistency", {
+    currentUserId,
+    count,
+    has_at_least_one_visible_profile: count > 0,
+  });
+  return count;
 }
 
 function extractLikeRpcRow(data: unknown): Record<string, unknown> | null {

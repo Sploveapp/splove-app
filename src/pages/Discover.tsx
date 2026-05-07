@@ -40,16 +40,10 @@ import {
   intentLabelShort,
   softAreaHint,
 } from "../lib/discoverCardCopy";
-import {
-  buildDiscoverScore,
-  computeDiscoverMatchScoreBreakdown,
-  computeReliabilityScore,
-  getReliabilityUiHints,
-} from "../lib/discoverScore";
+import { buildDiscoverScore, computeReliabilityScore, getReliabilityUiHints } from "../lib/discoverScore";
 import { scoreAndFilterDiscoverCandidates } from "../services/discoverScoring.service";
 import { buildDiscoverLocationLines, formatViewerRadiusLabel } from "../utils/geolocation";
 import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
-import { isProfileActiveRecently } from "../services/splovePlus.service";
 import { usePremium } from "../hooks/usePremium";
 import { useSplovePlus } from "../hooks/useSplovePlus";
 import { useTranslation } from "../i18n/useTranslation";
@@ -104,6 +98,9 @@ type Profile = {
   looking_for?: string | null;
   /** Type de rencontre (BDD : Amical | Amoureux). */
   intent?: string | null;
+  /** Ouverture pratique adaptée (migration 094+) */
+  open_to_adapted_activities?: string | null;
+  pref_open_to_adapted_activity?: boolean | null;
   sport_phrase?: string | null;
   sport_time?: string | null;
   /** Voir `profiles.is_photo_verified` (Veriff). */
@@ -571,28 +568,23 @@ function isProfileGhostActive(profileId: string): boolean {
   }
 }
 
-function isIntentCompatibleForBoost(viewerIntentRaw: string | null | undefined, candidateIntentRaw: string | null | undefined): boolean {
-  const viewerIntent = parseProfileIntent(viewerIntentRaw);
-  const candidateIntent = parseProfileIntent(candidateIntentRaw);
-  if (viewerIntent && candidateIntent) return viewerIntent === candidateIntent;
-  const rawViewer = String(viewerIntentRaw ?? "").trim().toLowerCase();
-  const rawCandidate = String(candidateIntentRaw ?? "").trim().toLowerCase();
-  const viewerBoth = rawViewer === "both" || rawViewer === "les deux";
-  const candidateBoth = rawCandidate === "both" || rawCandidate === "les deux";
-  if (viewerBoth || candidateBoth) return true;
-  return false;
-}
-
-function computeBoostRankingScore(
-  profile: ProfileWithAffinity,
-  viewerIntentRaw: string | null | undefined,
-): number {
-  const baseScore = Number.isFinite(profile.discoverScore) ? profile.discoverScore : 0;
-  const boostBonus = profile.is_boost_active === true ? 300 : 0;
-  const sportsBonus = profile.commonSportsCount > 0 ? 100 : 0;
-  const intentBonus = isIntentCompatibleForBoost(viewerIntentRaw, profile.intent) ? 80 : 0;
-  const activityBonus = isProfileActiveRecently(profile.last_active_at) ? 40 : 0;
-  return baseScore + boostBonus + sportsBonus + intentBonus + activityBonus;
+/** TRI Discover V3 + mode actif SPLove+ (tie-break). */
+function sortDiscoverProfileStack(a: ProfileWithAffinity, b: ProfileWithAffinity, hasPlus: boolean): number {
+  if (hasPlus) {
+    const aActive = a.is_active_mode === true ? 1 : 0;
+    const bActive = b.is_active_mode === true ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+  }
+  const bd = Number(b.discoverScore) || 0;
+  const ad = Number(a.discoverScore) || 0;
+  if (bd !== ad) return bd - ad;
+  const bp = Number(b.practice_score) || 0;
+  const ap = Number(a.practice_score) || 0;
+  if (bp !== ap) return bp - ap;
+  const bLab = safeTimeMs(b.last_active_at);
+  const aLab = safeTimeMs(a.last_active_at);
+  if (bLab !== aLab) return bLab - aLab;
+  return safeTimeMs(b.created_at) - safeTimeMs(a.created_at);
 }
 
 type LikeRpcParsed = { is_match: boolean; conversation_id: string | null };
@@ -669,6 +661,8 @@ function safeTimeMs(iso: string | null | undefined): number {
 const DISCOVER_DISPLAY_LIMIT = 10;
 /** Source Supabase du fil Discover (classement serveur) — repli côté client si colonne absente. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
+const DISCOVER_FALLBACK_SELECT =
+  "id, first_name, city, birth_date, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, open_to_adapted_activities, pref_open_to_adapted_activity, sport_phrase, sport_time, is_photo_verified, photo_status, needs_adapted_activities, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, profile_sports(sports(label, slug))";
 
 /** Message utilisateur sûr (aucun détail technique backend). */
 function discoverFetchFailedMsg(language: "fr" | "en"): string {
@@ -1291,7 +1285,7 @@ export default function Discover() {
           supabase
             .from("profiles")
             .select(
-              "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, sport_practice_type, profile_sports(sports(label, slug))",
+              "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, sport_practice_type, sport_time, open_to_adapted_activities, pref_open_to_adapted_activity, profile_sports(sports(label, slug))",
             )
             .eq("id", currentUserId)
             .maybeSingle(),
@@ -1444,15 +1438,8 @@ export default function Discover() {
 
   useEffect(() => {
     if (!hasPlus) return;
-    setProfiles((prev) =>
-      [...prev].sort((a, b) => {
-        const aActive = a.is_active_mode === true ? 1 : 0;
-        const bActive = b.is_active_mode === true ? 1 : 0;
-        if (aActive !== bActive) return bActive - aActive;
-        return computeBoostRankingScore(b, profile?.intent ?? null) - computeBoostRankingScore(a, profile?.intent ?? null);
-      }),
-    );
-  }, [hasPlus, profile?.intent]);
+    setProfiles((prev) => [...prev].sort((a, b) => sortDiscoverProfileStack(a, b, true)));
+  }, [hasPlus]);
 
   async function loadProfiles() {
     if (!currentUserId) {
@@ -1478,7 +1465,7 @@ export default function Discover() {
         supabase
         .from("profiles")
         .select(
-          "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, sport_practice_type, profile_sports(sports(label, slug))"
+          "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, sport_practice_type, sport_time, open_to_adapted_activities, pref_open_to_adapted_activity, profile_sports(sports(label, slug))",
         )
         .eq("id", currentUserId)
         .maybeSingle(),
@@ -1542,7 +1529,7 @@ export default function Discover() {
         return;
       }
 
-      const profilesFromRpc: Profile[] = ((data ?? []) as DiscoverAliveRow[])
+      let profilesFromRpc: Profile[] = ((data ?? []) as DiscoverAliveRow[])
         .filter((row): row is DiscoverAliveRow & { profile: Profile } =>
           isValidProfileId(row.profile?.id),
         )
@@ -1553,6 +1540,49 @@ export default function Discover() {
           vibe_label: row.vibe_label,
           feed_reason: row.feed_reason,
         }));
+
+      if (BETA_MODE || profilesFromRpc.length === 0) {
+        const { data: fallbackRows, error: fallbackErr } = await supabase
+          .from("profiles")
+          .select(DISCOVER_FALLBACK_SELECT)
+          .eq("profile_completed", true)
+          .neq("id", currentUserId)
+          .limit(120);
+        if (fallbackErr) {
+          console.warn("[Discover fallback] profiles query failed", fallbackErr.message);
+        } else {
+          const fallbackProfiles = ((fallbackRows ?? []) as unknown as Profile[])
+            .map((p) => ({
+              ...p,
+              profile_sports: Array.isArray(p.profile_sports)
+                ? p.profile_sports.map((entry) => {
+                    const rawSports = (entry as { sports?: unknown } | null)?.sports;
+                    if (Array.isArray(rawSports)) {
+                      const first = rawSports[0] as { label?: string | null; slug?: string | null } | undefined;
+                      return { sports: first ? { label: first.label ?? null, slug: first.slug ?? null } : null };
+                    }
+                    return entry as { sports: { label: string | null; slug?: string | null } | null };
+                  })
+                : [],
+            }))
+            .filter((p) => isValidProfileId(p?.id));
+          if (profilesFromRpc.length === 0) {
+            profilesFromRpc = fallbackProfiles;
+          } else if (fallbackProfiles.length > 0) {
+            const byId = new Map<string, Profile>();
+            for (const p of profilesFromRpc) byId.set(p.id, p);
+            for (const p of fallbackProfiles) {
+              if (!byId.has(p.id)) byId.set(p.id, p);
+            }
+            profilesFromRpc = [...byId.values()];
+          }
+          console.log("[Discover fallback] using city/sport fallback feed", {
+            count: profilesFromRpc.length,
+            rpc_count: ((data ?? []) as DiscoverAliveRow[]).length,
+            fallback_count: fallbackProfiles.length,
+          });
+        }
+      }
       console.log("[Discover feed] raw profiles count:", profilesFromRpc.length);
       let raw: Profile[] = profilesFromRpc;
       if (BETA_MODE) {
@@ -1648,23 +1678,59 @@ export default function Discover() {
         }
       }
 
+      const sploveFlagsById = new Map<string, { boost: boolean; priority_meet: boolean }>();
+      if (stage.length > 0) {
+        const { data: flagRows, error: flagErr } = await supabase.rpc(
+          "discover_candidate_splove_ranking_flags",
+          { p_candidate_ids: stage.map((p) => p.id) },
+        );
+        if (flagErr) {
+          console.warn("[Discover feed] discover_candidate_splove_ranking_flags:", flagErr.message);
+        } else {
+          for (const row of (flagRows ?? []) as {
+            profile_id?: string;
+            boost_active?: boolean;
+            priority_meet_active?: boolean;
+          }[]) {
+            const pid = typeof row.profile_id === "string" ? row.profile_id : "";
+            if (!pid) continue;
+            sploveFlagsById.set(pid, {
+              boost: row.boost_active === true,
+              priority_meet: row.priority_meet_active === true,
+            });
+          }
+        }
+      }
+
+      const meAdapted =
+        meProfile as Profile & {
+          open_to_adapted_activities?: string | null;
+          pref_open_to_adapted_activity?: boolean | null;
+        };
+
       const discoverFiltered: ProfileWithAffinity[] = scoreAndFilterDiscoverCandidates(
         stage.map((p) => ({ ...p, has_shared_place: sharedPlaceById.get(p.id) === true })),
         {
           viewerId: currentUserId,
           viewer: {
             id: currentUserId,
+            city: meProfile.city ?? null,
             gender: meProfile.gender ?? null,
             looking_for: meProfile.looking_for ?? null,
             intent: meProfile.intent ?? null,
             sport_practice_type: meProfile.sport_practice_type ?? null,
+            sport_time: meProfile.sport_time ?? null,
+            discovery_radius_km: meProfile.discovery_radius_km ?? null,
+            open_to_adapted_activities: meAdapted.open_to_adapted_activities ?? null,
+            pref_open_to_adapted_activity: meAdapted.pref_open_to_adapted_activity ?? null,
           },
           likedIds,
           matchedIds,
           blockedIds: blockExclude,
           mySportMatchKeys: sportsSet,
           distanceById: distById,
-        }
+          sploveFlagsById,
+        },
       ).map((p) => ({
         ...p,
         reliabilityScore: computeReliabilityScore(p),
@@ -1697,34 +1763,25 @@ export default function Discover() {
 
       for (let i = 0; i < discoverFiltered.length; i += 1) {
         const p = discoverFiltered[i];
-        discoverFiltered[i] = { ...p, is_boost_active: isProfileBoostActive(p.id) };
+        const serverBoost = sploveFlagsById.get(p.id)?.boost === true;
+        discoverFiltered[i] = {
+          ...p,
+          is_boost_active: serverBoost || isProfileBoostActive(p.id),
+        };
       }
 
-      discoverFiltered.sort((a, b) => {
-        if (hasPlus) {
-          // TODO: add +200 ranking score in Discover for active_meetup_mode.
-          const aActive = a.is_active_mode === true ? 1 : 0;
-          const bActive = b.is_active_mode === true ? 1 : 0;
-          if (aActive !== bActive) return bActive - aActive;
-        }
-        return computeBoostRankingScore(b, meProfile.intent ?? null) - computeBoostRankingScore(a, meProfile.intent ?? null);
-      });
+      discoverFiltered.sort((a, b) => sortDiscoverProfileStack(a, b, hasPlus));
 
       if (import.meta.env.DEV && discoverFiltered.length > 0) {
         for (const p of discoverFiltered.slice(0, 12)) {
-          try {
-            const b = computeDiscoverMatchScoreBreakdown(p, p.commonSportsCount);
-            console.debug("[Discover score]", p.first_name ?? p.id, {
-              reliability: p.reliabilityScore,
-              match: b,
-              score: p.discoverScore,
-              sharedSportsCount: p.commonSportsCount,
-              distanceKm: p.distanceKm,
-              reasons: p.discover_reasons,
-            });
-          } catch (e) {
-            console.error("[Discover score] breakdown debug failed", { id: p.id, err: e });
-          }
+          console.debug("[Discover score V3]", p.first_name ?? p.id, {
+            reliability: p.reliabilityScore,
+            score: p.discoverScore,
+            practice_score: p.practice_score,
+            sharedSportsCount: p.commonSportsCount,
+            distanceKm: p.distanceKm,
+            reasons: p.discover_reasons,
+          });
         }
       }
 

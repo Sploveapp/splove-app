@@ -24,9 +24,19 @@ import SecondChanceDecision from "./pages/SecondChanceDecision";
 import Analytics from "./pages/Analytics";
 import InviteFriendScreen from "./screens/InviteFriendScreen";
 import Notifications from "./pages/Notifications";
+import LegalCGU from "./pages/LegalCGU.tsx";
+import PrivacyPolicy from "./pages/PrivacyPolicy.tsx";
 function App() {
   if (window.location.pathname === "/auth/callback" && !window.location.hash) {
     window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/auth/callback${window.location.search}`);
+    return null;
+  }
+  if (window.location.pathname === "/cgu" && !window.location.hash) {
+    window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/cgu`);
+    return null;
+  }
+  if (window.location.pathname === "/privacy" && !window.location.hash) {
+    window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/privacy`);
     return null;
   }
 
@@ -41,6 +51,8 @@ function App() {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/onboarding" element={<Onboarding />} />
+          <Route path="/cgu" element={<LegalCGU />} />
+          <Route path="/privacy" element={<PrivacyPolicy />} />
           <Route
             path="/*"
             element={

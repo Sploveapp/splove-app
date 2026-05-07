@@ -1,18 +1,18 @@
-import {
-  PRACTICE_SCORE_GOOD,
-  PRACTICE_SCORE_VERY_HIGH,
-  practiceCompatibilityScore,
-} from "../lib/sportPracticeCompatibilityScore";
+import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
 import { getSharedSportLabelsForMatch } from "../lib/sportMatchGroups";
+import { evaluateDiscoverV3, viewerOpenAdaptedResolved } from "../lib/discoverScoreV3";
+import { BETA_MODE } from "../constants/beta";
 
 type DiscoverProfile = {
   id: string;
   first_name?: string | null;
+  city?: string | null;
   created_at?: string | null;
   last_active_at?: string | null;
   gender?: string | null;
   looking_for?: string | null;
   intent?: string | null;
+  sport_time?: string | null;
   main_photo_url?: string | null;
   portrait_url?: string | null;
   fullbody_url?: string | null;
@@ -23,15 +23,22 @@ type DiscoverProfile = {
   banned_until?: string | null;
   status?: string | null;
   photo_status?: string | null;
+  needs_adapted_activities?: boolean | null;
+  is_photo_verified?: boolean | null;
   [key: string]: unknown;
 };
 
 type ViewerProfile = {
   id?: string | null;
+  city?: string | null;
   gender?: string | null;
   looking_for?: string | null;
   intent?: string | null;
   sport_practice_type?: string | null;
+  sport_time?: string | null;
+  open_to_adapted_activities?: string | null;
+  pref_open_to_adapted_activity?: boolean | null;
+  discovery_radius_km?: number | null;
 };
 
 export type DiscoverScoringContext = {
@@ -42,6 +49,8 @@ export type DiscoverScoringContext = {
   blockedIds?: Set<string>;
   mySportMatchKeys: Set<string>;
   distanceById: Map<string, number | null>;
+  /** SPLove+ visibility / meeting priority from `discover_candidate_splove_ranking_flags` RPC */
+  sploveFlagsById?: Map<string, { boost: boolean; priority_meet: boolean }>;
 };
 
 export type DiscoverScoredCandidate<T extends DiscoverProfile> = T & {
@@ -68,6 +77,12 @@ function normalizeToken(raw: string | null | undefined): string {
     .replace(/[^a-z0-9_, -]+/g, "");
 }
 
+function isSameCity(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ca = normalizeToken(a);
+  const cb = normalizeToken(b);
+  return Boolean(ca && cb && ca === cb);
+}
+
 function canonicalGender(raw: string | null | undefined): string | null {
   const t = normalizeToken(raw);
   if (!t) return null;
@@ -84,7 +99,10 @@ function canonicalGender(raw: string | null | undefined): string | null {
 
 function parseLookingFor(raw: string | null | undefined): Set<string> {
   const out = new Set<string>();
-  const source = normalizeToken(raw).split(",").map((x) => x.trim()).filter(Boolean);
+  const source = normalizeToken(raw)
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
   for (const t of source) {
     if (["tous", "all", "everyone"].includes(t)) {
       out.clear();
@@ -109,23 +127,8 @@ function lookingForAcceptsGender(lookingFor: Set<string>, gender: string | null)
   return lookingFor.has(gender);
 }
 
-function parseIntent(raw: string | null | undefined): "sport_social" | "dating" | "both" | null {
-  const t = normalizeToken(raw);
-  if (!t) return null;
-  if (["amical", "friendly", "sport_social"].includes(t)) return "sport_social";
-  if (["amoureux", "dating", "dating_feeling"].includes(t)) return "dating";
-  if (["both", "les deux"].includes(t)) return "both";
-  return null;
-}
-
 function hasMainPhoto(candidate: DiscoverProfile): boolean {
   return typeof candidate.main_photo_url === "string" && candidate.main_photo_url.trim().length > 0;
-}
-
-function hasTwoPhotos(candidate: DiscoverProfile): boolean {
-  const portrait = typeof candidate.portrait_url === "string" && candidate.portrait_url.trim().length > 0;
-  const full = typeof candidate.fullbody_url === "string" && candidate.fullbody_url.trim().length > 0;
-  return portrait && full;
 }
 
 function isBanned(candidate: DiscoverProfile): boolean {
@@ -135,44 +138,19 @@ function isBanned(candidate: DiscoverProfile): boolean {
   return bannedUntilMs > Date.now();
 }
 
-function getDistancePoints(distanceKm: number | null): number {
-  if (distanceKm == null || !Number.isFinite(distanceKm)) return 0;
-  if (distanceKm < 5) return 15;
-  if (distanceKm < 15) return 10;
-  if (distanceKm < 30) return 5;
-  return 0;
-}
-
-function getActivityPoints(lastActiveAt: string | null | undefined): number {
-  const t = safeTimeMs(lastActiveAt);
-  if (!t) return 0;
-  const hours = (Date.now() - t) / (1000 * 60 * 60);
-  if (hours < 24) return 10;
-  if (hours < 24 * 7) return 5;
-  return 0;
-}
-
-function getSportsPoints(sharedCount: number): number {
-  if (sharedCount >= 3) return 40;
-  if (sharedCount === 2) return 28;
-  if (sharedCount === 1) return 15;
-  return 0;
-}
-
-function getCompletenessBonus(candidate: DiscoverProfile): number {
-  let bonus = 0;
-  if (candidate.sport_phrase && String(candidate.sport_phrase).trim().length > 0) bonus += 5;
-  if (hasTwoPhotos(candidate)) bonus += 5;
-  return bonus;
-}
+/** Exclude hard incompatible inclusivity (viewer « no » vs adapted candidate). */
+const INCLUSIVITY_EXCLUDE_THRESHOLD = -10;
 
 export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
   candidates: T[],
-  ctx: DiscoverScoringContext
+  ctx: DiscoverScoringContext,
 ): DiscoverScoredCandidate<T>[] {
   const viewerGender = canonicalGender(ctx.viewer.gender);
   const viewerLookingFor = parseLookingFor(ctx.viewer.looking_for);
-  const viewerIntent = parseIntent(ctx.viewer.intent);
+  const viewerOpenTier = viewerOpenAdaptedResolved(
+    ctx.viewer.open_to_adapted_activities ?? null,
+    ctx.viewer.pref_open_to_adapted_activity ?? null,
+  );
 
   const kept: DiscoverScoredCandidate<T>[] = [];
 
@@ -190,7 +168,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       ctx.mySportMatchKeys,
       candidate as {
         profile_sports?: { sports?: { slug?: string | null; label?: string | null } | null }[] | null;
-      }
+      },
     );
     const sharedCount = sharedSports.length;
     if (sharedCount < 1) excludedReasons.push("no_shared_sports");
@@ -201,9 +179,15 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const themToMe = lookingForAcceptsGender(candidateLookingFor, viewerGender);
     if (!meToThem || !themToMe) excludedReasons.push("preference_incompatible");
 
+    const distanceKm = ctx.distanceById.get(candidate.id) ?? null;
+    const viewerRadius =
+      typeof ctx.viewer.discovery_radius_km === "number" && Number.isFinite(ctx.viewer.discovery_radius_km)
+        ? ctx.viewer.discovery_radius_km
+        : null;
+
     if (excludedReasons.length > 0) {
       if (import.meta.env.DEV) {
-        console.debug("[Discover scoring] excluded", {
+        console.debug("[Discover scoring V3] excluded", {
           id: candidate.id,
           first_name: candidate.first_name,
           reasons: excludedReasons,
@@ -212,50 +196,80 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       continue;
     }
 
-    const candidateIntent = parseIntent(candidate.intent);
-    const intentCompatible =
-      viewerIntent != null &&
-      candidateIntent != null &&
-      (viewerIntent === "both" || candidateIntent === "both" || viewerIntent === candidateIntent);
+    const flags = ctx.sploveFlagsById?.get(candidate.id);
+    const boostActive = flags?.boost === true;
+    const priorityActive = flags?.priority_meet === true;
 
-    const distanceKm = ctx.distanceById.get(candidate.id) ?? null;
+    const v3 = evaluateDiscoverV3({
+      sharedSportsCount: sharedCount,
+      viewerIntent: ctx.viewer.intent,
+      candidateIntent: candidate.intent,
+      viewerSportTime: ctx.viewer.sport_time,
+      candidateSportTime: candidate.sport_time,
+      viewerDiscoveryRadiusKm: viewerRadius,
+      distanceKm,
+      viewerOpenResolved: viewerOpenTier,
+      candidateNeedsAdapted: candidate.needs_adapted_activities,
+      candidateSportPracticeType: (candidate as { sport_practice_type?: string | null }).sport_practice_type,
+      candidatePhotoStatus: candidate.photo_status,
+      candidatePhotoVerified: candidate.is_photo_verified,
+      candidateProfileCompleted: candidate.profile_completed,
+      boostActive,
+      priorityMeetActive: priorityActive,
+    });
+
+    if (v3.outside_radius) {
+      if (import.meta.env.DEV) {
+        console.debug("[Discover scoring V3] excluded", {
+          id: candidate.id,
+          first_name: candidate.first_name,
+          reasons: ["outside_radius"],
+        });
+      }
+      continue;
+    }
+    if (v3.inclusivity_raw < INCLUSIVITY_EXCLUDE_THRESHOLD) {
+      if (import.meta.env.DEV) {
+        console.debug("[Discover scoring V3] excluded", {
+          id: candidate.id,
+          first_name: candidate.first_name,
+          reasons: ["incompatible_inclusivity"],
+        });
+      }
+      continue;
+    }
+
     const practice_score = practiceCompatibilityScore(
       ctx.viewer.sport_practice_type,
       (candidate as { sport_practice_type?: string | null }).sport_practice_type,
     );
-    const baseScore =
-      getSportsPoints(sharedCount) +
-      (intentCompatible ? 20 : 0) +
-      getDistancePoints(distanceKm) +
-      getActivityPoints(candidate.last_active_at) +
-      getCompletenessBonus(candidate);
-    const score = baseScore + practice_score;
 
-    const reasons: string[] = [`${sharedCount} sport(s) en commun`];
-    if (intentCompatible) reasons.push("intention compatible");
-    const distancePts = getDistancePoints(distanceKm);
-    if (distancePts > 0 && distanceKm != null) reasons.push(`distance ${Math.round(distanceKm)} km`);
-    if (practice_score >= PRACTICE_SCORE_VERY_HIGH)
-      reasons.push("rythme de pratique — très bon alignement");
-    else if (practice_score >= PRACTICE_SCORE_GOOD)
-      reasons.push("rythme de pratique — bon alignement");
+    const cityFallbackBoost = distanceKm == null && isSameCity(ctx.viewer.city, candidate.city) ? 12 : 0;
+    const betaSharedSportsBoost = BETA_MODE ? sharedCount * 8 : 0;
+    const totalScore = (v3?.total ?? 0) + cityFallbackBoost + betaSharedSportsBoost;
+    const reasons: string[] = [`V3 ${Math.round(totalScore)} · ${sharedCount} sport(s) en commun`];
+    if (distanceKm != null && Number.isFinite(distanceKm))
+      reasons.push(`distance ${Math.round(distanceKm)} km`);
+    if (cityFallbackBoost > 0) reasons.push("même ville (fallback beta)");
+    if (betaSharedSportsBoost > 0) reasons.push(`beta +${betaSharedSportsBoost} sports communs`);
+    if (boostActive) reasons.push("Boost actif");
+    if (priorityActive) reasons.push("Priorité rencontre");
 
     if (import.meta.env.DEV) {
-      console.debug("[Discover scoring] included", {
+      console.debug("[Discover scoring V3] included", {
         id: candidate.id,
-        first_name: candidate.first_name,
         sharedCount,
-        intentCompatible,
         distanceKm,
         practice_score,
-        score,
+        parts: v3,
+        score: totalScore,
       });
     }
 
     kept.push({
       ...candidate,
       commonSportsCount: sharedCount,
-      discoverScore: score,
+      discoverScore: totalScore,
       practice_score,
       distanceKm,
       discover_reasons: reasons,
@@ -274,4 +288,3 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
 
   return kept;
 }
-

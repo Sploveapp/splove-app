@@ -70,15 +70,13 @@ export function isOnboardingComplete(profile: ProfileCompletenessInput | null | 
   const hasRadius = [10, 25, 50, 100].includes(Number(profile.discovery_radius_km ?? 0));
   const isAdult = Boolean(profile.birth_date && isAdultFromBirthIso(profile.birth_date));
   const hasPhotos = Boolean(profile.portrait_url?.trim() && profile.fullbody_url?.trim());
-  const storedIntensity = typeof profile.sport_intensity === "string" ? profile.sport_intensity.trim() : "";
-  const energyOk =
-    storedIntensity !== "" &&
-    ["chill", "intense", "dynamic", "both", "active", "relaxed", "flexible"].includes(storedIntensity);
 
+  // Onboarding simplifié : seule la préférence d’organisation est exigée pour valider l’étape
+  // « Ton organisation » (anciens champs Matin/Soir + intensité retirés de l’UI).
   const hasQuickPrefs =
-    (profile.sport_time === "Matin" || profile.sport_time === "Soir") &&
-    energyOk &&
-    (profile.planning_style === "spontaneous" || profile.planning_style === "planned");
+    profile.planning_style === "spontaneous" ||
+    profile.planning_style === "planned" ||
+    profile.planning_style === "both";
   const sportsCount = Number(profile.onboarding_sports_count ?? 0);
   const sportsWithIntensity = Number(profile.onboarding_sports_with_level_count ?? 0);
   const hasSportsWithIntensity = sportsCount > 0 && sportsWithIntensity === sportsCount;

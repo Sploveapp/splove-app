@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { Accessibility } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { env } from "../lib/env";
 import { useAuth } from "../contexts/AuthContext";
@@ -35,9 +36,7 @@ import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
 import { stashPendingReferralCodeFromSearch, tryCompletePendingReferral } from "../services/referral.service";
 import {
-  energyOptionsForVariant,
   type EnergyOptionKey,
-  isEnergySelectionComplete,
   normalizeIntensityForOnboardingHydrate,
   type OnboardingVariant,
   onboardingVariantFromProfile,
@@ -97,17 +96,70 @@ function serializeInterestedInValues(values: InterestedInValue[]): string | null
   return values.join(",");
 }
 
-/** Préférence horaire onboarding (tap) — stockée dans `sport_time`. */
-const ONBOARDING_TIME_QUICK_OPTIONS = [
-  { value: "Matin", label: "style.morning" },
-  { value: "Soir", label: "style.evening" },
-] as const;
-
-/** Aligné `profileCompleteness` + migration 068 */
+/** Aligné `profileCompleteness` + migration 068 (+ migration 098 ajoute 'both'). */
 const ORGANIZATION_OPTIONS = [
   { value: "spontaneous", label: "style.spontaneous" },
   { value: "planned", label: "style.planned" },
+  { value: "both", label: "style.both" },
 ] as const;
+
+type PlanningStyleValue = (typeof ORGANIZATION_OPTIONS)[number]["value"];
+
+/** Valeurs acceptées en BDD (`unsure` conservé pour rétro-compat — option masquée en UI). */
+const OPEN_TO_ADAPTED_VALUES = ["yes_totally", "yes_depends_sport", "unsure", "no"] as const;
+type OpenToAdaptedPractice = (typeof OPEN_TO_ADAPTED_VALUES)[number];
+
+const HAS_CHILDREN_VALUES = ["yes", "no", "prefer_not"] as const;
+type HasChildrenChoice = "" | (typeof HAS_CHILDREN_VALUES)[number];
+
+function hasChildrenForDb(choice: HasChildrenChoice): boolean | null {
+  if (choice === "yes") return true;
+  if (choice === "no") return false;
+  return null;
+}
+
+function hasChildrenFromProfile(raw: unknown): HasChildrenChoice {
+  if (raw === true) return "yes";
+  if (raw === false) return "no";
+  return "";
+}
+
+const HEIGHT_CM_MIN = 100;
+const HEIGHT_CM_MAX = 250;
+
+/** Lit un nombre cm depuis l’input texte ; null si vide/invalide/hors borne. */
+function parseHeightCmInput(raw: string): number | null {
+  const trimmed = raw.replace(/[^0-9]/g, "");
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return null;
+  const rounded = Math.round(n);
+  if (rounded < HEIGHT_CM_MIN || rounded > HEIGHT_CM_MAX) return null;
+  return rounded;
+}
+type AdaptedPracticeAmenagements = "" | "yes" | "no" | "prefer_not";
+
+function needsAdaptedActivitiesForDb(am: AdaptedPracticeAmenagements): boolean | null {
+  if (am === "yes") return true;
+  if (am === "no") return false;
+  return null;
+}
+
+function parseHydratedOpenToAdapted(raw: unknown): OpenToAdaptedPractice | "" {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  return (OPEN_TO_ADAPTED_VALUES as readonly string[]).includes(s) ? (s as OpenToAdaptedPractice) : "";
+}
+
+/** Hydrate Q1 uniquement si Q2 déjà renseignée (évite d’inferer un « Non » sur profils anciens). */
+function adaptedAmenagementsFromProfile(
+  needs: unknown,
+  openToRaw: unknown
+): AdaptedPracticeAmenagements {
+  if (parseHydratedOpenToAdapted(openToRaw) === "") return "";
+  if (needs === true) return "yes";
+  if (needs === false) return "no";
+  return "prefer_not";
+}
 
 const OPTIONAL_PROFILE_COLUMNS = [
   "onboarding_sports_count",
@@ -116,6 +168,9 @@ const OPTIONAL_PROFILE_COLUMNS = [
   "sport_intensity",
   "meet_vibe",
   "planning_style",
+  "open_to_adapted_activities",
+  "height_cm",
+  "has_children",
 ] as const;
 
 function isMissingOptionalProfileColumnError(
@@ -408,7 +463,7 @@ const inputClassName =
 const labelClassName = "mb-1 block text-sm font-semibold text-app-text";
 
 export default function Onboarding() {
-  const { t, language } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const {
@@ -416,6 +471,7 @@ export default function Onboarding() {
     isProfileComplete,
     isLoading: authLoading,
     isAuthInitialized,
+    isProfileLoading,
     refetchProfile,
     commitProfileRow,
     syncAuthSession,
@@ -453,7 +509,9 @@ export default function Onboarding() {
   const [sportMotivations, setSportMotivations] = useState<string[]>([]);
   const [onboardingVariant, setOnboardingVariant] = useState<OnboardingVariant>("A");
   const [sportIntensity, setSportIntensity] = useState<"" | EnergyOptionKey>("");
-  const [planningStyle, setPlanningStyle] = useState<"" | "spontaneous" | "planned">("");
+  const [planningStyle, setPlanningStyle] = useState<"" | PlanningStyleValue>("");
+  const [heightCmInput, setHeightCmInput] = useState("");
+  const [hasChildrenChoice, setHasChildrenChoice] = useState<HasChildrenChoice>("");
   const [sportPhraseOptional, setSportPhraseOptional] = useState("");
   const [postOnboarding, setPostOnboarding] = useState(false);
   const [portraitFile, setPortraitFile] = useState<File | null>(null);
@@ -462,6 +520,8 @@ export default function Onboarding() {
   const [bodySavedUrl, setBodySavedUrl] = useState("");
   const [photoUploadingKind, setPhotoUploadingKind] = useState<null | "portrait" | "body">(null);
   const [practicePreferences, setPracticePreferences] = useState<string[]>([]);
+  const [adaptedAmenagements, setAdaptedAmenagements] = useState<AdaptedPracticeAmenagements>("");
+  const [openToAdaptedPractice, setOpenToAdaptedPractice] = useState<OpenToAdaptedPractice | "">("");
   const [confirm18, setConfirm18] = useState(false);
   const [acceptTerms, setAcceptTerms] = useState(false);
 
@@ -476,8 +536,6 @@ export default function Onboarding() {
   useEffect(() => {
     stashPendingReferralCodeFromSearch(searchParams.get("ref"));
   }, [searchParams]);
-
-  const energyOptions = useMemo(() => energyOptionsForVariant(onboardingVariant), [onboardingVariant]);
 
   useEffect(() => {
     console.log("Onboarding variant:", onboardingVariant);
@@ -534,6 +592,9 @@ export default function Onboarding() {
         payload.birth_date = birthDate || null;
         payload.gender = gender || null;
         payload.looking_for = serializeInterestedInValues(interestedIn);
+        const heightCm = parseHeightCmInput(heightCmInput);
+        payload.height_cm = heightCm;
+        payload.has_children = hasChildrenForDb(hasChildrenChoice);
       }
       if (currentStep >= 4) {
         const dbIntent = intent ? dbIntentFromUiIntent(intent) : null;
@@ -552,6 +613,10 @@ export default function Onboarding() {
         payload.location_updated_at = nowIso;
       }
       if (currentStep >= 7) {
+        payload.needs_adapted_activities = needsAdaptedActivitiesForDb(adaptedAmenagements);
+        if (openToAdaptedPractice) {
+          payload.open_to_adapted_activities = openToAdaptedPractice;
+        }
         payload.sport_time = sportTime || null;
         payload.sport_motivation = sportMotivations.length > 0 ? sportMotivations : null;
         payload.sport_intensity = sportIntensity || null;
@@ -593,7 +658,7 @@ export default function Onboarding() {
       }
 
       if (currentStep >= 3) {
-        const validSportIds = await resolveSelectedSportIdsForPersistence();
+        const validSportIds = Array.from(new Set(await resolveSelectedSportIdsForPersistence()));
         console.log("SPORTS_PERSIST_START", selectedSports.map((s) => s.name));
         const { error: delErr } = await supabase.from("profile_sports").delete().eq("profile_id", userId);
         if (delErr) {
@@ -775,8 +840,14 @@ export default function Onboarding() {
         const si = typeof row.sport_intensity === "string" ? row.sport_intensity : "";
         setSportIntensity(normalizeIntensityForOnboardingHydrate(si, cohort));
         const pl = row.planning_style;
-        setPlanningStyle(pl === "spontaneous" || pl === "planned" ? pl : "");
+        setPlanningStyle(
+          pl === "spontaneous" || pl === "planned" || pl === "both" ? pl : ""
+        );
         setPracticePreferences(Array.isArray(row.practice_preferences) ? (row.practice_preferences as string[]) : []);
+        setOpenToAdaptedPractice(parseHydratedOpenToAdapted(row.open_to_adapted_activities));
+        setAdaptedAmenagements(
+          adaptedAmenagementsFromProfile(row.needs_adapted_activities, row.open_to_adapted_activities)
+        );
         const sp = row.sport_phrase;
         setSportPhraseOptional(typeof sp === "string" ? sp : "");
         const firstPortraitRef =
@@ -789,6 +860,42 @@ export default function Onboarding() {
             .find(Boolean) ?? "";
         setPortraitSavedUrl(firstPortraitRef);
         setBodySavedUrl(firstBodyRef);
+
+        // height_cm + has_children: probes séparés (colonnes optionnelles, hors tiers).
+        // Si la colonne n’existe pas en BDD, on ignore silencieusement (pas de crash).
+        const heightProbe = await supabase
+          .from("profiles")
+          .select("height_cm")
+          .eq("id", userId)
+          .maybeSingle();
+        if (
+          !cancelled &&
+          !heightProbe.error &&
+          heightProbe.data &&
+          typeof heightProbe.data === "object" &&
+          "height_cm" in (heightProbe.data as Record<string, unknown>)
+        ) {
+          const heightRaw = (heightProbe.data as { height_cm?: unknown }).height_cm;
+          if (typeof heightRaw === "number" && Number.isFinite(heightRaw) && heightRaw > 0) {
+            setHeightCmInput(String(Math.round(heightRaw)));
+          }
+        }
+        const childrenProbe = await supabase
+          .from("profiles")
+          .select("has_children")
+          .eq("id", userId)
+          .maybeSingle();
+        if (
+          !cancelled &&
+          !childrenProbe.error &&
+          childrenProbe.data &&
+          typeof childrenProbe.data === "object" &&
+          "has_children" in (childrenProbe.data as Record<string, unknown>)
+        ) {
+          setHasChildrenChoice(
+            hasChildrenFromProfile((childrenProbe.data as { has_children?: unknown }).has_children)
+          );
+        }
 
         const { data: ps, error: sportErr } = await supabase
           .from("profile_sports")
@@ -834,13 +941,23 @@ export default function Onboarding() {
   useEffect(() => {
     if (postOnboarding) return;
     if (!isAuthInitialized || authLoading) return;
+    if (isProfileLoading) return;
     if (!user?.id) return;
     if (loading) return;
     if (onboardingSubmitInFlightRef.current) return;
     if (isProfileComplete) {
       navigate("/discover", { replace: true });
     }
-  }, [postOnboarding, isProfileComplete, authLoading, isAuthInitialized, loading, navigate, user?.id]);
+  }, [
+    postOnboarding,
+    isProfileComplete,
+    authLoading,
+    isAuthInitialized,
+    isProfileLoading,
+    loading,
+    navigate,
+    user?.id,
+  ]);
 
   const quickPickSportsOrdered = useMemo(
     () => orderedQuickPickSports(sportsCatalog),
@@ -1011,6 +1128,9 @@ export default function Onboarding() {
     (obLocCity.trim().length >= 2 || (obLocLat != null && obLocLng != null)) &&
     [10, 25, 50, 100].includes(obLocRadiusKm);
 
+  const isPlanningStyleSelected = (value: typeof planningStyle): value is PlanningStyleValue =>
+    value === "spontaneous" || value === "planned" || value === "both";
+
   /** Deux photos obligatoires : portrait (visage) + corps (silhouette / en pied), formats JPG/PNG/WebP. */
   const canSubmit =
     firstName.trim() !== "" &&
@@ -1023,9 +1143,8 @@ export default function Onboarding() {
     selectedSportIds.length >= 1 &&
     selectedSportIds.length <= 3 &&
     selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)])) &&
-    (sportTime === "Matin" || sportTime === "Soir") &&
-    isEnergySelectionComplete(onboardingVariant, sportIntensity) &&
-    (planningStyle === "spontaneous" || planningStyle === "planned") &&
+    isPlanningStyleSelected(planningStyle) &&
+    openToAdaptedPractice !== "" &&
     (portraitSavedUrl.trim() !== "" || portraitFile != null) &&
     (bodySavedUrl.trim() !== "" || bodyFile != null) &&
     confirm18 &&
@@ -1048,14 +1167,11 @@ export default function Onboarding() {
     if (!selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)]))) {
       return t("onboarding_err_sport_level");
     }
-    if (sportTime !== "Matin" && sportTime !== "Soir") {
-      return t("onboarding_err_style_time");
-    }
-    if (!isEnergySelectionComplete(onboardingVariant, sportIntensity)) {
-      return t("onboarding_err_style_intensity");
-    }
-    if (planningStyle !== "spontaneous" && planningStyle !== "planned") {
+    if (!isPlanningStyleSelected(planningStyle)) {
       return t("onboarding_err_style_org");
+    }
+    if (openToAdaptedPractice === "") {
+      return t("onboarding_err_adapted_openness");
     }
     if (portraitSavedUrl.trim() === "" && portraitFile == null) return t("onboarding_err_photos_both");
     if (bodySavedUrl.trim() === "" && bodyFile == null) return t("onboarding_err_photos_both");
@@ -1258,6 +1374,10 @@ export default function Onboarding() {
       return true;
     }
     if (current === 7) {
+      if (!openToAdaptedPractice) {
+        setStepHint(t("onboarding_err_adapted_openness"));
+        return false;
+      }
       return true;
     }
     if (current === 8) {
@@ -1277,15 +1397,7 @@ export default function Onboarding() {
       return true;
     }
     if (current === 9) {
-      if (sportTime !== "Matin" && sportTime !== "Soir") {
-        setStepHint(t("onboarding_err_style_time"));
-        return false;
-      }
-      if (!isEnergySelectionComplete(onboardingVariant, sportIntensity)) {
-        setStepHint(t("onboarding_err_style_intensity"));
-        return false;
-      }
-      if (planningStyle !== "spontaneous" && planningStyle !== "planned") {
+      if (!isPlanningStyleSelected(planningStyle)) {
         setStepHint(t("onboarding_err_style_org"));
         return false;
       }
@@ -1537,7 +1649,34 @@ export default function Onboarding() {
         onboarding_sports_count: selectedSportIds.length,
         onboarding_sports_with_level_count: selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length,
       });
-      const completionFlag = moderationAllowsComplete && completionFromData;
+      let hasChildrenRequirementOk = true;
+      const hasChildrenProbe = await supabase
+        .from("profiles")
+        .select("has_children")
+        .eq("id", authUserId)
+        .maybeSingle();
+      if (hasChildrenProbe.error) {
+        const msg = (hasChildrenProbe.error.message ?? "").toLowerCase();
+        const missingHasChildren =
+          String(hasChildrenProbe.error.code ?? "") === "42703" &&
+          /has_children/.test(hasChildrenProbe.error.message ?? "");
+        if (!missingHasChildren && !/has_children/.test(msg)) {
+          logDetailedError("profiles has_children probe", hasChildrenProbe.error, { userId: authUserId });
+        }
+      } else if (hasChildrenProbe.data && "has_children" in hasChildrenProbe.data) {
+        const hasChildrenValue = (hasChildrenProbe.data as { has_children?: unknown }).has_children;
+        hasChildrenRequirementOk = typeof hasChildrenValue === "boolean";
+      }
+      const hasAtLeastOneSport = selectedSportIds.length > 0;
+      const hasAtLeastOnePhoto = Boolean(portraitUrl || fullbodyUrl);
+      const legalChecksOk = confirm18 && acceptTerms;
+      const completionFlag =
+        moderationAllowsComplete &&
+        completionFromData &&
+        hasChildrenRequirementOk &&
+        legalChecksOk &&
+        hasAtLeastOneSport &&
+        hasAtLeastOnePhoto;
       const nowIso = new Date().toISOString();
       const intentDbValue = dbIntentFromUiIntent(intent);
       const finalizedCompletionFlag = completionFlag;
@@ -1547,6 +1686,8 @@ export default function Onboarding() {
         first_name: firstName.trim(),
         birth_date: birthDate,
         gender,
+        height_cm: parseHeightCmInput(heightCmInput),
+        has_children: hasChildrenForDb(hasChildrenChoice),
         looking_for: serializeInterestedInValues(interestedIn),
         intent: intentDbValue,
         meet_pref: intentDbValue,
@@ -1565,6 +1706,8 @@ export default function Onboarding() {
         practice_preferences: practicePreferences,
         onboarding_sports_count: selectedSportIds.length,
         onboarding_sports_with_level_count: selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length,
+        needs_adapted_activities: needsAdaptedActivitiesForDb(adaptedAmenagements),
+        open_to_adapted_activities: openToAdaptedPractice || null,
         portrait_url: portraitUrl,
         fullbody_url: fullbodyUrl,
         main_photo_url: portraitUrl || fullbodyUrl,
@@ -1789,7 +1932,7 @@ export default function Onboarding() {
 
       
 
-      const validSportIds = await resolveSelectedSportIdsForPersistence();
+      const validSportIds = Array.from(new Set(await resolveSelectedSportIdsForPersistence()));
       console.log("SPORTS_PERSIST_START", selectedSports.map((s) => s.name));
 
       if (validSportIds.length > 0) {
@@ -1866,11 +2009,8 @@ export default function Onboarding() {
 
       const gateOk =
         Boolean((profileReloadRow as { profile_completed?: unknown } | null)?.profile_completed === true) ||
-        Boolean((profileReloadRow as { onboarding_completed?: unknown } | null)?.onboarding_completed === true) ||
-        Boolean(refreshedProfile?.profile_completed) ||
-        (refreshedProfile as { onboarding_completed?: unknown } | null)?.onboarding_completed === true ||
-        Boolean(upsertRow.profile_completed) ||
-        finalizedCompletionFlag;
+        refreshedProfile?.profile_completed === true ||
+        upsertRow.profile_completed === true;
       if (!gateOk) {
         console.error("[Onboarding submit] verdict: upsert OK + select OK but gating KO");
         console.error("[Onboarding submit] gating incomplet après upsert", {
@@ -1972,7 +2112,7 @@ export default function Onboarding() {
               {step === 4 && t("onboarding_step4_title")}
               {step === 5 && t("onboarding_sports_title")}
               {step === 6 && t("onboarding_intention_title")}
-              {step === 7 && t("onboarding_first_move_title")}
+              {step === 7 && t("onboarding_adapted_title")}
               {step === 8 && t("onboarding_photos_hero_title")}
               {step === 9 && t("onboarding_style_hero_title")}
               {step === 10 && t("onboarding_bio_hero_title")}
@@ -1985,7 +2125,7 @@ export default function Onboarding() {
               {step === 4 && t("onboarding_step4_subtitle")}
               {step === 5 && t("onboarding_sports_subtitle")}
               {step === 6 && t("onboarding_intention_subtitle")}
-              {step === 7 && t("onboarding_first_move_subtitle")}
+              {step === 7 && t("onboarding_adapted_subtitle")}
               {step === 8 && t("onboarding_photos_hero_subtitle")}
               {step === 9 && t("onboarding_style_hero_subtitle")}
               {step === 10 && t("onboarding_bio_hero_subtitle")}
@@ -2037,6 +2177,56 @@ export default function Onboarding() {
                     {birthDate && !isAdultFromBirthIso(birthDate) && (
                       <p className="mt-1 text-xs text-red-600">{t("must_be_18")}</p>
                     )}
+                  </div>
+                  <div>
+                    <label className={labelClassName} htmlFor="ob-height">
+                      {t("onboarding_height_label")}
+                    </label>
+                    <input
+                      id="ob-height"
+                      type="number"
+                      inputMode="numeric"
+                      placeholder={t("onboarding_height_placeholder")}
+                      min={HEIGHT_CM_MIN}
+                      max={HEIGHT_CM_MAX}
+                      step={1}
+                      value={heightCmInput}
+                      onChange={(e) => setHeightCmInput(e.target.value)}
+                      autoComplete="off"
+                      className={inputClassName}
+                    />
+                  </div>
+                  <div>
+                    <span className={labelClassName}>{t("onboarding_children_label")}</span>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          ["yes", "onboarding_children_yes"],
+                          ["no", "onboarding_children_no"],
+                          ["prefer_not", "onboarding_children_prefer_not"],
+                        ] as const
+                      ).map(([value, labelKey]) => {
+                        const active = hasChildrenChoice === value;
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() =>
+                              setHasChildrenChoice((prev) => (prev === value ? "" : value))
+                            }
+                            className="min-h-[44px] rounded-xl border-2 px-2 py-2 text-sm font-semibold transition-all"
+                            style={{
+                              borderColor: active ? BRAND_BG : APP_BORDER,
+                              background: active ? BRAND_BG : APP_CARD,
+                              color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                            }}
+                            aria-pressed={active}
+                          >
+                            {t(labelKey)}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               )}
@@ -2285,7 +2475,81 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 7 && <div className="min-h-[48px]" aria-hidden />}
+              {step === 7 && (
+                <div className="space-y-6 pb-1">
+                  <div>
+                    <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <span className={labelClassName}>{t("onboarding_adapted_q1")}</span>
+                      <span className="text-[11px] font-medium uppercase tracking-wide text-app-muted">
+                        {t("onboarding_adapted_q1_optional")}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      {(
+                        [
+                          ["yes", "onboarding_adapted_am_yes"],
+                          ["no", "onboarding_adapted_am_no"],
+                          ["prefer_not", "onboarding_adapted_am_prefer_not"],
+                        ] as const
+                      ).map(([value, labelKey]) => {
+                        const active = adaptedAmenagements === value;
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => setAdaptedAmenagements(value)}
+                            className="min-h-[44px] rounded-xl border-2 px-2 py-2 text-sm font-semibold transition-all"
+                            style={{
+                              borderColor: active ? BRAND_BG : APP_BORDER,
+                              background: active ? BRAND_BG : APP_CARD,
+                              color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                            }}
+                            aria-pressed={active}
+                          >
+                            {t(labelKey)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <span className={`${labelClassName} flex items-center gap-2`}>
+                      <Accessibility
+                        aria-hidden="true"
+                        className="h-4 w-4 shrink-0 text-app-muted"
+                      />
+                      <span>{t("onboarding_adapted_q2")}</span>
+                    </span>
+                    <div className="mt-2 grid grid-cols-1 gap-2">
+                      {(
+                        [
+                          ["yes_totally", "onboarding_adapted_open_yes_total"],
+                          ["yes_depends_sport", "onboarding_adapted_open_yes_sport"],
+                          ["no", "onboarding_adapted_open_no"],
+                        ] as const
+                      ).map(([value, labelKey]) => {
+                        const active = openToAdaptedPractice === value;
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => setOpenToAdaptedPractice(value)}
+                            className="min-h-[48px] w-full rounded-xl border-2 px-3 py-2 text-left text-sm font-semibold transition-all sm:text-[15px]"
+                            style={{
+                              borderColor: active ? BRAND_BG : APP_BORDER,
+                              background: active ? BRAND_BG : APP_CARD,
+                              color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                            }}
+                            aria-pressed={active}
+                          >
+                            {t(labelKey)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {step === 8 && (
                 <div className="space-y-4">
@@ -2390,80 +2654,35 @@ export default function Onboarding() {
               )}
 
               {step === 9 && (
-                <div className="space-y-5">
-                  <div>
-                    <span className={labelClassName}>{t("style_you_prefer")}</span>
-                    <div className="mt-2 flex gap-2">
-                      {ONBOARDING_TIME_QUICK_OPTIONS.map((o) => {
-                        const active = sportTime === o.value;
-                        return (
-                          <button
-                            key={o.value}
-                            type="button"
-                            onClick={() => setSportTime(o.value)}
-                            className="min-h-[48px] flex-1 rounded-xl border-2 px-3 text-sm font-semibold transition-all sm:text-base"
-                            style={{
-                              borderColor: active ? BRAND_BG : APP_BORDER,
-                              background: active ? BRAND_BG : APP_CARD,
-                              color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
-                            }}
-                          >
-                            {t(o.label)}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div>
-                    <span className={labelClassName}>{t("style_your_pace")}</span>
-                    <div className="mt-2 flex gap-2">
-                      {energyOptions.map((option) => {
-                        const active = sportIntensity === option.key;
-                        return (
-                          <button
-                            key={option.key}
-                            type="button"
-                            onClick={() => setSportIntensity(option.key)}
-                            className={`option-button min-h-[48px] flex-1 rounded-xl border-2 px-3 text-sm font-semibold transition-all sm:text-base ${active ? "selected" : ""}`}
-                            style={{
-                              borderColor: active ? BRAND_BG : APP_BORDER,
-                              background: active ? BRAND_BG : APP_CARD,
-                              color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
-                            }}
-                          >
-                            {option.label[language]}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div>
-                    <span className={labelClassName}>{t("style_organization")}</span>
-                    <div className="mt-2 flex flex-col gap-2">
-                      {ORGANIZATION_OPTIONS.map((o) => {
-                        const active = planningStyle === o.value;
-                        return (
-                          <button
-                            key={o.value}
-                            type="button"
-                            onClick={() => setPlanningStyle(o.value)}
-                            className={`${intentChoiceClass(active)} min-h-[48px] w-full text-center`}
-                            style={
-                              active
-                                ? {
-                                    borderColor: BRAND_BG,
-                                    background: BRAND_BG,
-                                    color: TEXT_ON_BRAND,
-                                    ["--tw-ring-color" as string]: BRAND_BG,
-                                  }
-                                : undefined
-                            }
-                          >
-                            {t(o.label)}
-                          </button>
-                        );
-                      })}
-                    </div>
+                <div className="space-y-3">
+                  <span className={labelClassName}>{t("style_organization")}</span>
+                  <p className="text-xs leading-snug text-app-muted">
+                    {t("style_organization_subtitle")}
+                  </p>
+                  <div className="mt-2 flex flex-col gap-2">
+                    {ORGANIZATION_OPTIONS.map((o) => {
+                      const active = planningStyle === o.value;
+                      return (
+                        <button
+                          key={o.value}
+                          type="button"
+                          onClick={() => setPlanningStyle(o.value)}
+                          className={`${intentChoiceClass(active)} min-h-[48px] w-full text-center`}
+                          style={
+                            active
+                              ? {
+                                  borderColor: BRAND_BG,
+                                  background: BRAND_BG,
+                                  color: TEXT_ON_BRAND,
+                                  ["--tw-ring-color" as string]: BRAND_BG,
+                                }
+                              : undefined
+                          }
+                        >
+                          {t(o.label)}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -2506,12 +2725,40 @@ export default function Onboarding() {
                   </label>
                   <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-app-border bg-app-bg/60 px-3 py-3 text-sm text-app-text">
                     <input
+                      id="ob-accept-terms"
                       type="checkbox"
                       checked={acceptTerms}
                       onChange={(e) => setAcceptTerms(e.target.checked)}
                       className="mt-0.5 h-5 w-5 shrink-0 rounded border-app-border"
                     />
-                    <span>{t("accept_terms_privacy")}</span>
+                    <span>
+                      <span className="sr-only">{t("accept_terms_privacy")}</span>
+                      {t("accept_terms_privacy_prefix")}
+                      <a
+                        href="#/cgu"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline underline-offset-2"
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        {t("accept_terms_privacy_terms_link")}
+                      </a>
+                      {t("accept_terms_privacy_mid")}
+                      <a
+                        href="#/privacy"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline underline-offset-2"
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        {t("accept_terms_privacy_privacy_link")}
+                      </a>
+                      {t("accept_terms_privacy_suffix")}
+                    </span>
                   </label>
                 </div>
               )}
@@ -2532,6 +2779,11 @@ export default function Onboarding() {
             </div>
 
             <div className="shrink-0 border-t border-app-border bg-app-card px-3 py-2.5 sm:px-4 sm:py-3">
+              {step === TOTAL_STEPS && (
+                <p className="mb-2 text-center text-xs font-medium text-app-muted">
+                  {t("onboarding_final_cta_ready")}
+                </p>
+              )}
               <div className="flex gap-2">
                 {step > 1 ? (
                   <button
@@ -2556,11 +2808,9 @@ export default function Onboarding() {
                       ? t("onboarding_cta_save_location")
                       : step === 5
                         ? t("continue")
-                        : step === 7
-                          ? t("onboarding_cta_understood")
-                          : step === 10
-                            ? t("continue")
-                            : t("next")}
+                        : step === 10
+                          ? t("continue")
+                          : t("next")}
                   </button>
                 ) : (
                   <button
@@ -2572,7 +2822,7 @@ export default function Onboarding() {
                       color: TEXT_ON_BRAND,
                     }}
                   >
-                    {loading ? t("loading") : t("onboarding_find_session")}
+                    {loading ? t("loading") : t("onboarding_final_cta_go")}
                   </button>
                 )}
               </div>

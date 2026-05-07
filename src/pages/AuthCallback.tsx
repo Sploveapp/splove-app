@@ -17,7 +17,6 @@ const ERR_NO_SESSION_TITLE = "Session Google non récupérée";
 
 type ProfileStatusRow = {
   profile_completed?: boolean | null;
-  onboarding_completed?: boolean | null;
 };
 
 type CallbackDebug = {
@@ -257,7 +256,7 @@ export default function AuthCallback() {
       const profR = await runStep(async () => {
         return supabase
           .from("profiles")
-          .select("profile_completed,onboarding_completed")
+          .select("profile_completed")
           .eq("id", uid)
           .maybeSingle<ProfileStatusRow>();
       });
@@ -299,10 +298,13 @@ export default function AuthCallback() {
       }
 
       const profile = profileRow;
-      const done = Boolean(
-        profile && (profile.profile_completed === true || profile.onboarding_completed === true),
-      );
+      const done = profile?.profile_completed === true;
       const target = done ? "/discover" : "/onboarding";
+      console.log("[ONBOARDING_GUARD] oauth-callback profile status", {
+        profile_completed: done,
+        target,
+        userId: uid,
+      });
       updateDebug({ redirectTarget: target, finalError: "—" });
       console.log("[AuthCallback] redirect target", target);
 

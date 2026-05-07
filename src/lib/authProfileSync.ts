@@ -20,6 +20,17 @@ function isOnboardingVariantColumnMissing(err: {
   return /onboarding_variant/.test(err.message ?? "") && /could not find|does not exist|undefined column/i.test(m);
 }
 
+function missingColumnName(err: {
+  code?: string | number;
+  message?: string;
+}): string | null {
+  const c = String(err.code ?? "");
+  const msg = String(err.message ?? "");
+  if (c !== "42703" && !/does not exist|undefined column|could not find/i.test(msg.toLowerCase())) return null;
+  const m = msg.match(/column\s+["']?([a-zA-Z0-9_]+)["']?/i);
+  return m?.[1] ?? null;
+}
+
 /**
  * Garantit une ligne `profiles` avec id = `authUserId` (toujours l’UUID Supabase Auth).
  * Ne génère jamais d’UUID aléatoire : `profiles.id` doit rester égal à `auth.users.id`.
@@ -31,36 +42,56 @@ function isOnboardingVariantColumnMissing(err: {
 export async function ensureProfileRowForAuthUserId(authUserId: string): Promise<boolean> {
   if (!authUserId) return false;
 
-  // ligne 33 → 43 (remplacement complet)
+  const { data: existingProfile } = await supabase
+    .from("profiles")
+    .select("onboarding_variant")
+    .eq("id", authUserId)
+    .maybeSingle();
 
-// 1. récupérer variante existante
-const { data: existingProfile } = await supabase
-.from("profiles")
-.select("onboarding_variant")
-.eq("id", authUserId)
-.maybeSingle();
+  let variant = existingProfile?.onboarding_variant;
+  if (!variant) {
+    variant = Math.random() < 0.5 ? "A" : "B";
+  }
 
-// 2. ne générer QUE si absent
-let variant = existingProfile?.onboarding_variant;
-
-if (!variant) {
-variant = Math.random() < 0.5 ? "A" : "B";
-}
-
-  const { error: insertError } = await supabase.from("profiles").insert({
+  const basePayload: Record<string, unknown> = {
     id: authUserId,
     profile_completed: false,
+    onboarding_completed: false,
+    onboarding_done: false,
     onboarding_variant: variant,
-  });
+  };
 
-  if (!insertError) return true;
+  const tryInsertWithFallback = async (): Promise<{ ok: boolean; duplicate: boolean }> => {
+    const payload: Record<string, unknown> = { ...basePayload };
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { error } = await supabase.from("profiles").insert(payload);
+      if (!error) return { ok: true, duplicate: false };
+      if (isDuplicateInsertError(error)) return { ok: false, duplicate: true };
+      const col = missingColumnName(error);
+      if (!col || !(col in payload)) break;
+      delete payload[col];
+    }
+    return { ok: false, duplicate: false };
+  };
 
-  if (isDuplicateInsertError(insertError)) {
-    const { error: upsertError } = await supabase.from("profiles").upsert(
-      { id: authUserId, profile_completed: false },
-      { onConflict: "id" },
-    );
-    if (upsertError) return false;
+  const insertResult = await tryInsertWithFallback();
+  if (insertResult.ok) return true;
+
+  if (insertResult.duplicate) {
+    const upsertPayload: Record<string, unknown> = {
+      id: authUserId,
+      profile_completed: false,
+      onboarding_completed: false,
+      onboarding_done: false,
+    };
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { error: upsertError } = await supabase.from("profiles").upsert(upsertPayload, { onConflict: "id" });
+      if (!upsertError) break;
+      const col = missingColumnName(upsertError);
+      if (!col || !(col in upsertPayload)) return false;
+      delete upsertPayload[col];
+      if (attempt === 4) return false;
+    }
     const { error: assignErr } = await supabase
       .from("profiles")
       .update({ onboarding_variant: variant })
@@ -75,21 +106,18 @@ variant = Math.random() < 0.5 ? "A" : "B";
     return true;
   }
 
-  if (isOnboardingVariantColumnMissing(insertError)) {
-    const { error } = await supabase.from("profiles").upsert(
-      { id: authUserId, profile_completed: false },
-      { onConflict: "id" },
-    );
-    return !error;
+  const fallbackPayload: Record<string, unknown> = {
+    id: authUserId,
+    profile_completed: false,
+    onboarding_completed: false,
+    onboarding_done: false,
+  };
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { error } = await supabase.from("profiles").upsert(fallbackPayload, { onConflict: "id" });
+    if (!error) return true;
+    const col = missingColumnName(error);
+    if (!col || !(col in fallbackPayload)) return false;
+    delete fallbackPayload[col];
   }
-
-  console.warn("[ensureProfileRowForAuthUserId] insert failed, falling back to upsert without variant", {
-    code: insertError.code,
-    message: insertError.message,
-  });
-  const { error } = await supabase.from("profiles").upsert(
-    { id: authUserId, profile_completed: false },
-    { onConflict: "id" },
-  );
-  return !error;
+  return false;
 }

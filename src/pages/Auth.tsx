@@ -32,7 +32,7 @@ function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
 export default function Auth() {
   const { t, language } = useTranslation();
   const [searchParams] = useSearchParams();
-  const { user, isProfileComplete, isLoading, isAuthInitialized } = useAuth();
+  const { user, isProfileComplete, isLoading, isAuthInitialized, isProfileLoading } = useAuth();
   const [introSplash, setIntroSplash] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -72,10 +72,22 @@ export default function Auth() {
     return <SplashScreen />;
   }
 
+  if (user && isProfileLoading) {
+    return <SplashScreen />;
+  }
+
   if (user) {
     if (isProfileComplete) {
+      console.log("[ONBOARDING_GUARD] auth redirect -> /discover", {
+        userId: user.id,
+        profile_completed: true,
+      });
       return <Navigate to="/discover" replace />;
     }
+    console.log("[ONBOARDING_GUARD] auth redirect -> /onboarding", {
+      userId: user.id,
+      profile_completed: false,
+    });
     return <Navigate to="/onboarding" replace />;
   }
 
