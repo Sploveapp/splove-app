@@ -1,15 +1,37 @@
 /**
- * Vérification photos — MVP : badge « Profil vérifié » = `photo_status === 'approved'`.
- * Détail par photo / codes rejet : `portrait_rejection_code`, `body_rejection_code`, etc.
+ * Vérification profil — le badge « Profil vérifié » reflète uniquement l’identité (Veriff / équivalent),
+ * pas la simple validation modération des photos.
  */
 
+/** Badge vert « Profil vérifié » : identité attestée uniquement (`identity_verified` ou Veriff approved). */
+export function isIdentityVerified(profile: {
+  identity_verified?: boolean | null;
+  veriff_status?: string | null;
+} | null | undefined): boolean {
+  if (!profile || typeof profile !== "object") return false;
+  if (profile.identity_verified === true) return true;
+  return String(profile.veriff_status ?? "").trim().toLowerCase() === "approved";
+}
+
 /**
- * Badge « Profil vérifié » (Discover, cartes, profil) — uniquement `photo_status`.
+ * Photo(s) acceptée(s) ou synthèse modération OK — sans prétendre à une vérif d’identité.
+ * Pour libellés discrets (ex. page profil uniquement).
  */
-export function isPhotoVerified(profile: {
+export function hasProfilePhotosModerationValidated(profile: {
   photo_status?: string | null;
-}): boolean {
-  return isPhotoVerificationApproved(profile.photo_status);
+  photo_moderation_overall?: string | null;
+  photo1_status?: string | null;
+  photo2_status?: string | null;
+} | null | undefined): boolean {
+  if (!profile) return false;
+  const rejected = String(profile.photo_status ?? "").trim().toLowerCase() === "rejected";
+  if (rejected) return false;
+  if (isPhotoVerificationApproved(profile.photo_status)) return true;
+  const overall = String(profile.photo_moderation_overall ?? "").trim().toLowerCase();
+  if (overall === "approved") return true;
+  const p1 = String(profile.photo1_status ?? "").trim().toLowerCase();
+  const p2 = String(profile.photo2_status ?? "").trim().toLowerCase();
+  return p1 === "approved" && p2 === "approved";
 }
 
 /** Accès Discover : uniquement si la validation globale des photos est « approved ». */

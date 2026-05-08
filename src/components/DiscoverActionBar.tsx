@@ -26,7 +26,7 @@ export function DiscoverActionBar(props: DiscoverActionBarProps) {
 
   return (
     <>
-      {isBetaTester || isOnline ? (
+      {isOnline || (import.meta.env.DEV && isBetaTester) ? (
         <div className="mb-2 flex flex-wrap items-center gap-2 px-0.5 text-[10px] text-app-muted">
           {isOnline ? (
             <span className="inline-flex items-center gap-1 font-medium text-emerald-200/90">
@@ -34,7 +34,7 @@ export function DiscoverActionBar(props: DiscoverActionBarProps) {
               {t("active")}
             </span>
           ) : null}
-          {isBetaTester ? (
+          {import.meta.env.DEV && isBetaTester ? (
             <span className="rounded-full border border-app-border px-2 py-0.5 font-medium">Beta</span>
           ) : null}
         </div>

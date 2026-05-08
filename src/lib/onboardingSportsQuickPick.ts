@@ -16,6 +16,26 @@ export const ONBOARDING_QUICK_PICK_SLUGS: readonly string[] = [
   "petanque",
 ] as const;
 
+/** Pictogrammes discrets pour les favoris onboarding (catalogue complet inchangé en base). */
+const SLUG_PICTOGRAM: Record<string, string> = {
+  "course-a-pied": "🏃",
+  randonnee: "🥾",
+  padel: "🎾",
+  tennis: "🎾",
+  fitness: "🏋️",
+  velo: "🚴",
+  natation: "🏊",
+  football: "⚽",
+  marche: "🚶",
+  skate: "🛹",
+  petanque: "🎯",
+};
+
+export function sportPictogramForSlug(slug: string | null | undefined): string {
+  const s = (slug ?? "").trim().toLowerCase();
+  return SLUG_PICTOGRAM[s] ?? "◆";
+}
+
 const DIACRITIC_RE = /\p{Diacritic}/gu;
 
 export function normalizeSportSearchText(raw: string): string {

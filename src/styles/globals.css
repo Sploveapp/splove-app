@@ -2,6 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Chargement — pulse moins brutal que `animate-pulse` Tailwind */
+@keyframes splove-skeleton-breathe {
+  0%,
+  100% {
+    opacity: 0.42;
+  }
+  50% {
+    opacity: 0.78;
+  }
+}
+
+.splove-skeleton-breathe {
+  animation: splove-skeleton-breathe 1.85s ease-in-out infinite;
+}
+
+@keyframes splove-content-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.splove-content-reveal {
+  animation: splove-content-reveal 0.42s ease-out both;
+}
+
+/* Onboarding — coque premium légère */
+.splove-onboarding-shell {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, #18181b 28%);
+}
+
+/* Cartes Discover / listes — élévation douce */
+.splove-card-premium {
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
 @layer base {
   html {
     @apply antialiased;

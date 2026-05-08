@@ -645,11 +645,13 @@ export default function SplovePlusScreen() {
                   {t("splove_plus_purchase_title")}
                 </h2>
                 <p className="mt-2 text-[13px] leading-relaxed text-white/72">{t("splove_plus_purchase_body")}</p>
-                <p className="mt-2 font-mono text-[11px] text-white/45">
-                  {t("splove_plus_purchase_product_id_label", {
-                    id: productIdForCreditType(confirmFeatureDef.creditType),
-                  })}
-                </p>
+                {import.meta.env.DEV ? (
+                  <p className="mt-2 font-mono text-[11px] text-white/45">
+                    {t("splove_plus_purchase_product_id_label", {
+                      id: productIdForCreditType(confirmFeatureDef.creditType),
+                    })}
+                  </p>
+                ) : null}
                 <div className="mt-5 flex flex-col gap-2">
                   <button
                     type="button"

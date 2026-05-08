@@ -4,12 +4,15 @@ import { formatBadge } from "../../lib/formatBadge";
 import { useTranslation } from "../../i18n/useTranslation";
 
 const ACTIVE = "#FF3B3B";
-const INACTIVE = "#9CA3AF";
+const INACTIVE = "#6B6B76";
 const NAV_BACKGROUND = "#0B0B0F";
 const NAV_BORDER_TOP = "rgba(255,255,255,0.08)";
+/** Badges compteur : discret en production, rouge réservé à l’onglet actif */
+const BADGE_BG = "rgba(255,59,59,0.16)";
+const BADGE_TEXT = "#FCA5A5";
 
 const ICON_PX = 24;
-const STROKE = 1.75;
+const STROKE = 1.65;
 
 export type SPLoveBottomNavProps = {
   activeRoute: string;
@@ -67,10 +70,10 @@ export function SPLoveBottomNav({
       aria-label={navLabel}
     >
       <div
-        className="mx-auto flex w-full max-w-lg items-stretch justify-between gap-0.5 px-1"
+        className="mx-auto flex w-full max-w-lg items-stretch justify-between gap-1 px-1.5"
         style={{
-          paddingBottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
-          paddingTop: 8,
+          paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
+          paddingTop: 10,
           boxSizing: "border-box",
         }}
       >
@@ -156,7 +159,7 @@ function BottomItem({
   return (
     <button
       type="button"
-      className="flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 px-1 py-0.5 [&:focus-visible]:outline [&:focus-visible]:outline-2 [&:focus-visible]:outline-offset-[-2px] [&:focus-visible]:outline-white/30"
+      className="flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 py-1 transition-[transform,color] duration-150 ease-out active:scale-[0.94] [&:focus-visible]:outline [&:focus-visible]:outline-2 [&:focus-visible]:outline-offset-[-2px] [&:focus-visible]:outline-white/30"
       style={{
         WebkitTapHighlightColor: "transparent",
         background: "transparent",
@@ -172,8 +175,12 @@ function BottomItem({
         <span aria-hidden>{icon(stroke)}</span>
         {badge ? (
           <span
-            className="pointer-events-none absolute -right-1.5 -top-1 flex h-[17px] min-w-[17px] items-center justify-center rounded-full px-[5px] text-[10px] font-semibold leading-none text-white"
-            style={{ backgroundColor: ACTIVE }}
+            className="pointer-events-none absolute -right-1.5 -top-1 flex h-[17px] min-w-[17px] items-center justify-center rounded-full border px-[5px] text-[10px] font-semibold leading-none"
+            style={{
+              backgroundColor: BADGE_BG,
+              borderColor: "rgba(255,59,59,0.35)",
+              color: BADGE_TEXT,
+            }}
             aria-hidden
           >
             {badge}
@@ -182,16 +189,16 @@ function BottomItem({
         {!badge && indicator ? (
           <span
             aria-hidden
-            className="pointer-events-none absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full"
+            className="pointer-events-none absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-[#0B0B0F]"
             style={{
               backgroundColor: ACTIVE,
-              boxShadow: `0 0 0 2px ${NAV_BACKGROUND}`,
+              boxShadow: `0 0 0 1px rgba(255,59,59,0.45)`,
             }}
           />
         ) : null}
       </span>
       <span
-        className="max-w-full truncate text-center text-[11px] font-medium tracking-tight"
+        className="max-w-full truncate text-center text-[11px] font-medium tracking-tight transition-colors duration-150"
         style={{ color: labelColor }}
       >
         {label}

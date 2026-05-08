@@ -40,8 +40,9 @@ export type Profile = {
   /** Détail par photo — migration `043_profile_photo_validation_statuses`. */
   portrait_photo_status?: string | null;
   body_photo_status?: string | null;
-  /** Globale — badge « vérifié » : `photo_status === 'approved'` (exposé par `feed_profiles`). */
   photo_status?: string | null;
+  identity_verified?: boolean | null;
+  veriff_status?: string | null;
   portrait_rejection_code?: string | null;
   body_rejection_code?: string | null;
   /** Modération automatique (slots 1 = portrait, 2 = corps) — migration 058. */
@@ -75,7 +76,7 @@ type AuthState = {
   commitProfileRow: (row: unknown) => void;
   /** Re-lit la session Supabase et met à jour `user` / `session` de façon synchrone. Retourne false si aucun utilisateur. */
   syncAuthSession: () => Promise<boolean>;
-  signOut: () => Promise<void>;
+  signOut: (options?: { scope?: "global" | "local" | "others" }) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -319,11 +320,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return Boolean(next?.user?.id);
   }, []);
 
-  const signOut = useCallback(async () => {
+  const signOut = useCallback(async (options?: { scope?: "global" | "local" | "others" }) => {
     console.log("[Logout] start");
     setError(null);
     try {
-      const { error: signOutError } = await supabase.auth.signOut();
+      const { error: signOutError } = await supabase.auth.signOut(options);
       if (signOutError) {
         console.error("signOut error:", signOutError);
         setError(signOutError.message);

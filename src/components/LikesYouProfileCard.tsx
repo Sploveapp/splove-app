@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import type { LikeReceived } from "../types/premium.types";
 import { useTranslation } from "../i18n/useTranslation";
 import { VerifiedBadge } from "./VerifiedBadge";
-import { isPhotoVerified } from "../lib/profileVerification";
+import { isIdentityVerified } from "../lib/profileVerification";
 import {
   APP_BORDER,
   APP_CARD,
@@ -105,11 +105,11 @@ export function LikesYouProfileCard({
     <>
     <div
       style={{
-        borderRadius: "20px",
+        borderRadius: "22px",
         overflow: "hidden",
-        marginBottom: "24px",
+        marginBottom: "28px",
         background: APP_CARD,
-        boxShadow: "0 4px 24px rgba(0,0,0,0.35)",
+        boxShadow: "0 6px 28px rgba(0,0,0,0.38)",
         border: `1px solid ${APP_BORDER}`,
       }}
     >
@@ -135,19 +135,19 @@ export function LikesYouProfileCard({
             <IconProfileAvatarPlaceholder className="text-app-muted" size={96} />
           </div>
         )}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-black/70 to-transparent" />
-        <div className="absolute bottom-3 left-3 right-3 text-white">
-          <p className="text-base font-semibold leading-tight">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[42%] bg-gradient-to-t from-black/82 via-black/35 to-transparent" />
+        <div className="absolute bottom-4 left-4 right-4 text-white">
+          <p className="text-lg font-bold leading-tight drop-shadow-[0_2px_12px_rgba(0,0,0,0.65)]">
             {displayName}
-            {age != null ? `, ${age}` : ""}
+            {age != null ? <span className="font-semibold opacity-90">, {age}</span> : null}
           </p>
-          <p className="line-clamp-2 truncate text-sm opacity-90">{sports.join(" • ")}</p>
-          <p className="text-xs opacity-80">
+          <p className="mt-1 line-clamp-2 truncate text-[13px] font-medium text-white/72">{sports.join(" • ")}</p>
+          <p className="mt-0.5 text-[11px] font-medium text-white/55">
             {momentPreference === "morning" ? t("likes.moment_morning") : t("likes.moment_evening")}
           </p>
         </div>
       </div>
-      <div style={{ padding: "20px 24px" }}>
+      <div style={{ padding: "22px 26px" }}>
         <div
           style={{
             margin: "0 0 6px 0",
@@ -160,14 +160,15 @@ export function LikesYouProfileCard({
           <p
             style={{
               margin: 0,
-              fontSize: "20px",
-              fontWeight: 600,
+              fontSize: "21px",
+              fontWeight: 700,
               color: APP_TEXT,
+              letterSpacing: "-0.02em",
             }}
           >
             {displayName}
           </p>
-          {isPhotoVerified(profile) ? <VerifiedBadge /> : null}
+          {isIdentityVerified(profile) ? <VerifiedBadge /> : null}
           <span
             style={{
               display: "inline-flex",
@@ -187,9 +188,10 @@ export function LikesYouProfileCard({
         {profile.city && (
           <p
             style={{
-              margin: "0 0 10px 0",
-              fontSize: "14px",
+              margin: "0 0 12px 0",
+              fontSize: "13px",
               color: APP_TEXT_MUTED,
+              opacity: 0.92,
             }}
           >
             {profile.city}

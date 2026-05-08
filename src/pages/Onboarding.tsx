@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { Accessibility } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { env } from "../lib/env";
@@ -45,6 +46,7 @@ import {
 import {
   orderedQuickPickSports,
   sportMatchesFirstThreeLetters,
+  sportPictogramForSlug,
 } from "../lib/onboardingSportsQuickPick";
 
 const genderOptions = [
@@ -340,6 +342,12 @@ type SportOption = {
 
 /** 11 étapes formulaire ; écran succès séparé (`postOnboarding`). */
 const TOTAL_STEPS = 11;
+const ONBOARDING_SPORT_SLOT_MAX = 3;
+
+function onboardingPulseKey(s: number): string {
+  const step = Math.min(Math.max(Math.floor(s), 1), TOTAL_STEPS);
+  return `onboarding_pulse_step_${step}`;
+}
 
 const ONBOARDING_RADIUS_KM_OPTIONS = [10, 25, 50, 100] as const;
 const PHOTO_BUCKET = "profile-photos";
@@ -459,9 +467,9 @@ function tryParseBirthIso(digits: string): string | null {
 }
 
 const inputClassName =
-  "w-full box-border rounded-xl border border-app-border bg-app-bg py-2.5 px-3 text-base text-app-text placeholder:text-app-muted outline-none transition-[border-color,box-shadow] focus:border-app-accent/45 focus:ring-2 focus:ring-app-accent/15";
+  "w-full box-border rounded-2xl border border-app-border bg-app-bg py-3 px-3.5 text-base text-app-text placeholder:text-app-muted outline-none transition-[border-color,box-shadow] focus:border-app-accent/45 focus:ring-2 focus:ring-app-accent/15";
 
-const labelClassName = "mb-1 block text-sm font-semibold text-app-text";
+const labelClassName = "mb-2 block text-sm font-semibold text-app-text tracking-tight";
 
 export default function Onboarding() {
   const { t } = useTranslation();
@@ -479,6 +487,8 @@ export default function Onboarding() {
   } = useAuth();
 
   const [step, setStep] = useState(1);
+  /** Sous-étapes de l’étape 1 — une question principale par micro-écran. */
+  const [step1SubStep, setStep1SubStep] = useState(0);
   const [sportSearch, setSportSearch] = useState("");
   const [stepHint, setStepHint] = useState<string | null>(null);
   const [photoStepError, setPhotoStepError] = useState<string | null>(null);
@@ -1059,7 +1069,7 @@ export default function Onboarding() {
   }, [selectedSportIds, sportsCatalog]);
 
   useEffect(() => {
-    console.log("SELECTED_SPORTS", selectedSports.map((s) => s.name));
+    if (import.meta.env.DEV) console.log("SELECTED_SPORTS", selectedSports.map((s) => s.name));
   }, [selectedSports]);
 
   if (authLoading) {
@@ -1434,6 +1444,40 @@ export default function Onboarding() {
       });
       return;
     }
+    if (step === 1) {
+      if (step1SubStep === 0) {
+        setStepHint(null);
+        if (!firstName.trim()) {
+          setStepHint(t("onboarding_err_first_name"));
+          return;
+        }
+        setStep1SubStep(1);
+        await saveOnboardingDraft(1);
+        return;
+      }
+      if (step1SubStep === 1) {
+        setStepHint(null);
+        if (!birthDate) {
+          const d = birthDigitsFromRaw(birthInput);
+          setStepHint(
+            d.length === 8 ? t("onboarding_err_birth_invalid") : t("onboarding_err_birth_incomplete")
+          );
+          return;
+        }
+        if (!isAdultFromBirthIso(birthDate)) {
+          setStepHint(t("onboarding_err_age"));
+          return;
+        }
+        setStep1SubStep(2);
+        await saveOnboardingDraft(1);
+        return;
+      }
+      if (step1SubStep === 2) {
+        setStep1SubStep(3);
+        await saveOnboardingDraft(1);
+        return;
+      }
+    }
     if (!validateStep(step)) return;
     if (step === 8 && photoUploadingKind !== null) {
       setPhotoStepError(t("onboarding_photo_uploading"));
@@ -1447,6 +1491,7 @@ export default function Onboarding() {
     if (step !== 8) setPhotoStepError(null);
     setModerationSuccessNote(null);
     await saveOnboardingDraft(step);
+    if (step === 1) setStep1SubStep(0);
     setStep((s) => Math.min(TOTAL_STEPS, s + 1));
   }
 
@@ -1477,6 +1522,15 @@ export default function Onboarding() {
     setStepHint(null);
     setPhotoStepError(null);
     setModerationSuccessNote(null);
+    if (step === 1 && step1SubStep > 0) {
+      setStep1SubStep((s) => s - 1);
+      return;
+    }
+    if (step === 2) {
+      setStep(1);
+      setStep1SubStep(3);
+      return;
+    }
     setStep((s) => Math.max(1, s - 1));
   }
 
@@ -1515,6 +1569,7 @@ export default function Onboarding() {
     for (let s = 1; s <= 11; s++) {
       if (!validateStep(s)) {
         setStep(s);
+        if (s === 1) setStep1SubStep(0);
         return;
       }
     }
@@ -2059,29 +2114,33 @@ export default function Onboarding() {
   }
 
   const intentChoiceClass = (active: boolean) =>
-    `rounded-xl border-2 py-3 px-2 text-sm font-semibold transition-all sm:text-base ${
+    `rounded-2xl border-2 py-3.5 px-3 text-sm font-semibold transition-all duration-200 active:scale-[0.99] sm:text-base ${
       active
-        ? "shadow-sm ring-2 ring-offset-1"
-        : "border-app-border bg-app-card text-app-text hover:border-app-border"
+        ? "shadow-md ring-2 ring-offset-1 ring-offset-app-card"
+        : "border-app-border bg-app-card text-app-text hover:border-app-border/90 hover:bg-app-bg/40"
     }`;
 
   return (
     <div className="flex min-h-screen flex-col bg-app-bg font-sans">
       <GlobalHeader variant="compact" />
-      <div className="flex flex-1 flex-col items-center px-4 pb-4 pt-1">
-        <div className="flex w-full max-w-md flex-1 flex-col overflow-hidden rounded-2xl bg-app-card shadow-sm ring-1 ring-app-border sm:my-1 sm:max-h-[min(680px,calc(100vh-88px))]">
-          <div className="shrink-0 border-b border-app-border px-3 pb-2 pt-2.5 sm:px-4 sm:pt-3">
-            <p className="text-center text-[10px] font-semibold uppercase tracking-widest text-app-muted">
-              {t("onboarding_step_word")} {step} / {TOTAL_STEPS}
-            </p>
-            <div className="mx-auto mt-1.5 flex max-w-[220px] justify-center gap-1 px-1">
-              {Array.from({ length: TOTAL_STEPS }, (_, i) => (
-                <span
-                  key={i}
-                  className="h-0.5 min-w-0 flex-1 rounded-full"
-                  style={{ background: i < step ? BRAND_BG : APP_BORDER }}
-                />
-              ))}
+      <div className="flex flex-1 flex-col items-center px-5 pb-6 pt-2">
+        <div className="splove-onboarding-shell flex w-full max-w-md flex-1 flex-col overflow-hidden rounded-[1.35rem] bg-app-card shadow-[0_12px_48px_rgba(0,0,0,0.45)] ring-1 ring-white/[0.06] sm:my-2 sm:max-h-[min(700px,calc(100vh-84px))]">
+          <div className="shrink-0 border-b border-app-border px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
+            <div className="flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-app-muted">
+              <span>
+                {t("onboarding_step_word")} {step}/{TOTAL_STEPS}
+                {step === 1 ? ` · ${step1SubStep + 1}/4` : ""}
+              </span>
+              <span className="tabular-nums opacity-90">{Math.round((step / TOTAL_STEPS) * 100)}%</span>
+            </div>
+            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-app-border/70">
+              <motion.div
+                className="h-full rounded-full"
+                style={{ backgroundColor: BRAND_BG }}
+                initial={false}
+                animate={{ width: `${(step / TOTAL_STEPS) * 100}%` }}
+                transition={{ type: "spring", stiffness: 380, damping: 38 }}
+              />
             </div>
 
             <div className="mt-2.5 flex flex-col items-center">
@@ -2107,8 +2166,17 @@ export default function Onboarding() {
               )}
             </div>
 
-            <h1 className="mt-2.5 text-center text-base font-bold leading-snug text-app-text sm:text-lg">
-              {step === 1 && t("onboarding_step1_title")}
+            <h1 className="mt-5 text-center text-[1.28rem] font-bold leading-[1.22] tracking-tight text-app-text sm:text-xl">
+              {step === 1
+                ? t(
+                    [
+                      "onboarding_step1_micro_name_title",
+                      "onboarding_step1_micro_birth_title",
+                      "onboarding_step1_micro_height_title",
+                      "onboarding_step1_micro_family_title",
+                    ][step1SubStep] ?? "onboarding_step1_title",
+                  )
+                : null}
               {step === 2 && t("onboarding_step2_title")}
               {step === 3 && t("onboarding_step3_title")}
               {step === 4 && t("onboarding_step4_title")}
@@ -2120,8 +2188,17 @@ export default function Onboarding() {
               {step === 10 && t("onboarding_bio_hero_title")}
               {step === 11 && t("onboarding_final_hero_title")}
             </h1>
-            <p className="mt-0.5 text-center text-xs leading-snug text-app-muted sm:text-sm">
-              {step === 1 && t("onboarding_step1_subtitle")}
+            <p className="mx-auto mt-3 max-w-[20rem] text-center text-[14px] leading-relaxed text-app-muted sm:max-w-[22rem] sm:text-[15px]">
+              {step === 1
+                ? t(
+                    [
+                      "onboarding_step1_micro_name_subtitle",
+                      "onboarding_step1_micro_birth_subtitle",
+                      "onboarding_step1_micro_height_subtitle",
+                      "onboarding_step1_micro_family_subtitle",
+                    ][step1SubStep] ?? "onboarding_step1_subtitle",
+                  )
+                : null}
               {step === 2 && t("onboarding_step2_subtitle")}
               {step === 3 && t("onboarding_step3_subtitle")}
               {step === 4 && t("onboarding_step4_subtitle")}
@@ -2133,108 +2210,136 @@ export default function Onboarding() {
               {step === 10 && t("onboarding_bio_hero_subtitle")}
               {step === 11 && t("onboarding_final_hero_subtitle")}
             </p>
+            <p className="mx-auto mt-4 max-w-[21rem] text-center text-[12px] font-medium italic leading-relaxed text-app-muted/80">
+              {step === 1
+                ? t(`onboarding_pulse_step_1_micro_${step1SubStep}`)
+                : t(onboardingPulseKey(step))}
+            </p>
           </div>
 
           <form
             className="flex min-h-0 flex-1 flex-col"
             onSubmit={step === TOTAL_STEPS ? handleSubmit : (e) => e.preventDefault()}
           >
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2.5 sm:px-4 sm:py-3">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 sm:py-5">
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={`${step}-${step === 1 ? step1SubStep : 0}`}
+                  initial={{ opacity: 0, y: 14 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
+                  className="will-change-[opacity,transform]"
+                >
               {step === 1 && (
-                <div className="space-y-2.5 pb-2">
-                  <div>
-                    <label className={labelClassName} htmlFor="ob-first">
-                      {t("first_name_required")}
-                    </label>
-                    <input
-                      id="ob-first"
-                      type="text"
-                      placeholder={t("first_name_placeholder")}
-                      value={firstName}
-                      onChange={(e) => setFirstName(e.target.value)}
-                      autoComplete="given-name"
-                      className={inputClassName}
-                    />
-                  </div>
-                  <div>
-                    <label className={labelClassName} htmlFor="ob-birth">
-                      {t("birth_date_required")}
-                    </label>
-                    <input
-                      id="ob-birth"
-                      type="text"
-                      inputMode="numeric"
-                      autoComplete="bday"
-                      placeholder={t("birth_date_placeholder")}
-                      maxLength={10}
-                      value={birthInput}
-                      onChange={handleBirthInputChange}
-                      className={inputClassName}
-                    />
-                    {birthDigitsFromRaw(birthInput).length === 8 && !birthDate && (
-                      <p className="mt-1 text-xs text-red-600">
-                        {t("birth_date_invalid")} ({BIRTH_YEAR_MIN}-{new Date().getFullYear()}).
-                      </p>
-                    )}
-                    {birthDate && !isAdultFromBirthIso(birthDate) && (
-                      <p className="mt-1 text-xs text-red-600">{t("must_be_18")}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className={labelClassName} htmlFor="ob-height">
-                      {t("onboarding_height_label")}
-                    </label>
-                    <input
-                      id="ob-height"
-                      type="number"
-                      inputMode="numeric"
-                      placeholder={t("onboarding_height_placeholder")}
-                      min={HEIGHT_CM_MIN}
-                      max={HEIGHT_CM_MAX}
-                      step={1}
-                      value={heightCmInput}
-                      onChange={(e) => setHeightCmInput(e.target.value)}
-                      autoComplete="off"
-                      className={inputClassName}
-                    />
-                  </div>
-                  <div>
-                    <span className={labelClassName}>{t("onboarding_children_label")}</span>
-                    <div className="mt-2 grid grid-cols-3 gap-2">
-                      {(
-                        [
-                          ["yes", "onboarding_children_yes"],
-                          ["no", "onboarding_children_no"],
-                          ["prefer_not", "onboarding_children_prefer_not"],
-                        ] as const
-                      ).map(([value, labelKey]) => {
-                        const active = hasChildrenChoice === value;
-                        return (
-                          <button
-                            key={value}
-                            type="button"
-                            onClick={() =>
-                              setHasChildrenChoice((prev) => (prev === value ? "" : value))
-                            }
-                            className="min-h-[44px] rounded-xl border-2 px-2 py-2 text-sm font-semibold transition-all"
-                            style={{
-                              borderColor: active ? BRAND_BG : APP_BORDER,
-                              background: active ? BRAND_BG : APP_CARD,
-                              color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
-                            }}
-                            aria-pressed={active}
-                          >
-                            {t(labelKey)}
-                          </button>
-                        );
-                      })}
+                <div className="space-y-9 pb-2 pt-1">
+                  {step1SubStep === 0 ? (
+                    <div>
+                      <label className={labelClassName} htmlFor="ob-first">
+                        {t("first_name_required")}
+                      </label>
+                      <input
+                        id="ob-first"
+                        type="text"
+                        placeholder={t("first_name_placeholder")}
+                        value={firstName}
+                        onChange={(e) => setFirstName(e.target.value)}
+                        autoComplete="given-name"
+                        className={inputClassName}
+                      />
                     </div>
-                  </div>
+                  ) : null}
+                  {step1SubStep === 1 ? (
+                    <div>
+                      <label className={labelClassName} htmlFor="ob-birth">
+                        {t("birth_date_required")}
+                      </label>
+                      <input
+                        id="ob-birth"
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="bday"
+                        placeholder={t("birth_date_placeholder")}
+                        maxLength={10}
+                        value={birthInput}
+                        onChange={handleBirthInputChange}
+                        className={inputClassName}
+                      />
+                      {birthDigitsFromRaw(birthInput).length === 8 && !birthDate && (
+                        <p className="mt-1 text-xs text-red-600">
+                          {t("birth_date_invalid")} ({BIRTH_YEAR_MIN}-{new Date().getFullYear()}).
+                        </p>
+                      )}
+                      {birthDate && !isAdultFromBirthIso(birthDate) && (
+                        <p className="mt-1 text-xs text-red-600">{t("must_be_18")}</p>
+                      )}
+                    </div>
+                  ) : null}
+                  {step1SubStep === 2 ? (
+                    <div>
+                      <label className={labelClassName} htmlFor="ob-height">
+                        {t("onboarding_height_label")}
+                      </label>
+                      <p className="mb-2 text-[12px] leading-relaxed text-app-muted">
+                        {t("onboarding_step1_micro_height_hint")}
+                      </p>
+                      <input
+                        id="ob-height"
+                        type="number"
+                        inputMode="numeric"
+                        placeholder={t("onboarding_height_placeholder")}
+                        min={HEIGHT_CM_MIN}
+                        max={HEIGHT_CM_MAX}
+                        step={1}
+                        value={heightCmInput}
+                        onChange={(e) => setHeightCmInput(e.target.value)}
+                        autoComplete="off"
+                        className={inputClassName}
+                      />
+                    </div>
+                  ) : null}
+                  {step1SubStep === 3 ? (
+                    <div>
+                      <span className={labelClassName}>{t("onboarding_children_label")}</span>
+                      <p className="mb-2 text-[12px] leading-relaxed text-app-muted">
+                        {t("onboarding_step1_micro_family_hint")}
+                      </p>
+                      <div className="mt-2 grid grid-cols-3 gap-2">
+                        {(
+                          [
+                            ["yes", "onboarding_children_yes"],
+                            ["no", "onboarding_children_no"],
+                            ["prefer_not", "onboarding_children_prefer_not"],
+                          ] as const
+                        ).map(([value, labelKey]) => {
+                          const active = hasChildrenChoice === value;
+                          return (
+                            <button
+                              key={value}
+                              type="button"
+                              onClick={() =>
+                                setHasChildrenChoice((prev) => (prev === value ? "" : value))
+                              }
+                              className="min-h-[44px] rounded-xl border-2 px-2 py-2 text-sm font-semibold transition-all"
+                              style={{
+                                borderColor: active ? BRAND_BG : APP_BORDER,
+                                background: active ? BRAND_BG : APP_CARD,
+                                color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                              }}
+                              aria-pressed={active}
+                            >
+                              {t(labelKey)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               )}
 
               {step === 2 && (
-                <div className="space-y-3 pb-2">
+                <div className="space-y-4 pb-1">
                   <span className={labelClassName}>{t("gender_required")}</span>
                   <div className="grid grid-cols-2 gap-2">
                     {genderOptions.map((o) => {
@@ -2261,11 +2366,11 @@ export default function Onboarding() {
               )}
 
               {step === 3 && (
-                <div className="space-y-3 pb-2">
+                <div className="space-y-4 pb-1">
                   <span className={labelClassName}>{t("interested_in_required")}</span>
                   <div
                     id="ob-look"
-                    className="grid max-h-44 grid-cols-2 gap-1.5 overflow-y-auto pr-1"
+                    className="grid max-h-[min(52vh,22rem)] grid-cols-2 gap-2.5 overflow-y-auto pr-1"
                     role="group"
                     aria-label={t("interested_in_required")}
                   >
@@ -2274,7 +2379,7 @@ export default function Onboarding() {
                         key={o.value}
                         type="button"
                         onClick={() => toggleInterestedInOption(o.value)}
-                        className="min-h-[42px] rounded-xl border-2 px-2 py-1.5 text-[13px] font-semibold transition-all"
+                        className="min-h-[48px] rounded-2xl border-2 px-2.5 py-2 text-[13px] font-semibold transition-all duration-200 active:scale-[0.99]"
                         style={{
                           borderColor: interestedIn.includes(o.value) ? BRAND_BG : APP_BORDER,
                           background: interestedIn.includes(o.value) ? BRAND_BG : APP_CARD,
@@ -2290,7 +2395,7 @@ export default function Onboarding() {
               )}
 
               {step === 4 && (
-                <div className="space-y-4">
+                <div className="space-y-5">
                   <div>
                     <label className={labelClassName} htmlFor="ob-loc-city">
                       {t("city")}
@@ -2337,60 +2442,98 @@ export default function Onboarding() {
               )}
 
               {step === 5 && (
-                <div className="space-y-2.5">
-                  <p className="text-xs text-app-muted">{t("onboarding_sports_hint")}</p>
+                <div className="space-y-6">
+                  <div className="flex flex-col items-center gap-2.5">
+                    <div
+                      className="inline-flex min-h-[46px] items-center justify-center rounded-full border border-app-border/90 bg-app-bg/90 px-6 py-2.5 shadow-sm ring-1 ring-white/[0.05]"
+                      aria-live="polite"
+                    >
+                      <span className="text-[15px] font-bold tabular-nums tracking-tight" style={{ color: BRAND_BG }}>
+                        {t("onboarding_sports_counter", {
+                          current: selectedSportIds.length,
+                          max: ONBOARDING_SPORT_SLOT_MAX,
+                        })}
+                      </span>
+                    </div>
+                    <p className="max-w-[18rem] text-center text-[12px] leading-relaxed text-app-muted">
+                      {t("onboarding_sports_hint")}
+                    </p>
+                  </div>
 
                   {sportsLoadError ? (
-                    <p className="rounded-lg border border-amber-200/90 bg-amber-50/90 px-3 py-2 text-xs leading-snug text-amber-950">
+                    <p className="rounded-2xl border border-amber-200/90 bg-amber-50/90 px-3 py-2.5 text-xs leading-snug text-amber-950">
                       {sportsLoadError}
                     </p>
                   ) : null}
 
                   {selectedSports.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex flex-wrap justify-center gap-2">
                       {selectedSports.map((s) => (
-                        <button
+                        <motion.button
                           key={String(s.id)}
                           type="button"
+                          whileTap={{ scale: 0.97 }}
                           onClick={() => toggleSportById(s.id)}
-                          className="rounded-full border px-2.5 py-1 text-xs font-semibold"
+                          className="rounded-full border-2 px-3.5 py-2 text-xs font-semibold shadow-sm transition-shadow"
                           style={{
                             borderColor: BRAND_BG,
                             background: BRAND_BG,
                             color: TEXT_ON_BRAND,
                           }}
                         >
-                          {s.name} ×
-                        </button>
+                          <span>{s.name}</span>
+                          <span className="ml-1 opacity-90" aria-hidden>
+                            ×
+                          </span>
+                        </motion.button>
                       ))}
                     </div>
                   )}
                   {quickPickSportsOrdered.length > 0 ? (
-                    <div>
-                      <span className="mb-1.5 block text-xs font-medium text-app-muted">{t("onboarding_sports_quick_section")}</span>
-                      <div className="flex flex-wrap gap-1.5">
+                    <div className="space-y-3">
+                      <span className="block text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-app-muted">
+                        {t("onboarding_sports_quick_section")}
+                      </span>
+                      <div className="grid grid-cols-2 gap-3">
                         {quickPickSportsOrdered.map((sport) => {
                           const isSelected = selectedSportIds.some((id) => String(id) === String(sport.id));
+                          const picto = sportPictogramForSlug(sport.slug ?? null);
                           return (
-                            <button
+                            <motion.button
                               key={String(sport.id)}
                               type="button"
+                              whileTap={{ scale: 0.96 }}
                               onClick={() => toggleSportById(sport.id)}
-                              className="rounded-xl border-2 py-2 px-3 text-xs font-semibold transition-opacity sm:text-sm"
+                              className="flex min-h-[56px] w-full items-stretch overflow-hidden rounded-2xl border-2 text-left transition-shadow duration-200"
                               style={{
                                 borderColor: isSelected ? BRAND_BG : APP_BORDER,
                                 background: isSelected ? BRAND_BG : APP_CARD,
                                 color: isSelected ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                                boxShadow: isSelected
+                                  ? "0 10px 28px rgba(0,0,0,0.28), 0 0 0 1px rgba(225,29,46,0.12)"
+                                  : "0 4px 16px rgba(0,0,0,0.12)",
                               }}
+                              aria-pressed={isSelected}
                             >
-                              {sport.name}
-                            </button>
+                              <span
+                                className="flex w-12 shrink-0 items-center justify-center text-[1.15rem] leading-none"
+                                style={{
+                                  background: isSelected ? "rgba(0,0,0,0.1)" : "rgba(255,255,255,0.04)",
+                                }}
+                                aria-hidden
+                              >
+                                {picto}
+                              </span>
+                              <span className="flex flex-1 items-center px-2.5 py-3 text-[13px] font-semibold leading-snug">
+                                {sport.name}
+                              </span>
+                            </motion.button>
                           );
                         })}
                       </div>
                     </div>
                   ) : !loadingSports && sportsCatalog.length === 0 && !sportsLoadError ? (
-                    <p className="text-xs text-app-muted">{t("onboarding_sports_catalog_unavailable")}</p>
+                    <p className="text-center text-xs text-app-muted">{t("onboarding_sports_catalog_unavailable")}</p>
                   ) : null}
 
                   <div>
@@ -2413,18 +2556,18 @@ export default function Onboarding() {
                       className={inputClassName}
                     />
                     {sportSearch.trim().length > 0 && sportSearch.trim().length < 3 && (
-                      <p className="mt-1 text-xs text-app-muted">{t("sport_search_min_letters", { n: 3 - sportSearch.trim().length })}</p>
+                      <p className="mt-2 text-xs text-app-muted">{t("sport_search_min_letters", { n: 3 - sportSearch.trim().length })}</p>
                     )}
                     {searchMatches.length > 0 && (
                       <ul
-                        className="mt-1 max-h-40 overflow-y-auto rounded-xl border border-app-border bg-app-card text-sm shadow-sm"
+                        className="mt-2 max-h-44 overflow-y-auto rounded-2xl border border-app-border bg-app-card text-sm shadow-md ring-1 ring-white/[0.04]"
                         role="listbox"
                       >
                         {searchMatches.map((s) => (
                           <li key={String(s.id)}>
                             <button
                               type="button"
-                              className="w-full px-3 py-2 text-left hover:bg-app-border"
+                              className="w-full px-3 py-2.5 text-left transition-colors hover:bg-app-border"
                               onClick={() => {
                                 toggleSportById(s.id);
                                 setSportSearch("");
@@ -2439,22 +2582,23 @@ export default function Onboarding() {
                   </div>
 
                   {loadingSports ? (
-                    <p className="text-sm text-app-muted">{t("loading_sports_catalog")}</p>
+                    <p className="text-center text-sm text-app-muted">{t("loading_sports_catalog")}</p>
                   ) : null}
                 </div>
               )}
 
               {step === 6 && (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-1 gap-2.5">
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-3">
                     {ONBOARDING_INTENT_CARDS.map((card) => {
                       const active = intent === card.uiValue;
                       return (
-                        <button
+                        <motion.button
                           key={card.uiValue}
                           type="button"
+                          whileTap={{ scale: 0.985 }}
                           onClick={() => setIntent(card.uiValue)}
-                          className={`${intentChoiceClass(active)} min-h-[52px] w-full`}
+                          className={`${intentChoiceClass(active)} min-h-[56px] w-full`}
                           style={
                             active
                               ? {
@@ -2468,9 +2612,11 @@ export default function Onboarding() {
                         >
                           <span className="flex w-full items-center justify-between gap-2">
                             <span className="text-base font-semibold">{t(card.translationKey)}</span>
-                            <span className="text-lg">{active ? "✓" : ""}</span>
+                            <span className="text-base font-semibold" style={{ opacity: active ? 1 : 0 }}>
+                              ✓
+                            </span>
                           </span>
-                        </button>
+                        </motion.button>
                       );
                     })}
                   </div>
@@ -2765,6 +2911,9 @@ export default function Onboarding() {
                 </div>
               )}
 
+                </motion.div>
+              </AnimatePresence>
+
               {stepHint && step !== 8 && (
                 <p className="mt-3 text-sm text-red-600">{stepHint}</p>
               )}
@@ -2780,18 +2929,18 @@ export default function Onboarding() {
               )}
             </div>
 
-            <div className="shrink-0 border-t border-app-border bg-app-card px-3 py-2.5 sm:px-4 sm:py-3">
+            <div className="shrink-0 border-t border-app-border bg-app-card px-4 py-3.5 sm:px-5 sm:py-4">
               {step === TOTAL_STEPS && (
                 <p className="mb-2 text-center text-xs font-medium text-app-muted">
                   {t("onboarding_final_cta_ready")}
                 </p>
               )}
-              <div className="flex gap-2">
-                {step > 1 ? (
+              <div className="flex gap-3">
+                {step > 1 || (step === 1 && step1SubStep > 0) ? (
                   <button
                     type="button"
                     onClick={goBack}
-                    className="flex-1 rounded-xl border border-app-border py-3 text-sm font-semibold text-app-text hover:bg-app-border"
+                    className="flex-1 rounded-2xl border border-app-border py-3.5 text-sm font-semibold text-app-text transition-colors hover:bg-app-border active:scale-[0.99]"
                   >
                     {t("back")}
                   </button>
@@ -2803,7 +2952,7 @@ export default function Onboarding() {
                     type="button"
                     onClick={() => void goNext()}
                     disabled={authLoading}
-                    className="flex-1 rounded-xl py-3 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-70"
+                    className="flex-1 rounded-2xl py-3.5 text-sm font-semibold text-white shadow-md transition-[transform,box-shadow] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"
                     style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
                   >
                     {step === 4
@@ -2818,7 +2967,7 @@ export default function Onboarding() {
                   <button
                     type="submit"
                     disabled={loading || authLoading || hydratingDraft}
-                    className="flex-1 rounded-xl py-3 text-sm font-semibold shadow-sm disabled:cursor-not-allowed disabled:opacity-70 sm:text-base"
+                    className="flex-1 rounded-2xl py-3.5 text-sm font-semibold shadow-md transition-transform active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70 sm:text-base"
                     style={{
                       background: !loading && !authLoading && user?.id ? BRAND_BG : CTA_DISABLED_BG,
                       color: TEXT_ON_BRAND,

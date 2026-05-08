@@ -4,7 +4,7 @@ import { INBOX_REFRESH_EVENT } from "../constants";
 import { CHAT_MESSAGES_TABLE, logSupabaseTableError, supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { insertBlock, isBlockedWith } from "../services/blocks.service";
-import { isPhotoVerified } from "../lib/profileVerification";
+import { isIdentityVerified } from "../lib/profileVerification";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { IconSend } from "../components/ui/Icon";
 import { ProposalCard } from "../components/ProposalCard";
@@ -294,7 +294,7 @@ export default function Chat() {
   const [partnerUserId, setPartnerUserId] = useState<string | null>(null);
   const blockPartnerInFlightRef = useRef(false);
   const [reportOpen, setReportOpen] = useState(false);
-  const [partnerPhotoVerified, setPartnerPhotoVerified] = useState(false);
+  const [partnerIdentityVerifiedBadge, setPartnerIdentityVerifiedBadge] = useState(false);
   const [chatMatchId, setChatMatchId] = useState<string | null>(null);
   const [matchPair, setMatchPair] = useState<{ userA: string; userB: string } | null>(null);
   const [rlCheckin, setRlCheckin] = useState<RealLifeSessionCheckin | null>(null);
@@ -570,7 +570,7 @@ export default function Chat() {
         setPartnerUserId(null);
         setMatchPair(null);
         setRlCheckin(null);
-        setPartnerPhotoVerified(false);
+        setPartnerIdentityVerifiedBadge(false);
         setPairChatMeta(null);
 
         const { data: conv, error: convErr } = await supabase
@@ -657,7 +657,7 @@ export default function Chat() {
         const { data: pairProfiles } = await supabase
           .from("profiles")
           .select(
-            "id, first_name, main_photo_url, portrait_url, avatar_url, is_photo_verified, photo_status, gender, intent, sport_practice_type",
+            "id, first_name, main_photo_url, portrait_url, avatar_url, is_photo_verified, photo_status, identity_verified, veriff_status, gender, intent, sport_practice_type",
           )
           .in("id", [user.id, other]);
         if (!cancelled && pairProfiles && pairProfiles.length > 0) {
@@ -676,6 +676,8 @@ export default function Chat() {
                 avatar_url?: string | null;
                 is_photo_verified?: boolean | null;
                 photo_status?: string | null;
+                identity_verified?: boolean | null;
+                veriff_status?: string | null;
                 gender?: string | null;
                 intent?: unknown;
                 sport_practice_type?: string | null;
@@ -689,7 +691,7 @@ export default function Chat() {
               theirs.avatar_url?.trim() ||
               null;
             if (!partnerPhoto && photo) setPartnerPhoto(photo);
-            setPartnerPhotoVerified(isPhotoVerified(theirs));
+            setPartnerIdentityVerifiedBadge(isIdentityVerified(theirs));
           }
           if (mine && theirs) {
             setPairChatMeta({
@@ -1625,7 +1627,7 @@ export default function Chat() {
                   ? t("session_with", { name: partnerName })
                   : t("chat_plan_activity")}
               </h1>
-              {partnerPhotoVerified ? <VerifiedBadge variant="compact" /> : null}
+              {partnerIdentityVerifiedBadge ? <VerifiedBadge variant="compact" /> : null}
             </div>
             <p className="mt-1 truncate text-[12px] text-app-muted">{sharedSportsLine}</p>
             {proposalWindowRemainingLabel ? (

@@ -3,7 +3,11 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { ACCESSIBILITY_PREF_BOTH_REQUIRED } from "../constants/copy";
 import { VerifiedBadge } from "../components/VerifiedBadge";
-import { collectPhotoRejectionUserMessages, isPhotoVerified } from "../lib/profileVerification";
+import {
+  collectPhotoRejectionUserMessages,
+  hasProfilePhotosModerationValidated,
+  isIdentityVerified,
+} from "../lib/profileVerification";
 import { bioPublicTextViolatesPolicy } from "../lib/contentModeration";
 import {
   APP_BG,
@@ -477,7 +481,7 @@ export default function Profile() {
               >
                 {t("profile_verification.title")}
               </span>
-              {profile && isPhotoVerified(profile) ? (
+              {profile && isIdentityVerified(profile) ? (
                 <>
                   <div
                     style={{
@@ -502,6 +506,18 @@ export default function Profile() {
                     {t("profile_verification.verified_body")}
                   </p>
                 </>
+              ) : profile && hasProfilePhotosModerationValidated(profile) ? (
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: "14px",
+                    fontWeight: 500,
+                    color: APP_TEXT_MUTED,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {t("profile_verification.photo_validated_hint")}
+                </p>
               ) : (
                 <div>
                   {(() => {

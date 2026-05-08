@@ -353,7 +353,7 @@ export default function AuthCallback() {
         >
           {ERR_NO_SESSION_TITLE}
         </p>
-        {technicalError ? (
+        {isDev && technicalError ? (
           <p
             style={{
               margin: 0,
@@ -412,7 +412,7 @@ export default function AuthCallback() {
         >
           {ERR_PROFILE_STUCK}
         </p>
-        {debug.finalError && debug.finalError !== "—" ? (
+        {isDev && debug.finalError && debug.finalError !== "—" ? (
           <p
             style={{
               margin: 0,

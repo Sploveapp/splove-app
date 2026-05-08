@@ -14,7 +14,6 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { ReportModal } from "../components/ReportModal";
 import { ReportPhotoModal } from "../components/ReportPhotoModal";
-import { PremiumSuggestionsSection } from "../components/PremiumSuggestionsSection";
 import { BLOCK_PROFILE_CONFIRM, BLOCK_PROFILE_LINK_LABEL } from "../constants/copy";
 
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
@@ -28,7 +27,7 @@ import { BETA_MODE } from "../constants/beta";
 import { parseProfileIntent } from "../lib/profileIntent";
 import { fetchBlockExclusionDetail, isBlockedWith } from "../services/blocks.service";
 import { VerifiedBadge } from "../components/VerifiedBadge";
-import { isPhotoVerified } from "../lib/profileVerification";
+import { isIdentityVerified } from "../lib/profileVerification";
 import {
   collectSportMatchKeysFromProfile,
   getDiscoverSportChips,
@@ -106,8 +105,9 @@ type Profile = {
   sport_time?: string | null;
   /** Voir `profiles.is_photo_verified` (Veriff). */
   is_photo_verified?: boolean | null;
-  /** Badge « vérifié » : `photo_status === 'approved'` (MVP). */
   photo_status?: string | null;
+  identity_verified?: boolean | null;
+  veriff_status?: string | null;
   needs_adapted_activities?: boolean | null;
   /** Rythme de pratique affiché sur Discover : solo | adapted | flexible */
   sport_practice_type?: string | null;
@@ -350,7 +350,7 @@ function DiscoverProfileDetailPreview({
             <span className="rounded-full bg-app-border/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-app-text ring-1 ring-app-border">
               {t("discover.badge48h")}
             </span>
-            {isPhotoVerified(profile) ? <VerifiedBadge variant="compact" /> : null}
+            {isIdentityVerified(profile) ? <VerifiedBadge variant="compact" /> : null}
           </div>
           {sportChipsPreview.length > 0 ? (
             <div className="flex max-h-[5rem] flex-wrap gap-1.5 overflow-hidden">
@@ -786,7 +786,7 @@ const DISCOVER_DISPLAY_LIMIT = 10;
 /** Source Supabase du fil Discover (classement serveur) — repli côté client si colonne absente. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
 const DISCOVER_FALLBACK_SELECT =
-  "id, first_name, city, birth_date, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, sport_phrase, is_photo_verified, photo_status, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, city, birth_date, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, sport_phrase, is_photo_verified, photo_status, identity_verified, veriff_status, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Message utilisateur sûr (aucun détail technique backend). */
 function discoverFetchFailedMsg(language: "fr" | "en"): string {
@@ -795,14 +795,62 @@ function discoverFetchFailedMsg(language: "fr" | "en"): string {
     : "Impossible de charger les profils. Verifie ta connexion et reessaie.";
 }
 
-function DiscoverProfileCardSkeleton() {
+const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
+  profile,
+  layer,
+}: {
+  profile: ProfileWithAffinity;
+  layer: "mid" | "back";
+}) {
+  const photoRaw = getProfileDisplayPhotoUrl(profile);
+  const photoUrl = useProfilePhotoSignedUrl(photoRaw) ?? "";
+  const isBack = layer === "back";
   return (
-    <article
-      className="mb-7 flex max-h-[min(92vh,840px)] min-h-[min(560px,88svh)] flex-col overflow-hidden rounded-3xl bg-app-card shadow-lg ring-1 ring-app-border/90"
+    <div
+      className="pointer-events-none absolute inset-x-[7px] overflow-visible sm:inset-x-2.5"
+      style={{
+        top: isBack ? 26 : 12,
+        bottom: "4.5rem",
+        zIndex: isBack ? 6 : 14,
+        transform: isBack ? "scale(0.914) translateY(16px)" : "scale(0.958) translateY(7px)",
+        transition: "transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.45s ease",
+        opacity: isBack ? 0.82 : 0.9,
+      }}
       aria-hidden
     >
-      <div className="relative min-h-[min(58vh,420px)] w-full flex-1 basis-0 overflow-hidden bg-zinc-950 sm:min-h-[min(52vh,480px)]">
-        <div className="absolute inset-0 bg-gradient-to-br from-zinc-800/95 via-zinc-700/45 to-zinc-900/95 animate-pulse" />
+      <div className="flex h-full flex-col overflow-hidden rounded-[26px] bg-zinc-950 shadow-[0_24px_55px_rgba(0,0,0,0.5)] ring-1 ring-white/[0.06]">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          {photoUrl ? (
+            <img src={photoUrl} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <div className="flex h-full min-h-[240px] items-center justify-center bg-zinc-900">
+              <IconProfileAvatarPlaceholder className="text-app-muted/45" size={56} />
+            </div>
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/88 via-black/35 to-black/45" />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_20%,rgba(255,30,45,0.07),transparent_55%)]" />
+        </div>
+      </div>
+    </div>
+  );
+});
+
+function DiscoverProfileCardSkeleton({ immersive = false }: { immersive?: boolean }) {
+  return (
+    <article
+      className={`flex flex-col overflow-hidden rounded-[26px] bg-app-card ring-1 ring-white/[0.06] ${
+        immersive
+          ? "min-h-[min(76dvh,calc(100dvh-10rem))] max-h-[calc(100dvh-5.5rem)] w-full flex-1 shadow-[0_20px_50px_rgba(0,0,0,0.45)]"
+          : "mb-8 max-h-[min(92vh,840px)] min-h-[min(560px,88svh)] shadow-lg ring-app-border/90"
+      }`}
+      aria-hidden
+    >
+      <div
+        className={`relative w-full flex-1 basis-0 overflow-hidden bg-zinc-950 ${
+          immersive ? "min-h-[min(68dvh,600px)]" : "min-h-[min(58vh,420px)] sm:min-h-[min(52vh,480px)]"
+        }`}
+      >
+        <div className="absolute inset-0 bg-gradient-to-br from-zinc-800/95 via-zinc-700/45 to-zinc-900/95 splove-skeleton-breathe" />
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[10] pb-28 pt-12">
           <div className="flex flex-wrap gap-1.5 px-4">
             <div className="h-5 w-[4.25rem] rounded-full bg-white/12" />
@@ -815,13 +863,13 @@ function DiscoverProfileCardSkeleton() {
           </div>
         </div>
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[11] flex items-center justify-between px-8 pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <div className="h-14 w-14 shrink-0 rounded-full bg-white/12 animate-pulse" />
-          <div className="h-12 w-12 shrink-0 rounded-full bg-white/10 animate-pulse" />
-          <div className="h-[3.65rem] w-[3.65rem] shrink-0 rounded-full bg-white/14 animate-pulse" />
+          <div className="h-14 w-14 shrink-0 rounded-full bg-white/12 splove-skeleton-breathe" />
+          <div className="h-12 w-12 shrink-0 rounded-full bg-white/10 splove-skeleton-breathe" />
+          <div className="h-[3.65rem] w-[3.65rem] shrink-0 rounded-full bg-white/14 splove-skeleton-breathe" />
         </div>
       </div>
       <div className="border-t border-app-border/85 bg-app-card px-3 py-2.5">
-        <div className="mx-auto h-3 w-28 rounded-md bg-app-border/80 animate-pulse" />
+        <div className="mx-auto h-3 w-28 rounded-md bg-app-border/80 splove-skeleton-breathe" />
       </div>
     </article>
   );
@@ -842,12 +890,9 @@ function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremiu
   return Date.now() - ts <= maxHours * 60 * 60 * 1000;
 }
 
-/**
- * Colonnes Discover depuis `public.profiles` uniquement — pas de colonnes optionnelles absentes en prod.
- * Badge « vérifié » : uniquement `photo_status === 'approved'`.
- */
+/** Colonnes Discover depuis `public.profiles` uniquement — pas de colonnes optionnelles absentes en prod. */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, identity_verified, veriff_status, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Profil viewer Discover : uniquement colonnes plates sur `profiles` (sports chargés séparément sur `profile_sports`). */
 const DISCOVER_VIEWER_ME_SELECT =
@@ -986,6 +1031,8 @@ type DiscoverSwipeCardProps = {
   handleUndo: () => void;
   canUndo: boolean;
   restoredProfileId: string | null;
+  /** Pile Discover — carte plein écran, focus émotionnel. */
+  immersive?: boolean;
 };
 
 const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
@@ -1003,6 +1050,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   handleUndo,
   canUndo,
   restoredProfileId,
+  immersive = false,
 }: DiscoverSwipeCardProps) {
   const photoRaw = getProfileDisplayPhotoUrl(profile);
   const photo = useProfilePhotoSignedUrl(photoRaw) ?? "";
@@ -1097,16 +1145,24 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   const rot = Math.max(-4, Math.min(4, dx / 95));
   const liftOpacity = 1 - Math.min(Math.abs(dx) / 320, 0.1);
 
-  return (
-    <article
-      className={`mb-7 flex max-h-[min(92vh,840px)] min-h-[min(560px,88svh)] flex-col overflow-hidden rounded-3xl bg-app-card shadow-lg ring-1 ring-app-border/90 ${
-        strongAffinity ? "ring-2 ring-emerald-200/70" : ""
+  const articleShell = immersive
+    ? `splove-content-reveal splove-card-premium relative z-[24] flex w-full flex-1 flex-col overflow-hidden rounded-[28px] bg-app-card shadow-[0_28px_60px_rgba(0,0,0,0.5)] ring-1 ring-white/[0.09] ${
+        strongAffinity ? "ring-2 ring-[#FF1E2D]/38" : ""
+      } ${
+        profile.is_boost_active
+          ? "ring-2 ring-fuchsia-400/45 shadow-[0_0_28px_rgba(217,70,239,0.25)] animate-[pulse_2.8s_ease-in-out_infinite]"
+          : ""
+      } min-h-[min(76dvh,calc(100dvh-10rem))] max-h-[calc(100dvh-5.25rem)]`
+    : `splove-content-reveal splove-card-premium mb-8 flex max-h-[min(94vh,880px)] min-h-[min(580px,90svh)] flex-col overflow-hidden rounded-[26px] bg-app-card ring-1 ring-white/[0.07] ${
+        strongAffinity ? "ring-2 ring-[#FF1E2D]/35" : ""
       } ${
         profile.is_boost_active
           ? "ring-2 ring-fuchsia-400/45 shadow-[0_0_22px_rgba(217,70,239,0.22)] animate-[pulse_2.8s_ease-in-out_infinite]"
           : ""
-      }`}
-    >
+      }`;
+
+  return (
+    <article className={articleShell}>
       <DiscoverProfileCard
         profile={profile}
         viewerCity={viewerCity}
@@ -1133,6 +1189,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
         onUndo={handleUndo}
         canUndo={canUndo}
         onReport={() => onReport(profile.id)}
+        immersive={immersive}
       />
     </article>
   );
@@ -1576,23 +1633,6 @@ export default function Discover() {
       console.error("[Discover diagnostics] loadProfiles rejected", e);
     });
   }, [authLoading, user?.id]);
-
-  const weeklySuggestions = useMemo(
-    () =>
-      profiles
-        .filter((p) => p.commonSportsCount > 0 && isValidProfileId(p.id))
-        .slice()
-        .sort((a, b) => {
-          const aLocal =
-            !!myCity && !!a.city && a.city.toLowerCase().trim() === myCity.toLowerCase().trim();
-          const bLocal =
-            !!myCity && !!b.city && b.city.toLowerCase().trim() === myCity.toLowerCase().trim();
-          if (aLocal !== bLocal) return bLocal ? 1 : -1;
-          return safeTimeMs(b.created_at) - safeTimeMs(a.created_at);
-        })
-        .slice(0, 3),
-    [profiles, myCity]
-  );
 
   useEffect(() => {
     if (!hasPlus) return;
@@ -2535,19 +2575,21 @@ export default function Discover() {
 
   const handlePreviewLike = async () => {
     if (!previewProfile) {
-      console.warn("[LIKE DEBUG] previewProfile missing");
+      if (import.meta.env.DEV) console.warn("[LIKE DEBUG] previewProfile missing");
       return;
     }
 
     setLikeActionError(null);
 
-    console.log("[LIKE DEBUG]", {
-      firstName: previewProfile.first_name,
-      profileId: previewProfile.id,
-      profileIdType: typeof previewProfile.id,
-      previewProfile,
-      payload: { p_liked_id: previewProfile.id },
-    });
+    if (import.meta.env.DEV) {
+      console.log("[LIKE DEBUG]", {
+        firstName: previewProfile.first_name,
+        profileId: previewProfile.id,
+        profileIdType: typeof previewProfile.id,
+        previewProfile,
+        payload: { p_liked_id: previewProfile.id },
+      });
+    }
 
     await handleLike(previewProfile, 0);
     setPreviewProfile(null);
@@ -2691,134 +2733,164 @@ export default function Discover() {
 
   if (!authLoading && user?.id && isProfileLoading) {
     return (
-      <div className="min-h-0 bg-app-bg font-sans">
+      <div className="flex min-h-0 flex-1 flex-col bg-app-bg font-sans">
         <main
-          className="mx-auto max-w-md px-4 pb-8 pt-8"
+          className="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col px-3 pb-24 pt-3"
           role="status"
           aria-live="polite"
           aria-busy="true"
           aria-label={t("loading")}
         >
-          <div className="space-y-0">
-            {[0, 1, 2].map((i) => (
-              <DiscoverProfileCardSkeleton key={i} />
-            ))}
-          </div>
+          <DiscoverProfileCardSkeleton immersive />
         </main>
       </div>
     );
   }
 
   return (
-    <div className="min-h-0 bg-app-bg font-sans">
+    <div className="flex min-h-0 flex-1 flex-col bg-app-bg font-sans">
       <main
-        className={`mx-auto max-w-md px-4 pt-1 ${currentUserId && !errorMessage && !loading ? "pb-24" : "pb-8"}`}
+        className={`mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col px-2 pt-1 sm:px-3 ${
+          currentUserId && !errorMessage && !loading ? "pb-24" : "pb-10"
+        }`}
       >
-        <section className="mb-5 px-0.5 text-center">
-          <p className="mt-2.5 text-center text-xl font-semibold leading-tight tracking-tight text-app-text">
-            {t("discover.heroTitle")}
-          </p>
-          <p className="mx-auto mt-2 max-w-[21rem] text-[13px] leading-relaxed text-app-muted">
-            {t("discover.heroSubtitle")}
-          </p>
-          <p className="mx-auto mt-2 max-w-[22rem] text-[12px] font-medium italic leading-snug text-app-muted/90">
-            {t("discover.heroTagline")}
-          </p>
-          {formatViewerRadiusLabel(myDiscoveryRadiusKm) ? (
-            <p className="mx-auto mt-1.5 max-w-[21rem] text-[11px] font-medium text-app-muted">
-              {formatViewerRadiusLabel(myDiscoveryRadiusKm)}
-            </p>
-          ) : null}
-          {myCity ? (
-            <p className="mx-auto mt-0.5 max-w-[21rem] text-[11px] text-app-muted">{t("discover.yourCityLine", { city: myCity })}</p>
-          ) : null}
-          {betaRadiusFallbackActive ? (
-            <p className="mx-auto mt-1.5 max-w-[22rem] text-[12px] font-medium text-app-muted">
-              On élargit un peu ta zone pour te proposer plus de profils.
-            </p>
-          ) : null}
-          {currentUserId ? (
-            <div className="mx-auto mt-4 w-full max-w-[21rem] rounded-2xl border border-emerald-500/35 bg-emerald-500/[0.07] px-3 py-3 text-left shadow-sm ring-1 ring-emerald-500/[0.12] dark:bg-emerald-950/35">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-900 dark:text-emerald-100/95">
-                {t("discover.meetModeHeading")}
+        <section className="mb-2 shrink-0 px-0.5">
+          <div className="flex items-start justify-center gap-2 text-center sm:gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[1.2rem] font-semibold leading-tight tracking-tight text-app-text sm:text-[1.35rem]">
+                {t("discover.heroTitle")}
               </p>
-              <p className="mt-1.5 text-[12px] leading-snug text-app-text">
-                {viewerMeetActive ? t("discover.meetModeOnBody") : t("discover.meetModeOffBody")}
+              <p className="mx-auto mt-1 max-w-[22rem] text-[13px] leading-snug text-app-muted sm:text-[14px]">
+                {t("discover.heroSubtitle")}
               </p>
-              <Link
-                to="/profile"
-                className="mt-2 inline-block text-[12px] font-semibold text-emerald-700 underline decoration-emerald-500/50 underline-offset-2 dark:text-emerald-200"
-              >
-                {t("discover.meetModeProfileCta")}
-              </Link>
             </div>
-          ) : null}
-          {currentUserId ? (
-            <DiscoverLocalImpactCard
-              invitesCount={localImpact.invitesCount}
-              successfulReferrals={localImpact.successfulReferrals}
-              boostCredits={localImpact.boostCredits}
-              loading={localImpactLoading}
-              onInviteClick={() => {
-                void trackReferralEvent("invite_click", {
-                  variant: referralVariant,
-                  source: "discover_local_impact",
-                });
-                setReferralModalOpen(true);
-              }}
-            />
-          ) : null}
-          {currentUserId ? (
-            <div className="mx-auto mt-3 flex max-w-[21rem] flex-wrap items-center justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setCrossingsOpen(true);
-                  void loadCrossings();
-                }}
-                className="rounded-xl border border-app-border bg-app-bg px-3 py-2 text-[12px] font-semibold text-app-muted transition hover:bg-app-border"
-              >
-                {t("discover_crossings_open")}
-              </button>
-            </div>
-          ) : null}
-          {rewindError ? (
-            <p className="mx-auto mt-2 max-w-[22rem] text-center text-[12px] text-amber-100/90">{rewindError}</p>
-          ) : null}
-          {rewindStatus &&
-          !rewindStatus.has_premium &&
-          !rewindStatus.can_rewind &&
-          (rewindStatus.reason === "time_window" || rewindStatus.reason === "rewind_rate") &&
-          !rewindError ? (
-            <p className="mx-auto mt-2 max-w-[22rem] text-center text-[12px] leading-snug text-app-muted">
-              {t("discover_rewind_err_upgrade")}
-            </p>
-          ) : null}
-          {boostStats.isActive ? (
-            <div className="mx-auto mt-3 max-w-[21rem] rounded-xl border border-fuchsia-400/35 bg-fuchsia-500/10 px-3 py-2 text-[12px] font-medium text-fuchsia-100">
-              <p>
-                {language === "en"
-                  ? `Boost active - ${boostStats.views} views`
-                  : `Boost actif - ${boostStats.views} vues`}
+          </div>
+          <details className="group mx-auto mt-2 max-w-[24rem] text-left [&_summary::-webkit-details-marker]:hidden">
+            <summary className="cursor-pointer list-none rounded-2xl border border-app-border/90 bg-app-card/80 px-3 py-2.5 text-center text-[12px] font-semibold text-app-muted shadow-sm ring-1 ring-white/[0.04] transition hover:border-app-border hover:bg-app-border/30">
+              <span className="inline-flex items-center justify-center gap-1.5">
+                {t("discover.hero_details_toggle")}
+                <span className="text-app-muted/80 transition group-open:rotate-180" aria-hidden>
+                  ▾
+                </span>
+              </span>
+            </summary>
+            <div className="mt-3 space-y-3 text-center">
+              <p className="mx-auto max-w-[22rem] text-[12px] font-medium italic leading-snug text-app-muted/90">
+                {t("discover.heroTagline")}
               </p>
-              <p className="mt-0.5 text-[11px] text-fuchsia-200/90">
-                {language === "en"
-                  ? "You're getting more visibility now"
-                  : "Tu gagnes en visibilité maintenant"}
-              </p>
-              <p className="mt-0.5 text-[11px] text-fuchsia-200/85">
-                {language === "en" ? "Time left:" : "Temps restant :"}{" "}
-                {Math.max(1, Math.ceil(boostStats.remainingTime / 60000))} min
-              </p>
-              {boostStats.lastMinuteGain > 0 ? (
-                <p className="mt-0.5 text-[11px] text-fuchsia-100/85">
-                  {language === "en"
-                    ? `+${boostStats.lastMinuteGain} views in the last minute`
-                    : `+${boostStats.lastMinuteGain} vues sur la derniere minute`}
+              {formatViewerRadiusLabel(myDiscoveryRadiusKm) ? (
+                <p className="mx-auto max-w-[21rem] text-[11px] font-medium text-app-muted">
+                  {formatViewerRadiusLabel(myDiscoveryRadiusKm)}
                 </p>
               ) : null}
+              {myCity ? (
+                <p className="mx-auto max-w-[21rem] text-[11px] text-app-muted">
+                  {t("discover.yourCityLine", { city: myCity })}
+                </p>
+              ) : null}
+              {betaRadiusFallbackActive ? (
+                <p className="mx-auto max-w-[22rem] text-[12px] font-medium text-app-muted">
+                  On élargit un peu ta zone pour te proposer plus de profils.
+                </p>
+              ) : null}
+              {currentUserId ? (
+                <div className="mx-auto w-full max-w-[21rem] rounded-2xl border border-[#E11D2E]/25 bg-gradient-to-br from-[#FF1E2D]/[0.07] to-app-card px-3 py-3 text-left shadow-md ring-1 ring-white/[0.05]">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-app-text/95">
+                    {t("discover.meetModeHeading")}
+                  </p>
+                  <p className="mt-1.5 text-[12px] leading-snug text-app-text">
+                    {viewerMeetActive ? t("discover.meetModeOnBody") : t("discover.meetModeOffBody")}
+                  </p>
+                  <Link
+                    to="/profile"
+                    className="mt-2 inline-block text-[12px] font-semibold text-app-accent underline decoration-app-accent/40 underline-offset-2"
+                  >
+                    {t("discover.meetModeProfileCta")}
+                  </Link>
+                </div>
+              ) : null}
+              {currentUserId ? (
+                <DiscoverLocalImpactCard
+                  invitesCount={localImpact.invitesCount}
+                  successfulReferrals={localImpact.successfulReferrals}
+                  boostCredits={localImpact.boostCredits}
+                  loading={localImpactLoading}
+                  onInviteClick={() => {
+                    void trackReferralEvent("invite_click", {
+                      variant: referralVariant,
+                      source: "discover_local_impact",
+                    });
+                    setReferralModalOpen(true);
+                  }}
+                />
+              ) : null}
+              {currentUserId && !loading && !errorMessage && profiles.length <= 3 ? (
+                <div className="mx-auto w-full max-w-[21rem] text-left">
+                  <ReferralCard
+                    variant={referralVariant}
+                    onInvite={() => {
+                      void trackReferralEvent("invite_click", {
+                        variant: referralVariant,
+                        source: "discover",
+                      });
+                      setReferralModalOpen(true);
+                    }}
+                  />
+                </div>
+              ) : null}
+              {currentUserId ? (
+                <div className="mx-auto flex max-w-[21rem] flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCrossingsOpen(true);
+                      void loadCrossings();
+                    }}
+                    className="rounded-xl border border-app-border bg-app-bg px-3 py-2 text-[12px] font-semibold text-app-muted transition hover:bg-app-border"
+                  >
+                    {t("discover_crossings_open")}
+                  </button>
+                </div>
+              ) : null}
+              {rewindError ? (
+                <p className="mx-auto max-w-[22rem] text-[12px] text-amber-100/90">{rewindError}</p>
+              ) : null}
+              {rewindStatus &&
+              !rewindStatus.has_premium &&
+              !rewindStatus.can_rewind &&
+              (rewindStatus.reason === "time_window" || rewindStatus.reason === "rewind_rate") &&
+              !rewindError ? (
+                <p className="mx-auto max-w-[22rem] text-[12px] leading-snug text-app-muted">
+                  {t("discover_rewind_err_upgrade")}
+                </p>
+              ) : null}
+              {boostStats.isActive ? (
+                <div className="mx-auto max-w-[21rem] rounded-xl border border-fuchsia-400/35 bg-fuchsia-500/10 px-3 py-2 text-[12px] font-medium text-fuchsia-100">
+                  <p>
+                    {language === "en"
+                      ? `Boost active - ${boostStats.views} views`
+                      : `Boost actif - ${boostStats.views} vues`}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-fuchsia-200/90">
+                    {language === "en"
+                      ? "You're getting more visibility now"
+                      : "Tu gagnes en visibilité maintenant"}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-fuchsia-200/85">
+                    {language === "en" ? "Time left:" : "Temps restant :"}{" "}
+                    {Math.max(1, Math.ceil(boostStats.remainingTime / 60000))} min
+                  </p>
+                  {boostStats.lastMinuteGain > 0 ? (
+                    <p className="mt-0.5 text-[11px] text-fuchsia-100/85">
+                      {language === "en"
+                        ? `+${boostStats.lastMinuteGain} views in the last minute`
+                        : `+${boostStats.lastMinuteGain} vues sur la derniere minute`}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
-          ) : null}
+          </details>
         </section>
 
         {loading && !errorMessage && (
@@ -2827,11 +2899,9 @@ export default function Discover() {
             aria-live="polite"
             aria-busy="true"
             aria-label={t("loading")}
-            className="space-y-0"
+            className="flex min-h-0 flex-1 flex-col"
           >
-            {[0, 1, 2].map((i) => (
-              <DiscoverProfileCardSkeleton key={i} />
-            ))}
+            <DiscoverProfileCardSkeleton immersive />
           </div>
         )}
 
@@ -2862,7 +2932,7 @@ export default function Discover() {
           <div
             role="status"
             aria-live="polite"
-            className="mb-4 rounded-2xl border border-emerald-500/25 bg-emerald-950/35 px-4 py-3 text-sm text-emerald-50 shadow-sm ring-1 ring-emerald-500/10"
+            className="mb-2 shrink-0 rounded-2xl border border-emerald-500/25 bg-emerald-950/35 px-3 py-2.5 text-sm text-emerald-50 shadow-sm ring-1 ring-emerald-500/10"
           >
             <p className="text-[15px] font-bold leading-snug">{t("interest_sent")}</p>
             <p className="mt-1 text-[13px] leading-snug text-emerald-100/90">
@@ -2875,7 +2945,7 @@ export default function Discover() {
           <div
             role="status"
             aria-live="polite"
-            className="mb-4 rounded-2xl border border-app-border bg-app-card px-4 py-3 text-sm text-app-text shadow-sm ring-1 ring-white/[0.04]"
+            className="mb-2 shrink-0 rounded-2xl border border-app-border bg-app-card px-3 py-2.5 text-sm text-app-text shadow-sm ring-1 ring-white/[0.04]"
           >
             <p className="border-l-2 border-app-accent pl-3 text-[15px] font-bold leading-snug text-app-text">
               Match
@@ -2887,7 +2957,7 @@ export default function Discover() {
         )}
 
         {secondChanceTarget ? (
-          <div className="mb-4">
+          <div className="mb-2 shrink-0">
             <SecondChancePassCard
               title={t("second_chance_title")}
               subtitle={t("second_chance_subtitle")}
@@ -2903,114 +2973,79 @@ export default function Discover() {
         ) : null}
 
         {secondChanceToast ? (
-          <p className="mb-4 rounded-xl border border-emerald-500/25 bg-emerald-950/30 px-3 py-2 text-sm text-emerald-100/95">
+          <p className="mb-2 shrink-0 rounded-xl border border-emerald-500/25 bg-emerald-950/30 px-3 py-2 text-sm text-emerald-100/95">
             {secondChanceToast}
           </p>
         ) : null}
 
         {likeActionError && (
-          <p className="mb-4 rounded-xl border border-amber-500/25 bg-amber-950/35 px-3 py-2 text-sm text-amber-100">
+          <p className="mb-2 shrink-0 rounded-xl border border-amber-500/25 bg-amber-950/35 px-3 py-2 text-sm text-amber-100">
             {likeActionError}
           </p>
         )}
 
         {blockActionError && (
-          <p className="mb-4 rounded-xl border border-amber-500/25 bg-amber-950/35 px-3 py-2 text-sm text-amber-100">
+          <p className="mb-2 shrink-0 rounded-xl border border-amber-500/25 bg-amber-950/35 px-3 py-2 text-sm text-amber-100">
             {blockActionError}
           </p>
         )}
 
         {boostLifecycleMessage ? (
-          <p className="mb-4 rounded-xl border border-fuchsia-400/30 bg-fuchsia-950/30 px-3 py-2 text-sm text-fuchsia-100">
+          <p className="mb-2 shrink-0 rounded-xl border border-fuchsia-400/30 bg-fuchsia-950/30 px-3 py-2 text-sm text-fuchsia-100">
             {boostLifecycleMessage}
           </p>
         ) : null}
 
-        {currentUserId && !loading && !errorMessage && profiles.length <= 3 ? (
-          <div className="mb-4">
-            <ReferralCard
-              variant={referralVariant}
-              onInvite={() => {
-                void trackReferralEvent("invite_click", {
-                  variant: referralVariant,
-                  source: "discover",
-                });
-                setReferralModalOpen(true);
-              }}
-            />
-          </div>
-        ) : null}
-
         {!loading && !errorMessage && profiles.length === 0 ? (
-          <EmptyDiscoverState onRefresh={() => void loadProfiles()} />
+          <div className="flex min-h-[min(50dvh,420px)] flex-1 items-center">
+            <EmptyDiscoverState onRefresh={() => void loadProfiles()} />
+          </div>
         ) : null}
 
-        {!loading &&
-          !errorMessage &&
-          profiles.map((profile) => (
-            <div
-              key={profile.id}
-              style={
-                rewindRestoredId === profile.id
-                  ? {
-                      animation:
-                        rewindRestoredFrom === "right"
-                          ? "splove-rewind-in-right 260ms ease-out"
-                          : "splove-rewind-in-left 260ms ease-out",
-                    }
-                  : undefined
-              }
-            >
-              <DiscoverSwipeCard
-                profile={profile}
-                viewerCity={myCity}
-                mySportMatchKeys={mySportMatchKeys}
-                discoverMenuProfileId={discoverMenuProfileId}
-                setDiscoverMenuProfileId={setDiscoverMenuProfileId}
-                onPass={handlePass}
-                onLike={handleLike}
-                onOpenDetail={handleViewProfileFromSuggestion}
-                onReport={setReportProfileId}
-                onReportPhoto={openReportPhotoFromDiscover}
-                onBlock={handleBlock}
-                handleUndo={() => void handleUndoTap()}
-                canUndo={canUndo}
-                restoredProfileId={restoredProfileId}
-              />
-            </div>
-          ))}
-
-        {!loading && !errorMessage && weeklySuggestions.length > 0 && (
-          <div className="mb-5 mt-6">
-            <PremiumSuggestionsSection
-              title={t("discover.free_shortcuts")}
-              subtitle={t("discover.free_shortcuts_description")}
-              commonSportLabel={t("discover.common_ground")}
-              items={weeklySuggestions.map((p) => {
-                const cs = firstCommonSportName(p, mySportMatchKeys);
-                return {
-                  id: p.id,
-                  photoUrl: getProfileDisplayPhotoUrl(p),
-                  firstName: p.first_name?.trim() || "Profil",
-                  age: getAgeFromBirthDate(p.birth_date ?? null),
-                  commonSport: cs ?? "",
-                  projectionCopy: cs
-                    ? `${t("discover.common_ground")} : ${cs} — ${t("discover.ready_to_suggest")}`
-                    : t("discover.real_outing_intent"),
-                  verified: isPhotoVerified(p),
-                };
-              })}
-              ctaLabel={t("discover_profiles")}
-              onCardCta={(id) => {
-                const sid = String(id).trim();
-                const p = weeklySuggestions.find(
-                  (x) => x.id === sid || x.id.toLowerCase() === sid.toLowerCase()
-                );
-                if (p) handleViewProfileFromSuggestion(p);
-              }}
-            />
+        {!loading && !errorMessage && profiles.length > 0 ? (
+          <div className="relative mt-1 flex min-h-[min(540px,calc(100dvh-10rem))] flex-1 flex-col">
+            {profiles[2] ? (
+              <DiscoverStackSilhouette key={profiles[2].id} profile={profiles[2]} layer="back" />
+            ) : null}
+            {profiles[1] ? (
+              <DiscoverStackSilhouette key={profiles[1].id} profile={profiles[1]} layer="mid" />
+            ) : null}
+            {profiles[0] ? (
+              <div
+                key={profiles[0].id}
+                className="relative z-[24] flex min-h-0 flex-1 flex-col"
+                style={
+                  rewindRestoredId === profiles[0].id
+                    ? {
+                        animation:
+                          rewindRestoredFrom === "right"
+                            ? "splove-rewind-in-right 260ms ease-out"
+                            : "splove-rewind-in-left 260ms ease-out",
+                      }
+                    : undefined
+                }
+              >
+                <DiscoverSwipeCard
+                  profile={profiles[0]}
+                  viewerCity={myCity}
+                  mySportMatchKeys={mySportMatchKeys}
+                  discoverMenuProfileId={discoverMenuProfileId}
+                  setDiscoverMenuProfileId={setDiscoverMenuProfileId}
+                  onPass={handlePass}
+                  onLike={handleLike}
+                  onOpenDetail={handleViewProfileFromSuggestion}
+                  onReport={setReportProfileId}
+                  onReportPhoto={openReportPhotoFromDiscover}
+                  onBlock={handleBlock}
+                  handleUndo={() => void handleUndoTap()}
+                  canUndo={canUndo}
+                  restoredProfileId={restoredProfileId}
+                  immersive
+                />
+              </div>
+            ) : null}
           </div>
-        )}
+        ) : null}
 
       </main>
 

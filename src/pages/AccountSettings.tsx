@@ -19,7 +19,7 @@ const CONFIRM_WORD = "SUPPRIMER";
 export default function AccountSettings() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { user, refetchProfile } = useAuth();
+  const { user, refetchProfile, signOut } = useAuth();
   const [pauseLoading, setPauseLoading] = useState(false);
   const [deactivateLoading, setDeactivateLoading] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -83,24 +83,28 @@ export default function AccountSettings() {
     setDeleteError(null);
     setDeleteLoading(true);
     try {
-      const now = new Date().toISOString();
-      const { error } = await supabase
-        .from("profiles")
-        .update({
-          is_active: false,
-          deleted_at: now,
-          delete_requested_at: now,
-        })
-        .eq("id", user.id);
-      if (error) {
-        console.warn("[account] delete request", error.message);
+      const { data, error } = await supabase.functions.invoke<{ ok?: boolean; error?: string }>(
+        "delete-my-account",
+        {
+          body: { confirmPhrase: CONFIRM_WORD },
+        },
+      );
+      if (error || data?.ok !== true) {
+        if (import.meta.env.DEV) {
+          console.error("[account] delete-my-account failed", error ?? data?.error);
+        }
         setDeleteError(t("delete_unavailable"));
         return;
       }
       setDeleteModalOpen(false);
       setDeleteInput("");
-      setActionMessage(t("account_delete_requested"));
-      await refetchProfile();
+      await signOut({ scope: "local" });
+      navigate("/auth", { replace: true });
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.error("[account] delete-my-account failed", error);
+      }
+      setDeleteError(t("delete_unavailable"));
     } finally {
       setDeleteLoading(false);
     }

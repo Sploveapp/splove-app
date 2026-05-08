@@ -7,7 +7,7 @@ import { ReportModal } from "../components/ReportModal";
 import { ReportPhotoModal } from "../components/ReportPhotoModal";
 import { VerifiedBadge } from "../components/VerifiedBadge";
 import { IconChatBubble, IconProfileAvatarPlaceholder } from "../components/ui/Icon";
-import { isPhotoVerified } from "../lib/profileVerification";
+import { isIdentityVerified } from "../lib/profileVerification";
 import { guidedProfileSentence } from "../lib/discoverCardCopy";
 import { APP_BORDER, APP_CARD, APP_TEXT, APP_TEXT_MUTED, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { supabase } from "../lib/supabase";
@@ -44,11 +44,13 @@ export default function LikesYou() {
   /** Seule source pour le map : le state du hook (déjà filtré côté service). */
   const likesForRender = list;
 
-  console.log(
-    "[LikesYou FINAL RENDER]",
-    likesForRender.length,
-    likesForRender.map((x) => x.profile?.first_name ?? null),
-  );
+  if (import.meta.env.DEV) {
+    console.log(
+      "[LikesYou FINAL RENDER]",
+      likesForRender.length,
+      likesForRender.map((x) => x.profile?.first_name ?? null),
+    );
+  }
 
   const [reportProfileId, setReportProfileId] = useState<string | null>(null);
   const [reportPhotoTarget, setReportPhotoTarget] = useState<{
@@ -115,7 +117,7 @@ export default function LikesYou() {
     };
     const fromLike =
       withJoins.profiles ?? like.profile ?? withJoins.user ?? withJoins.liker ?? null;
-    console.log("PROFILE_FOR_MODAL", withJoins.profiles);
+    if (import.meta.env.DEV) console.log("PROFILE_FOR_MODAL", withJoins.profiles);
     setProfilePreviewLoading(true);
     try {
       const [{ data, error }, mergedOpt] = await Promise.all([
@@ -161,10 +163,10 @@ export default function LikesYou() {
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
       }}
     >
-      <main style={{ padding: "24px", maxWidth: "420px", margin: "0 auto" }}>
+      <main style={{ padding: "26px 22px 32px", maxWidth: "420px", margin: "0 auto" }}>
         <h1
           style={{
-            margin: "0 0 24px 0",
+            margin: "0 0 28px 0",
             fontSize: "14px",
             fontWeight: 600,
             color: "#64748b",
@@ -408,7 +410,7 @@ function LikesYouProfilePreviewModal({
               {profile.first_name ?? t("likes.unnamed")}
               {age != null ? <span style={{ color: APP_TEXT_MUTED }}>, {age}</span> : null}
             </h2>
-            {isPhotoVerified(profile) ? <VerifiedBadge /> : null}
+            {isIdentityVerified(profile) ? <VerifiedBadge /> : null}
           </div>
           {sports.length > 0 ? (
             <div className="flex max-h-[4.5rem] flex-wrap gap-1.5 overflow-hidden">

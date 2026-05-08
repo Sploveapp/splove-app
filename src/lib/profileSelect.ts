@@ -174,6 +174,9 @@ export const OPTIONAL_PROFILE_FIELDS = [
   "pref_open_to_adapted_activity",
   "boost_credits",
   "beta_splove_plus_unlocked",
+  /** Identité (Veriff ou équivalent) — badge « Profil vérifié » uniquement avec ces flags. */
+  "identity_verified",
+  "veriff_status",
 ] as const;
 
 /**

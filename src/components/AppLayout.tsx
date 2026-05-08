@@ -11,7 +11,6 @@ import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
 import { pulseInAppNotifications } from "../services/inAppNotifications.service";
 
 export function AppLayout() {
-  console.log("[AppLayout] render");
   const location = useLocation();
   const { isProfileComplete, isProfileLoading } = useAuth();
   const [inboxCount, setInboxCount] = useState(0);

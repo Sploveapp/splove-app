@@ -16,7 +16,7 @@ import {
   IconProfileAvatarPlaceholder,
 } from "../ui/Icon";
 import { VerifiedBadge } from "../VerifiedBadge";
-import { isPhotoVerified } from "../../lib/profileVerification";
+import { isIdentityVerified } from "../../lib/profileVerification";
 import { hasSharedPlace } from "../../lib/sharedPlaceTeaser";
 import {
   filterDiscoverReasonsForDisplay,
@@ -59,6 +59,8 @@ export type DiscoverProfileCardModel = {
   has_shared_place?: boolean;
   is_photo_verified?: boolean | null;
   photo_status?: string | null;
+  identity_verified?: boolean | null;
+  veriff_status?: string | null;
   sport_practice_type?: string | null;
 };
 
@@ -84,6 +86,8 @@ export type DiscoverProfileCardProps = {
   onUndo: () => void;
   canUndo: boolean;
   onReport: () => void;
+  /** Carte Discover plein focus — photo plus haute, rythme immersif. */
+  immersive?: boolean;
 };
 
 const REWIND_BTN_BG = "#1F1F24";
@@ -111,6 +115,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   onUndo,
   canUndo,
   onReport,
+  immersive = false,
 }: DiscoverProfileCardProps) {
   const { t } = useTranslation();
   const age = useAge(profile.birth_date);
@@ -165,7 +170,11 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   return (
     <>
       <div
-        className="relative min-h-[min(58vh,420px)] w-full flex-[1] basis-0 cursor-grab touch-none bg-zinc-950 active:cursor-grabbing sm:min-h-[min(52vh,480px)]"
+        className={
+          immersive
+            ? "relative min-h-[min(72dvh,620px)] w-full flex-[1] basis-0 cursor-grab touch-none bg-zinc-950 active:cursor-grabbing sm:min-h-[min(68dvh,640px)]"
+            : "relative min-h-[min(64vh,480px)] w-full flex-[1] basis-0 cursor-grab touch-none bg-zinc-950 active:cursor-grabbing sm:min-h-[min(58vh,520px)]"
+        }
         style={swipeZoneStyle}
         onPointerDown={onSwipeZonePointerDown}
         onPointerMove={onSwipeZonePointerMove}
@@ -196,7 +205,11 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
           </button>
         )}
         <div
-          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/25 via-transparent to-black/92"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/15 via-transparent to-black/[0.93]"
+          aria-hidden
+        />
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-[42%] bg-gradient-to-t from-black/85 via-black/40 to-transparent"
           aria-hidden
         />
         <AnimatePresence>
@@ -221,7 +234,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 1.06 }}
               transition={{ duration: 0.24 }}
-              className="pointer-events-none absolute inset-0 z-[15] flex items-center justify-center bg-emerald-500/20"
+              className="pointer-events-none absolute inset-0 z-[15] flex items-center justify-center bg-[#FF1E2D]/16"
             >
               <motion.div
                 initial={{ scale: 0.5 }}
@@ -249,7 +262,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
         ) : null}
         {swipeLikeOpacity > 0.04 ? (
           <div
-            className="pointer-events-none absolute inset-0 z-[14] flex items-center justify-center bg-emerald-500/15 transition-opacity duration-75"
+            className="pointer-events-none absolute inset-0 z-[14] flex items-center justify-center bg-[#FF1E2D]/14 transition-opacity duration-75"
             style={{ opacity: swipeLikeOpacity }}
             aria-hidden
           >
@@ -266,7 +279,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
         ) : null}
         {strongAffinity ? (
           <div
-            className={`pointer-events-none absolute left-3 z-[18] rounded-full bg-emerald-500/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-md backdrop-blur-sm ${
+            className={`pointer-events-none absolute left-3 z-[18] rounded-full bg-[#FF1E2D]/88 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-md backdrop-blur-sm ${
               restoredProfileId === profile.id ? "top-12" : "top-3"
             }`}
           >
@@ -320,10 +333,41 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
           ) : null}
         </div>
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[10] pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-28">
-          <div className="flex flex-wrap gap-1.5 px-4">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[10] pb-[max(0.65rem,env(safe-area-inset-bottom))] pt-[max(8.5rem,28vh)]">
+          <div className="px-5">
+            {sharedSportLabel ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-[16px] font-bold leading-snug text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.75)] sm:text-[17px]">
+                  {t("discover.profileCard_commonSportLead", { sport: sharedSportLabel })}
+                </p>
+                {practicePaceKey ? (
+                  <span className="shrink-0 rounded-full bg-white/12 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/92 ring-1 ring-[#FF1E2D]/35 backdrop-blur-sm">
+                    {t(practicePaceKey)}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            {sportChips.length > 0 ? (
+              <div className="mt-2.5 flex max-h-[5rem] flex-wrap gap-1.5 overflow-hidden">
+                {sportChips.map(({ label: sportLabel, shared }) => (
+                  <span
+                    key={sportLabel}
+                    className={
+                      shared
+                        ? "rounded-full bg-[#FF1E2D]/45 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-white ring-1 ring-white/25 backdrop-blur-sm"
+                        : "rounded-full bg-white/14 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-white/92 ring-1 ring-white/20 backdrop-blur-sm"
+                    }
+                  >
+                    {sportLabel}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2 px-5">
             {showActiveTodayBadge ? (
-              <span className="rounded-full bg-white/14 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-100 ring-1 ring-emerald-300/55 backdrop-blur-sm">
+              <span className="rounded-full bg-white/14 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white/95 ring-1 ring-white/25 backdrop-blur-sm">
                 {t("discover.profileCard_badgeActiveToday")}
               </span>
             ) : null}
@@ -342,58 +386,30 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
                 {t("discover.profileCard_sharedSpot")}
               </span>
             ) : null}
-            {isPhotoVerified(profile) ? (
+            {isIdentityVerified(profile) ? (
               <span className="pointer-events-none inline-flex">
                 <VerifiedBadge
                   variant="compact"
-                  className="!bg-white/95 !normal-case !tracking-normal !text-emerald-900 !ring-emerald-500/35"
+                  className="!bg-white/95 !normal-case !tracking-normal !text-zinc-900 !ring-zinc-400/35"
                 />
               </span>
             ) : null}
           </div>
 
-          <div className="mt-2.5 px-4">
-            <div className="flex flex-wrap items-end gap-2">
-              <h2 className="text-[1.75rem] font-extrabold leading-none tracking-tight text-white drop-shadow-md sm:text-[2rem]">
+          <div className="mt-3 px-5">
+            <div className="flex flex-wrap items-end gap-2.5">
+              <h2 className="text-[1.85rem] font-extrabold leading-[1.05] tracking-tight text-white drop-shadow-[0_2px_14px_rgba(0,0,0,0.65)] sm:text-[2.05rem]">
                 {profile.first_name ?? t("unnamed_profile")}
-                {age != null ? <span className="font-bold text-white/90">, {age}</span> : null}
+                {age != null ? <span className="font-semibold text-white/88">, {age}</span> : null}
               </h2>
               {intentShort ? (
-                <span className="mb-0.5 rounded-full bg-white/16 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/95 ring-1 ring-white/30">
+                <span className="mb-0.5 rounded-full bg-white/12 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white/88 ring-1 ring-white/22">
                   {intentShort}
                 </span>
               ) : null}
             </div>
-            {sharedSportLabel ? (
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <p className="text-[15px] font-bold leading-snug text-emerald-200 drop-shadow-md sm:text-base">
-                  {t("discover.profileCard_commonSportLead", { sport: sharedSportLabel })}
-                </p>
-                {practicePaceKey ? (
-                  <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/90 ring-1 ring-[#E11D2E]/25 backdrop-blur-sm">
-                    {t(practicePaceKey)}
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-            {sportChips.length > 0 ? (
-              <div className="mt-2 flex max-h-[4.5rem] flex-wrap gap-1 overflow-hidden">
-                {sportChips.map(({ label: sportLabel, shared }) => (
-                  <span
-                    key={sportLabel}
-                    className={
-                      shared
-                        ? "rounded-full bg-emerald-500/40 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-50 ring-1 ring-emerald-200/50"
-                        : "rounded-full bg-white/12 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/90 ring-1 ring-white/25"
-                    }
-                  >
-                    {sportLabel}
-                  </span>
-                ))}
-              </div>
-            ) : null}
             {discoverReasonsDisplay.length > 0 ? (
-              <p className="mt-1.5 line-clamp-2 text-[10px] font-semibold uppercase tracking-wide text-white/70">
+              <p className="mt-1.5 line-clamp-2 text-[10px] font-medium uppercase tracking-wide text-white/52">
                 {discoverReasonsDisplay.join(" · ")}
               </p>
             ) : null}
@@ -403,7 +419,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
                   <p className="text-[13px] font-semibold text-white/90 drop-shadow-sm">{locLines.line1}</p>
                 ) : null}
                 {locLines.line2 ? (
-                  <p className="text-[12px] font-medium text-white/70 drop-shadow-sm">{locLines.line2}</p>
+                  <p className="text-[12px] font-medium text-white/58 drop-shadow-sm">{locLines.line2}</p>
                 ) : null}
               </div>
             ) : areaHint ? (
@@ -415,7 +431,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
             ) : null}
             {phraseTrim ? (
               <div className="mt-2">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-white/60">{t("discover.momentWish")}</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-white/48">{t("discover.momentWish")}</p>
                 <p className="mt-0.5 line-clamp-2 text-[14px] font-medium leading-snug text-white drop-shadow-sm">
                   {phraseTrim.length > 120 ? `${phraseTrim.slice(0, 117)}…` : phraseTrim}
                 </p>
@@ -426,7 +442,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
             </p>
           </div>
 
-          <div className="pointer-events-auto relative z-[19] mt-5 flex items-center justify-between gap-3 px-5 sm:px-8">
+          <div className="pointer-events-auto relative z-[19] mt-6 flex items-center justify-between gap-3 px-6 sm:px-9">
             <motion.button
               type="button"
               whileTap={{ scale: 0.88 }}
@@ -479,7 +495,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
         </div>
       </div>
 
-      <div className="border-t border-app-border/85 bg-app-card px-3 py-2.5">
+      <div className="border-t border-app-border/85 bg-app-card px-4 py-3.5">
         <button
           type="button"
           onClick={onReport}

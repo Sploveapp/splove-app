@@ -6,9 +6,7 @@ type Props = {
   className?: string;
 };
 
-/**
- * Badge discret « identité vérifiée » — affiché si `profiles.is_photo_verified` (ex. Veriff).
- */
+/** Badge « Profil vérifié » — uniquement si `isIdentityVerified` (identity_verified / veriff_status). */
 export function VerifiedBadge({ variant = "default", className = "" }: Props) {
   const compact = variant === "compact";
   return (
