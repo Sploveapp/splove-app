@@ -77,6 +77,13 @@ function normalizeToken(raw: string | null | undefined): string {
     .replace(/[^a-z0-9_, -]+/g, "");
 }
 
+/** Onboarding-looking_for uses `women`/`men`; profile gender uses `female`/`male` — unify before compares. */
+function normalizeRelationshipComparableToken(t: string): string {
+  if (t === "men") return "male";
+  if (t === "women") return "female";
+  return t;
+}
+
 function isSameCity(a: string | null | undefined, b: string | null | undefined): boolean {
   const ca = normalizeToken(a);
   const cb = normalizeToken(b);
@@ -84,7 +91,7 @@ function isSameCity(a: string | null | undefined, b: string | null | undefined):
 }
 
 function canonicalGender(raw: string | null | undefined): string | null {
-  const t = normalizeToken(raw);
+  const t = normalizeRelationshipComparableToken(normalizeToken(raw));
   if (!t) return null;
   if (["femme", "femmes", "female", "woman", "women"].includes(t)) return "female";
   if (["homme", "hommes", "male", "man", "men"].includes(t)) return "male";
@@ -103,7 +110,8 @@ function parseLookingFor(raw: string | null | undefined): Set<string> {
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
-  for (const t of source) {
+  for (const rawTok of source) {
+    const t = normalizeRelationshipComparableToken(rawTok);
     if (["tous", "all", "everyone"].includes(t)) {
       out.clear();
       out.add("all");
@@ -141,6 +149,25 @@ function isBanned(candidate: DiscoverProfile): boolean {
 /** Exclude hard incompatible inclusivity (viewer « no » vs adapted candidate). */
 const INCLUSIVITY_EXCLUDE_THRESHOLD = -10;
 
+/** Dev diagnostics: always surface these first names when present in the candidate pool. */
+const DISCOVER_DIAG_NAME_RE = /\b(bruno|sofiane)\b/i;
+
+function isDiscoverDiagHighlightName(firstName: string | null | undefined): boolean {
+  return typeof firstName === "string" && DISCOVER_DIAG_NAME_RE.test(firstName.trim());
+}
+
+function exclusionDetailForNoMainPhoto(candidate: DiscoverProfile): {
+  reason: "rejected photo" | "pending photo" | "missing required field";
+  photo_status: string | null;
+} {
+  const st = String(candidate.photo_status ?? "")
+    .trim()
+    .toLowerCase();
+  if (st === "rejected") return { reason: "rejected photo", photo_status: candidate.photo_status ?? null };
+  if (st === "pending" || st === "review") return { reason: "pending photo", photo_status: candidate.photo_status ?? null };
+  return { reason: "missing required field", photo_status: candidate.photo_status ?? null };
+}
+
 export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
   candidates: T[],
   ctx: DiscoverScoringContext,
@@ -154,15 +181,31 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
 
   const kept: DiscoverScoredCandidate<T>[] = [];
 
+  if (import.meta.env.DEV) {
+    console.info("[Discover diagnostics] scoring input", {
+      candidate_count: candidates.length,
+      viewer_id: ctx.viewerId,
+      viewer_sport_match_key_count: ctx.mySportMatchKeys.size,
+    });
+  }
+
   for (const candidate of candidates) {
     const excludedReasons: string[] = [];
+    const diagExtra: Record<string, unknown> = {};
     if (!candidate?.id || candidate.id === ctx.viewerId) excludedReasons.push("self");
     if (candidate.profile_completed !== true) excludedReasons.push("incomplete");
-    if (isBanned(candidate)) excludedReasons.push("banned");
-    if (ctx.likedIds.has(candidate.id)) excludedReasons.push("already_liked");
-    if (ctx.matchedIds.has(candidate.id)) excludedReasons.push("already_matched");
+    if (isBanned(candidate)) {
+      excludedReasons.push("missing required field");
+      diagExtra.banned = true;
+    }
+    if (ctx.likedIds.has(candidate.id)) excludedReasons.push("already liked");
+    if (ctx.matchedIds.has(candidate.id)) excludedReasons.push("already matched");
     if (ctx.blockedIds?.has(candidate.id)) excludedReasons.push("blocked");
-    if (!hasMainPhoto(candidate)) excludedReasons.push("no_main_photo");
+    if (!hasMainPhoto(candidate)) {
+      const d = exclusionDetailForNoMainPhoto(candidate);
+      excludedReasons.push(d.reason);
+      if (d.photo_status != null) diagExtra.photo_status = d.photo_status;
+    }
 
     const sharedSports = getSharedSportLabelsForMatch(
       ctx.mySportMatchKeys,
@@ -171,13 +214,14 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       },
     );
     const sharedCount = sharedSports.length;
-    if (sharedCount < 1) excludedReasons.push("no_shared_sports");
+    if (sharedCount < 1) excludedReasons.push("no common sport");
 
     const candidateGender = canonicalGender(candidate.gender);
     const candidateLookingFor = parseLookingFor(candidate.looking_for);
     const meToThem = lookingForAcceptsGender(viewerLookingFor, candidateGender);
     const themToMe = lookingForAcceptsGender(candidateLookingFor, viewerGender);
-    if (!meToThem || !themToMe) excludedReasons.push("preference_incompatible");
+    if (!meToThem) excludedReasons.push("looking_for mismatch");
+    if (!themToMe) excludedReasons.push("gender mismatch");
 
     const distanceKm = ctx.distanceById.get(candidate.id) ?? null;
     const viewerRadius =
@@ -187,11 +231,16 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
 
     if (excludedReasons.length > 0) {
       if (import.meta.env.DEV) {
-        console.debug("[Discover scoring V3] excluded", {
-          id: candidate.id,
-          first_name: candidate.first_name,
-          reasons: excludedReasons,
-        });
+        const hl = isDiscoverDiagHighlightName(candidate.first_name);
+        const row = {
+          first_name: candidate.first_name ?? null,
+          id: candidate.id ?? null,
+          exclusion_reason: excludedReasons,
+          ...diagExtra,
+          ...(hl ? { diag_highlight_name: true } : {}),
+        };
+        if (hl) console.info("[Discover diagnostics] scoring excluded (Bruno/Sofiane)", row);
+        else console.info("[Discover diagnostics] scoring excluded", row);
       }
       continue;
     }
@@ -220,21 +269,34 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
 
     if (v3.outside_radius && !BETA_MODE) {
       if (import.meta.env.DEV) {
-        console.debug("[Discover scoring V3] excluded", {
-          id: candidate.id,
-          first_name: candidate.first_name,
-          reasons: ["outside_radius"],
-        });
+        const hl = isDiscoverDiagHighlightName(candidate.first_name);
+        const row = {
+          first_name: candidate.first_name ?? null,
+          id: candidate.id ?? null,
+          exclusion_reason: ["distance/GPS"],
+          outside_radius: true,
+          distanceKm,
+          viewer_discovery_radius_km: viewerRadius,
+          ...(hl ? { diag_highlight_name: true } : {}),
+        };
+        if (hl) console.info("[Discover diagnostics] scoring excluded (Bruno/Sofiane)", row);
+        else console.info("[Discover diagnostics] scoring excluded", row);
       }
       continue;
     }
     if (v3.inclusivity_raw < INCLUSIVITY_EXCLUDE_THRESHOLD) {
       if (import.meta.env.DEV) {
-        console.debug("[Discover scoring V3] excluded", {
-          id: candidate.id,
-          first_name: candidate.first_name,
-          reasons: ["incompatible_inclusivity"],
-        });
+        const hl = isDiscoverDiagHighlightName(candidate.first_name);
+        const row = {
+          first_name: candidate.first_name ?? null,
+          id: candidate.id ?? null,
+          exclusion_reason: ["missing required field"],
+          inclusivity_blocked: true,
+          inclusivity_raw: v3.inclusivity_raw,
+          ...(hl ? { diag_highlight_name: true } : {}),
+        };
+        if (hl) console.info("[Discover diagnostics] scoring excluded (Bruno/Sofiane)", row);
+        else console.info("[Discover diagnostics] scoring excluded", row);
       }
       continue;
     }
@@ -258,14 +320,14 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     if (boostActive) reasons.push("Boost actif");
     if (priorityActive) reasons.push("Priorité rencontre");
 
-    if (import.meta.env.DEV) {
-      console.debug("[Discover scoring V3] included", {
+    if (import.meta.env.DEV && isDiscoverDiagHighlightName(candidate.first_name)) {
+      console.info("[Discover diagnostics] scoring included (Bruno/Sofiane)", {
         id: candidate.id,
+        first_name: candidate.first_name,
         sharedCount,
         distanceKm,
         practice_score,
-        parts: v3,
-        score: totalScore,
+        discoverScore: totalScore,
       });
     }
 

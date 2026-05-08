@@ -658,6 +658,47 @@ function safeTimeMs(iso: string | null | undefined): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+/** Dev-only: Bruno / Sofiane (same pattern as discoverScoring.service). */
+const DISCOVER_DIAG_NAME_RE = /\b(bruno|sofiane)\b/i;
+
+function discoverDiagHighlightName(firstName: string | null | undefined): boolean {
+  return typeof firstName === "string" && DISCOVER_DIAG_NAME_RE.test(firstName.trim());
+}
+
+function discoverBetaPhotoRejectReason(p: Profile): string {
+  const st = String(p.photo_status ?? "").trim().toLowerCase();
+  if (st === "rejected") return "rejected photo";
+  if (st === "pending" || st === "review") return "pending photo";
+  return "missing required field";
+}
+
+function discoverDevPipelineDiff(
+  prev: Profile[],
+  next: Profile[],
+  step: string,
+  reasonFor: (p: Profile) => string,
+  pipelineDetail?: string,
+): void {
+  if (!import.meta.env.DEV) return;
+  const nextIds = new Set(next.map((x) => x.id).filter((id): id is string => Boolean(id)));
+  for (const p of prev) {
+    const id = p?.id;
+    if (id && nextIds.has(id)) continue;
+    const exclusion_reason = reasonFor(p);
+    const hl = discoverDiagHighlightName(p.first_name);
+    const row: Record<string, unknown> = {
+      step,
+      first_name: p.first_name ?? null,
+      id: id ?? null,
+      exclusion_reason,
+      ...(pipelineDetail ? { pipeline_detail: pipelineDetail } : {}),
+    };
+    if (hl) row.diag_highlight_name = true;
+    if (hl) console.info("[Discover diagnostics] pipeline excluded (Bruno/Sofiane)", row);
+    else console.info("[Discover diagnostics] pipeline excluded", row);
+  }
+}
+
 const DISCOVER_DISPLAY_LIMIT = 10;
 /** Source Supabase du fil Discover (classement serveur) — repli côté client si colonne absente. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
@@ -724,6 +765,10 @@ function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremiu
  */
 const DISCOVER_PROFILES_DETAIL_SELECT =
   "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, is_active_mode, sport_practice_type, profile_sports(sports(label, slug))";
+
+/** Profil viewer Discover : uniquement colonnes plates sur `profiles` (sports chargés séparément sur `profile_sports`). */
+const DISCOVER_VIEWER_ME_SELECT =
+  "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, sport_practice_type, sport_time, open_to_adapted_activities, pref_open_to_adapted_activity";
 
 /** Reconstruit une carte Discover après rewind (hors re-score filtre feed). */
 async function buildAffinityProfileForRewind(input: {
@@ -1282,20 +1327,27 @@ export default function Discover() {
     let cancelled = false;
     void (async () => {
       try {
-        const [meRes, candRes, distRes] = await Promise.all([
-          supabase
-            .from("profiles")
-            .select(
-              "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, sport_practice_type, sport_time, open_to_adapted_activities, pref_open_to_adapted_activity, profile_sports(sports(label, slug))",
-            )
-            .eq("id", currentUserId)
-            .maybeSingle(),
+        const viewerAuthId = user?.id ?? currentUserId;
+        const [meRes, meSportsRes, candRes, distRes] = await Promise.all([
+          supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
+          supabase.from("profile_sports").select("sports(slug, label)").eq("profile_id", viewerAuthId),
           supabase.from("profiles").select(DISCOVER_PROFILES_DETAIL_SELECT).eq("id", requestedProfileId).maybeSingle(),
           supabase.rpc("profile_distances_from_viewer", { p_candidate_ids: [requestedProfileId] }),
         ]);
         if (cancelled) return;
 
-        const meProfile = (meRes.data as unknown as Profile) ?? { profile_sports: [] };
+        const meProfileSportRows = Array.isArray(meSportsRes.data) ? meSportsRes.data : [];
+        const meProfile: Profile =
+          meRes.data != null
+            ? {
+                ...(meRes.data as unknown as Profile),
+                profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
+              }
+            : {
+                id: viewerAuthId,
+                first_name: null,
+                profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
+              };
         let p = candRes.data as Profile | null;
         if (!p || candRes.error) {
           let feedProbe = await supabase
@@ -1384,7 +1436,7 @@ export default function Discover() {
     return () => {
       cancelled = true;
     };
-  }, [location.state, location.key, currentUserId, profiles]);
+  }, [location.state, location.key, currentUserId, user?.id, profiles]);
 
   const closePreviewModal = useMemo(() => {
     return () => {
@@ -1461,27 +1513,42 @@ export default function Discover() {
         }
       })();
 
-      const [likedIds, matchedIds, meRes, blockDetail] = await Promise.all([
+      const viewerAuthId = user?.id ?? currentUserId;
+      const [likedIds, matchedIds, meRes, meSportsRes, blockDetail] = await Promise.all([
         fetchOutgoingLikedUserIds(currentUserId),
         fetchMatchedUserIds(currentUserId),
-        supabase
-        .from("profiles")
-        .select(
-          "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, sport_practice_type, sport_time, open_to_adapted_activities, pref_open_to_adapted_activity, profile_sports(sports(label, slug))",
-        )
-        .eq("id", currentUserId)
-        .maybeSingle(),
+        supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
+        supabase.from("profile_sports").select("sports(slug, label)").eq("profile_id", viewerAuthId),
         fetchBlockExclusionDetail(currentUserId),
       ]);
 
-      const meProfile = (meRes.data as unknown as Profile) ?? { profile_sports: [] };
+      const meProfileSportRows = Array.isArray(meSportsRes.data) ? meSportsRes.data : [];
+      const meProfile: Profile =
+        meRes.data != null
+          ? {
+              ...(meRes.data as unknown as Profile),
+              profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
+            }
+          : {
+              id: viewerAuthId,
+              first_name: null,
+              profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
+            };
+
+      if (meSportsRes.error) {
+        console.warn("[Discover] viewer profile_sports query failed:", meSportsRes.error.message);
+      }
       const blockExclude = blockDetail.excluded;
       const sportsSet = collectSportMatchKeysFromProfile(meProfile);
       setMySportMatchKeys(sportsSet);
       if (import.meta.env.DEV) {
-        console.debug("[Discover debug] viewer", {
-          currentUserId,
-          mySportMatchKeys: [...sportsSet],
+        console.info("[Discover diagnostics] viewer_profile", {
+          auth_user_id: viewerAuthId,
+          current_profile_fetch_error: meRes.error ?? null,
+          current_profile_fetch_result: meRes.data ?? null,
+          current_profile_profile_sports_error: meSportsRes.error ?? null,
+          current_profile_id_used: meRes.data ? viewerAuthId : null,
+          current_profile_sports_match_keys: [...sportsSet],
         });
       }
       if (meRes.error) {
@@ -1494,6 +1561,13 @@ export default function Discover() {
         });
       }
       if (!meRes.data) {
+        if (import.meta.env.DEV) {
+          console.info("[Discover diagnostics] viewer_profile_missing", {
+            auth_user_id: currentUserId,
+            exclusion_reason: meRes.error ? "RLS/no row" : "profile fetch failed",
+            current_profile_fetch_error: meRes.error ?? null,
+          });
+        }
         setErrorMessage("Impossible de charger ton profil courant.");
         setProfiles([]);
         setSwipeHistory([]);
@@ -1504,21 +1578,21 @@ export default function Discover() {
         console.warn("[Discover feed] blocks exclusion RPC errors:", blockDetail.errors);
       }
 
-      console.log("[Discover] meProfile raw =", meProfile);
-      console.log("[Discover] meProfile.intent raw =", meProfile?.intent);
-      console.log("[Discover] parseProfileIntent result =", parseProfileIntent(meProfile?.intent));
-      
       const safeMeProfile = {
         ...meProfile,
         intent: meProfile?.intent ?? (meRes.data as { intent?: string | null })?.intent ?? null,
       };
-      
-      console.log("[Discover] safeMeProfile raw =", safeMeProfile);
-      console.log("[Discover] safeMeProfile.intent raw =", safeMeProfile?.intent);
-      console.log(
-        "[Discover] parseProfileIntent result =",
-        parseProfileIntent(safeMeProfile?.intent)
-      );
+      if (import.meta.env.DEV) {
+        console.log("[Discover] meProfile raw =", meProfile);
+        console.log("[Discover] meProfile.intent raw =", meProfile?.intent);
+        console.log("[Discover] parseProfileIntent result =", parseProfileIntent(meProfile?.intent));
+        console.log("[Discover] safeMeProfile raw =", safeMeProfile);
+        console.log("[Discover] safeMeProfile.intent raw =", safeMeProfile?.intent);
+        console.log(
+          "[Discover] parseProfileIntent result =",
+          parseProfileIntent(safeMeProfile?.intent),
+        );
+      }
       
       const { data, error } = await supabase.rpc("get_discover_feed_alive", { p_limit: 12 });
 
@@ -1531,6 +1605,7 @@ export default function Discover() {
         return;
       }
 
+      let mergedFromProfilesFallback = false;
       let profilesFromRpc: Profile[] = ((data ?? []) as DiscoverAliveRow[])
         .filter((row): row is DiscoverAliveRow & { profile: Profile } =>
           isValidProfileId(row.profile?.id),
@@ -1570,6 +1645,7 @@ export default function Discover() {
             .filter((p) => isValidProfileId(p?.id));
           if (profilesFromRpc.length === 0) {
             profilesFromRpc = fallbackProfiles;
+            mergedFromProfilesFallback = fallbackProfiles.length > 0;
           } else if (fallbackProfiles.length > 0) {
             const byId = new Map<string, Profile>();
             for (const p of profilesFromRpc) byId.set(p.id, p);
@@ -1577,6 +1653,7 @@ export default function Discover() {
               if (!byId.has(p.id)) byId.set(p.id, p);
             }
             profilesFromRpc = [...byId.values()];
+            mergedFromProfilesFallback = true;
           }
           console.log("[Discover fallback] using city/sport fallback feed", {
             count: profilesFromRpc.length,
@@ -1586,9 +1663,42 @@ export default function Discover() {
         }
       }
       console.log("[Discover feed] raw profiles count:", profilesFromRpc.length);
+      if (import.meta.env.DEV) {
+        const feedQuerySources: string[] = ["get_discover_feed_alive (RPC)"];
+        if (mergedFromProfilesFallback) feedQuerySources.push("profiles (table fallback)");
+        console.info("[Discover diagnostics] query_sources_used", {
+          sources: feedQuerySources,
+          feed_profiles_ranked_note:
+            "loadProfiles does not query feed_profiles nor feed_profiles_ranked; openProfileFromNavigation may probe feed_profiles_ranked for a single id.",
+        });
+        console.info("[Discover diagnostics] raw_candidates_fetched", {
+          count: profilesFromRpc.length,
+          ids: profilesFromRpc.map((r) => r.id),
+          sample: profilesFromRpc.slice(0, 80).map((r) => ({ id: r.id, first_name: r.first_name })),
+        });
+        for (const name of ["Bruno", "Sofiane"] as const) {
+          const hits = profilesFromRpc.filter(
+            (r) =>
+              typeof r.first_name === "string" &&
+              new RegExp(`\\b${name}\\b`, "i").test(r.first_name.trim()),
+          );
+          if (hits.length > 0) {
+            console.info(`[Discover diagnostics] raw_feed contains ${name}`, {
+              rows: hits.map((r) => ({ id: r.id, first_name: r.first_name })),
+            });
+          }
+        }
+        console.info("[Discover diagnostics] rpc_already_swiped_note", {
+          already_swiped:
+            "Passes/serves prior swipes are applied inside get_discover_feed_alive on the server — not observable per-id in this client bundle.",
+        });
+      }
+
       let raw: Profile[] = profilesFromRpc;
       if (BETA_MODE) {
+        const before = raw;
         raw = raw.filter((p) => String(p.photo_status ?? "").toLowerCase().trim() === "approved");
+        discoverDevPipelineDiff(before, raw, "beta_approved_photo_only", discoverBetaPhotoRejectReason);
       }
       console.log("[Discover detail] profils détaillés reçus", {
         count: raw.length,
@@ -1604,6 +1714,8 @@ export default function Discover() {
         });
       }
 
+      const candidatesAfterQueryBeforeClientFilters = raw.length;
+
       const distById = new Map<string, number | null>();
       if (raw.length > 0) {
         const { data: distData, error: distErr } = await supabase.rpc("profile_distances_from_viewer", {
@@ -1611,6 +1723,13 @@ export default function Discover() {
         });
         if (distErr) {
           console.warn("[Discover feed] profile_distances_from_viewer:", distErr.message);
+          if (import.meta.env.DEV) {
+            console.info("[Discover diagnostics] distance_rpc", {
+              error: distErr.message,
+              exclusion_note:
+                "distance/GPS rows may be missing — scoring may treat distance as unknown (see distance/GPS exclusions).",
+            });
+          }
         } else {
           for (const row of (distData ?? []) as {
             profile_id?: string;
@@ -1622,22 +1741,42 @@ export default function Discover() {
         }
       }
 
-      raw = raw.filter((p) => {
-        if (!p?.id || !isValidProfileId(p.id)) return false;
-        if (p.id === currentUserId) return false;
-        return true;
-      });
+      {
+        const before = raw;
+        raw = raw.filter((p) => {
+          if (!p?.id || !isValidProfileId(p.id)) return false;
+          if (p.id === currentUserId) return false;
+          return true;
+        });
+        discoverDevPipelineDiff(before, raw, "sanity_valid_id_not_self", (p) =>
+          p.id === currentUserId ? "self" : "missing required field",
+        );
+      }
       if (likedIds.size > 0) {
+        const before = raw;
         raw = raw.filter((p) => !likedIds.has(p.id));
+        discoverDevPipelineDiff(before, raw, "exclude_outgoing_likes", () => "already liked");
       }
       if (blockExclude.size > 0) {
+        const before = raw;
         raw = raw.filter((p) => !blockExclude.has(p.id));
+        discoverDevPipelineDiff(before, raw, "exclude_blocks", () => "blocked");
       }
       if (matchedIds.size > 0) {
+        const before = raw;
         raw = raw.filter((p) => !matchedIds.has(p.id));
+        discoverDevPipelineDiff(before, raw, "exclude_matches", () => "already matched");
       }
-      raw = raw.filter((p) => !isProfileGhostActive(p.id));
-      raw = raw.filter((p) => isWithinVisibilityWindow(p.created_at ?? null, hasPlus));
+      {
+        const before = raw;
+        raw = raw.filter((p) => !isProfileGhostActive(p.id));
+        discoverDevPipelineDiff(before, raw, "exclude_ghost_boost_slot", () => "missing required field", "ghost_boost_active");
+      }
+      {
+        const before = raw;
+        raw = raw.filter((p) => isWithinVisibilityWindow(p.created_at ?? null, hasPlus));
+        discoverDevPipelineDiff(before, raw, "discover_visibility_window", () => "missing required field", "discover_visibility_window");
+      }
 
       let stage: Profile[] = raw;
       console.log("[Discover feed] profiles before scoring filters:", stage.length);
@@ -1666,6 +1805,10 @@ export default function Discover() {
         if (paceErr) {
           if (import.meta.env.DEV) {
             console.warn("[Discover feed] sport_practice_type batch:", paceErr.message);
+            console.info("[Discover diagnostics] sport_practice_batch", {
+              error: paceErr.message,
+              note: "RLS/no row — candidates may lack sport_practice_type merge.",
+            });
           }
         } else {
           const paceById = new Map<string, string | null>();
@@ -1710,6 +1853,15 @@ export default function Discover() {
           pref_open_to_adapted_activity?: boolean | null;
         };
 
+      if (import.meta.env.DEV) {
+        console.info("[Discover diagnostics] candidates_before_scoring_filters", {
+          count: stage.length,
+          candidates_after_query_before_pipeline: candidatesAfterQueryBeforeClientFilters,
+          ids: stage.map((p) => p.id),
+          names: stage.map((p) => ({ id: p.id, first_name: p.first_name })),
+        });
+      }
+
       const discoverFiltered: ProfileWithAffinity[] = scoreAndFilterDiscoverCandidates(
         stage.map((p) => ({ ...p, has_shared_place: sharedPlaceById.get(p.id) === true })),
         {
@@ -1737,6 +1889,14 @@ export default function Discover() {
         ...p,
         reliabilityScore: computeReliabilityScore(p),
       }));
+
+      if (import.meta.env.DEV) {
+        console.info("[Discover diagnostics] candidates_after_scoring_filters", {
+          count: discoverFiltered.length,
+          ids: discoverFiltered.map((p) => p.id),
+          names: discoverFiltered.map((p) => ({ id: p.id, first_name: p.first_name })),
+        });
+      }
 
       if (discoverFiltered.length > 0) {
         const candidateIds = discoverFiltered.map((p) => p.id).filter(Boolean);
@@ -1827,6 +1987,15 @@ export default function Discover() {
       const slice = safe.slice(0, DISCOVER_DISPLAY_LIMIT);
       resultCount = slice.length;
       console.log("[Discover feed] final profiles count:", resultCount);
+      if (import.meta.env.DEV) {
+        console.info("[Discover diagnostics] summary_counts", {
+          auth_user_id: currentUserId,
+          raw_candidates_merged: profilesFromRpc.length,
+          candidates_after_client_pipeline_before_scoring: stage.length,
+          candidates_after_scoring_filters: discoverFiltered.length,
+          final_ui_slice: slice.length,
+        });
+      }
       setProfiles(slice);
       setSwipeHistory([]);
     } catch (e) {
