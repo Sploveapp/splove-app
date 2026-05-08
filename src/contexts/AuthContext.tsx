@@ -14,6 +14,7 @@ import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import {
   PROFILE_LOAD_TIERS_FOR_AUTH,
   selectProfilesFirstMatch,
+  tryMergeOptionalAuthProfileFields,
 } from "../lib/profileSelect";
 import type { AppProfile } from "../lib/appProfile";
 import { isProfileRecord } from "../lib/appProfile";
@@ -145,6 +146,11 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
 
   const normalized = profileRowToProfile(data as AppProfile);
 
+  const extra = await tryMergeOptionalAuthProfileFields(supabase, userId);
+  if (extra && typeof extra === "object") {
+    Object.assign(normalized, extra);
+  }
+
   return normalized;
 }
 
@@ -162,18 +168,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const profileLoadGenRef = useRef(0);
   /** Évite les fetch profil concurrents / boucles. */
   const fetchProfileInFlightRef = useRef(false);
+  /** Dernier utilisateur pour lequel un profil non vide a été chargé avec succès (garde boucle session). */
+  const lastLoadedUserIdRef = useRef<string | null>(null);
+  /** Copie synchrone de `profile` pour les gardes dans les effets (évite re-fetch si déjà OK). */
+  const profileRef = useRef<Profile | null>(null);
 
   useEffect(() => {
     console.log("[AuthContext] global loading", isLoading ? "start" : "end");
   }, [isLoading]);
 
+  useEffect(() => {
+    profileRef.current = profile;
+  }, [profile]);
+
   const loadProfile = useCallback(async (userId: string) => {
     if (!userId) {
       setIsProfileLoading(false);
       setProfile(null);
-      return;
-    }
-    if (fetchProfileInFlightRef.current) {
+      lastLoadedUserIdRef.current = null;
       return;
     }
     fetchProfileInFlightRef.current = true;
@@ -190,7 +202,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile_completed: p?.profile_completed ?? null,
         onboarding_completed: (p as { onboarding_completed?: unknown } | null)?.onboarding_completed ?? null,
       });
-      setProfile(p);
+      if (p?.id) {
+        lastLoadedUserIdRef.current = p.id;
+      }
+      setProfile((prev) => {
+        if (
+          p &&
+          prev &&
+          p.id === prev.id &&
+          p.profile_completed === prev.profile_completed
+        ) {
+          if (import.meta.env.DEV) {
+            console.log("[AuthContext] fetchProfile state unchanged");
+          }
+          return prev;
+        }
+        return p;
+      });
     } catch (e) {
       console.warn("[AuthContext] profile load error", e);
     } finally {
@@ -205,6 +233,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     const normalized = profileRowToProfile(row);
+    if (normalized.id) {
+      lastLoadedUserIdRef.current = normalized.id;
+    }
     flushSync(() => {
       setProfile(normalized);
     });
@@ -212,11 +243,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refetchProfile = useCallback(async (): Promise<Profile | null> => {
     if (!user?.id) return null;
-    if (fetchProfileInFlightRef.current) return null;
+    if (fetchProfileInFlightRef.current) {
+      if (import.meta.env.DEV) {
+        console.log("[AuthContext] fetchProfile skipped in-flight");
+      }
+      return null;
+    }
     fetchProfileInFlightRef.current = true;
     setIsProfileLoading(true);
     try {
       const p = await fetchProfile(user.id);
+      if (p?.id) {
+        lastLoadedUserIdRef.current = p.id;
+      }
       if (p) {
         flushSync(() => {
           setProfile(p);
@@ -263,6 +302,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log("[Logout] signed out");
       profileLoadGenRef.current += 1;
       fetchProfileInFlightRef.current = false;
+      lastLoadedUserIdRef.current = null;
         flushSync(() => {
         setUser(null);
         setSession(null);
@@ -325,6 +365,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.log("[AuthContext] SIGNED_OUT");
         profileLoadGenRef.current += 1;
         fetchProfileInFlightRef.current = false;
+        lastLoadedUserIdRef.current = null;
         flushSync(() => {
           setSession(null);
           setUser(null);
@@ -351,8 +392,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const uid = session?.user?.id;
     if (!uid) {
+      lastLoadedUserIdRef.current = null;
       setIsProfileLoading(false);
       setProfile(null);
+      return;
+    }
+
+    if (
+      lastLoadedUserIdRef.current === uid &&
+      profileRef.current?.id === uid
+    ) {
+      if (import.meta.env.DEV) {
+        console.log("[AuthContext] fetchProfile skipped same user");
+      }
+      setIsProfileLoading(false);
+      return;
+    }
+
+    if (fetchProfileInFlightRef.current) {
+      if (import.meta.env.DEV) {
+        console.log("[AuthContext] fetchProfile skipped in-flight");
+      }
       return;
     }
     setIsProfileLoading(true);

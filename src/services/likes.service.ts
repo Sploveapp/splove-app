@@ -15,7 +15,7 @@ export type CreateLikeRpcResult = {
 };
 
 const PROFILE_SELECT =
-  "id, first_name, city, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, sport_time, is_photo_verified, photo_status, profile_completed, is_active, is_paused, is_banned, deleted_at, profile_sports(sports(label, slug))";
+  "id, first_name, city, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, is_photo_verified, photo_status, profile_completed, is_active, is_paused, is_banned, deleted_at, profile_sports(sports(label, slug))";
 
 type LikesProfileVisibilityFields = {
   profile_completed?: boolean | null;

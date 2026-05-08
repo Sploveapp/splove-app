@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { ACCESSIBILITY_PREF_BOTH_REQUIRED } from "../constants/copy";
@@ -81,6 +81,16 @@ function readMeetupModeSession(userId: string, clearIfExpired: boolean): MeetupM
   return { endAt, startTime: start, durationH };
 }
 
+function isMissingOptionalSchemaError(error: { code?: string | number; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const code = String(error.code ?? "");
+  const msg = (error.message ?? "").toLowerCase();
+  if (code === "42703" || code === "42883" || code === "42P01" || code === "PGRST202" || code === "404") {
+    return true;
+  }
+  return msg.includes("does not exist") || msg.includes("could not find");
+}
+
 const sectionHeadingButtonStyle: CSSProperties = {
   margin: "0 0 12px 0",
   padding: 0,
@@ -126,6 +136,10 @@ export default function Profile() {
   const [phraseMessage, setPhraseMessage] = useState<string | null>(null);
   const [meetupModeTick, setMeetupModeTick] = useState(0);
   const [meetupModeError, setMeetupModeError] = useState<string | null>(null);
+  const failedProfileImageSourcesRef = useRef<Set<string>>(new Set());
+  const profileImageFailureCountRef = useRef(0);
+  const meetupSyncInFlightRef = useRef(false);
+  const meetupLastSyncKeyRef = useRef<string | null>(null);
 
   const syncAccessibilityFromProfile = useCallback(() => {
     if (!profile) return;
@@ -166,6 +180,12 @@ export default function Profile() {
   }, [selectedPhotoUrl]);
 
   useEffect(() => {
+    failedProfileImageSourcesRef.current.clear();
+    profileImageFailureCountRef.current = 0;
+    setImageError(false);
+  }, [mainPhoto]);
+
+  useEffect(() => {
     if (accessibilityMessage !== ACCESSIBILITY_SAVE_SUCCESS) return;
     const t = window.setTimeout(() => setAccessibilityMessage(null), 1500);
     return () => window.clearTimeout(t);
@@ -193,40 +213,91 @@ export default function Profile() {
     const session = readMeetupModeSession(user.id, true);
     const pr = profile as Record<string, unknown>;
     const dbActive = pr.is_active_mode === true;
-    if (session && !dbActive) {
-      void supabase
-        .from("profiles")
-        .update({ is_active_mode: true })
-        .eq("id", user.id)
-        .then(({ error }) => {
-          if (!error) void refetchProfile();
-        });
-    } else if (!session && dbActive) {
-      void supabase
-        .from("profiles")
-        .update({ is_active_mode: false })
-        .eq("id", user.id)
-        .then(({ error }) => {
-          if (!error) void refetchProfile();
-        });
+    const shouldBeActive = session !== null;
+    if (dbActive === shouldBeActive) {
+      meetupLastSyncKeyRef.current = `${user.id}:${shouldBeActive}`;
+      return;
     }
+    const syncKey = `${user.id}:${shouldBeActive}`;
+    if (meetupSyncInFlightRef.current || meetupLastSyncKeyRef.current === syncKey) return;
+
+    meetupSyncInFlightRef.current = true;
+    meetupLastSyncKeyRef.current = syncKey;
+    void (async () => {
+      try {
+        const { error, data } = await supabase
+          .from("profiles")
+          .update({ is_active_mode: shouldBeActive })
+          .eq("id", user.id);
+        console.log("[Profile active mode debug] supabase update result", {
+          userId: user.id,
+          fromEffect: true,
+          shouldBeActive,
+          error,
+          data,
+        });
+        if (error) {
+          if (isMissingOptionalSchemaError(error)) {
+            console.warn("[Profile active mode debug] optional schema missing, skipping sync", {
+              userId: user.id,
+              shouldBeActive,
+              error,
+            });
+            return;
+          }
+          meetupLastSyncKeyRef.current = null;
+          return;
+        }
+        console.log("[Profile active mode debug] refetch triggered", {
+          userId: user.id,
+          fromEffect: true,
+        });
+        void refetchProfile();
+      } finally {
+        meetupSyncInFlightRef.current = false;
+      }
+    })();
   }, [user?.id, profile, meetupModeTick, refetchProfile]);
 
   async function handleMeetupModeCardClick() {
     if (!user?.id) return;
     setMeetupModeError(null);
     const session = readMeetupModeSession(user.id, true);
+    const prevActive = session !== null;
+    const nextActive = !prevActive;
+    console.log("[Profile active mode debug] toggle clicked", {
+      userId: user.id,
+      previousActiveState: prevActive,
+      nextActiveState: nextActive,
+    });
     if (session) {
       clearMeetupModeStorage(user.id);
       setMeetupModeTick((n) => n + 1);
-      const { error } = await supabase
+      const { error, data } = await supabase
         .from("profiles")
         .update({ is_active_mode: false })
         .eq("id", user.id);
+      console.log("[Profile active mode debug] supabase update result", {
+        userId: user.id,
+        previousActiveState: prevActive,
+        nextActiveState: nextActive,
+        error,
+        data,
+      });
       if (error) {
+        if (isMissingOptionalSchemaError(error)) {
+          console.warn("[Profile active mode debug] optional schema missing, skipping toggle update", {
+            userId: user.id,
+            previousActiveState: prevActive,
+            nextActiveState: nextActive,
+            error,
+          });
+          return;
+        }
         setMeetupModeError(error.message || t("action_impossible"));
         return;
       }
+      console.log("[Profile active mode debug] refetch triggered", { userId: user.id, fromEffect: false });
       await refetchProfile();
       return;
     }
@@ -241,16 +312,33 @@ export default function Profile() {
       return;
     }
     setMeetupModeTick((n) => n + 1);
-    const { error } = await supabase
+    const { error, data } = await supabase
       .from("profiles")
       .update({ is_active_mode: true })
       .eq("id", user.id);
+    console.log("[Profile active mode debug] supabase update result", {
+      userId: user.id,
+      previousActiveState: prevActive,
+      nextActiveState: nextActive,
+      error,
+      data,
+    });
     if (error) {
+      if (isMissingOptionalSchemaError(error)) {
+        console.warn("[Profile active mode debug] optional schema missing, skipping toggle update", {
+          userId: user.id,
+          previousActiveState: prevActive,
+          nextActiveState: nextActive,
+          error,
+        });
+        return;
+      }
       clearMeetupModeStorage(user.id);
       setMeetupModeTick((n) => n + 1);
       setMeetupModeError(error.message || t("action_impossible"));
       return;
     }
+    console.log("[Profile active mode debug] refetch triggered", { userId: user.id, fromEffect: false });
     await refetchProfile();
   }
 
@@ -514,10 +602,38 @@ export default function Profile() {
                     src={mainPhotoDisplay}
                     alt="Votre photo de profil — appuyez pour les options"
                     onLoad={() => {
-                      console.log("PROFILE IMAGE LOADED", mainPhoto);
+                      if (import.meta.env.DEV) {
+                        console.log("[Profile image debug] image source URL", {
+                          raw: mainPhoto,
+                          src: mainPhotoDisplay,
+                          status: "loaded",
+                        });
+                      }
                     }}
                     onError={() => {
-                      console.error("PROFILE IMAGE ERROR", mainPhoto);
+                      const src = mainPhotoDisplay || "";
+                      if (failedProfileImageSourcesRef.current.has(src)) {
+                        if (import.meta.env.DEV) {
+                          console.warn("[Profile image debug] retry skipped reason", {
+                            raw: mainPhoto,
+                            src,
+                            reason: "already failed in current render cycle",
+                          });
+                        }
+                        return;
+                      }
+                      failedProfileImageSourcesRef.current.add(src);
+                      profileImageFailureCountRef.current += 1;
+                      if (import.meta.env.DEV) {
+                        console.warn("[Profile image debug] image source URL", {
+                          raw: mainPhoto,
+                          src,
+                          status: "failed",
+                        });
+                        console.warn("[Profile image debug] image load failure count", {
+                          count: profileImageFailureCountRef.current,
+                        });
+                      }
                       setImageError(true);
                     }}
                     style={{

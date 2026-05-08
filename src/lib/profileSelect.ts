@@ -4,8 +4,9 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+/** Noyau auth / routing : sans colonnes optionnelles parfois absentes (accessibilité, créneau). */
 const PROFILE_COLUMNS_CORE =
-  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, is_photo_verified, photo_status, needs_adapted_activities, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_time, sport_intensity, meet_vibe, sport_motivation, sport_phrase, photo1_status, photo2_status, photo_moderation_overall, is_under_review, moderation_strikes_count";
+  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, is_photo_verified, photo_status, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_intensity, meet_vibe, sport_motivation, sport_phrase, photo1_status, photo2_status, photo_moderation_overall, is_under_review, moderation_strikes_count";
 
 export const PROFILE_SELECT_CORE = PROFILE_COLUMNS_CORE;
 
@@ -15,13 +16,13 @@ const PROFILE_WITH_LOCATION = `${PROFILE_COLUMNS_CORE}, location_source`;
 
 /** Sans empreinte modération (058 etc.) + `location_source` (057). */
 const PROFILE_SELECT_NO_PHOTO_MOD =
-  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, is_photo_verified, photo_status, needs_adapted_activities, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_time, sport_intensity, meet_vibe, sport_motivation, sport_phrase, location_source";
+  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, is_photo_verified, photo_status, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_intensity, meet_vibe, sport_motivation, sport_phrase, location_source";
 
 const PROFILE_SELECT_MID_LIFE =
-  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, sport_phrase, onboarding_sports_count, onboarding_sports_with_level_count";
+  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, city, latitude, longitude, discovery_radius_km, sport_intensity, sport_phrase, onboarding_sports_count, onboarding_sports_with_level_count";
 
 const PROFILE_SELECT_CORE_IDENTITY_GEO =
-  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity";
+  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, city, latitude, longitude, discovery_radius_km, sport_intensity";
 
 /**
  * Noyau stable typique pour la décision auth / routing.
@@ -147,15 +148,83 @@ function isRlsOrPermissionError(
  * 42703, ou 400 PGRST avec colonne inconnue, ou message classique "column ... does not exist".
  */
 export function isRecoverableUnknownColumnError(
-  error: { code?: string | number; message?: string; details?: string } | null | undefined,
+  error: { code?: string | number; message?: string; details?: string; hint?: string } | null | undefined,
 ): boolean {
   if (!error) return false;
   if (isPostgresUndefinedColumnError(error)) return true;
-  const m = (error.message ?? "").toLowerCase();
+  const c = String(error.code ?? "");
+  // PostgREST : colonne absente / cache schéma (codes variables selon version).
+  if (c === "PGRST204") return true;
+  const m = `${error.message ?? ""} ${error.details ?? ""} ${error.hint ?? ""}`.toLowerCase();
   if (/could not find the .* column|column .* does not exist|undefined column/i.test(m)) {
     return true;
   }
+  if (m.includes("schema cache") && /column|field/.test(m)) return true;
   return false;
+}
+
+const OPTIONAL_AUTH_PROFILE_MERGE_FIELDS = [
+  "needs_adapted_activities",
+  "sport_time",
+  "open_to_adapted_activities",
+  "pref_open_to_adapted_activity",
+  "sport_practice_type",
+  "referral_code",
+  "referred_by_user_id",
+  "rewind_credits",
+  "referral_plus_until",
+  "boost_credits",
+  "beta_splove_plus_unlocked",
+] as const;
+
+/**
+ * Sélection optionnelle après un noyau `profiles` réussi : ne jette jamais ;
+ * retire les colonnes manquantes jusqu’à liste vide.
+ */
+export async function tryMergeOptionalAuthProfileFields(
+  client: SupabaseClient,
+  userId: string,
+): Promise<Record<string, unknown>> {
+  let cols = [...OPTIONAL_AUTH_PROFILE_MERGE_FIELDS];
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (cols.length === 0) return {};
+    const { data, error } = await client
+      .from("profiles")
+      .select(cols.join(", "))
+      .eq("id", userId)
+      .maybeSingle();
+    if (!error && data && typeof data === "object") {
+      return data as Record<string, unknown>;
+    }
+    if (!error) return {};
+    if (isRecoverableUnknownColumnError(error)) {
+      const msg = error.message ?? "";
+      const m = msg.match(/column\s+["']?([a-zA-Z0-9_]+)["']?/i);
+      const miss = m?.[1] ?? null;
+      if (import.meta.env.DEV) {
+        console.log("[Profile fetch debug] optional profile fields skipped", {
+          reason: "missing_column_retry",
+          column: miss,
+          message: msg.slice(0, 200),
+        });
+      }
+      if (miss && cols.some((x) => x === miss)) {
+        cols = cols.filter((x) => x !== miss);
+      } else {
+        cols = cols.slice(0, -1);
+      }
+      continue;
+    }
+    if (import.meta.env.DEV) {
+      console.log("[Profile fetch debug] optional profile fields skipped", {
+        reason: "terminal_error",
+        code: error.code,
+        message: error.message ?? null,
+      });
+    }
+    return {};
+  }
+  return {};
 }
 
 /**
