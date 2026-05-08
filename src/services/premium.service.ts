@@ -96,32 +96,41 @@ export async function getActiveSubscription(
 }
 
 async function referralPlusOrBeta(profileId: string): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("referral_plus_until, beta_splove_plus_unlocked")
-    .eq("id", profileId)
-    .maybeSingle();
-  if (error) {
-    if (error.code === "42703") {
-      const legacy = await supabase
-        .from("profiles")
-        .select("referral_plus_until")
-        .eq("id", profileId)
-        .maybeSingle();
-      if (legacy.error) return false;
-      const u = (legacy.data as { referral_plus_until?: string | null } | null)?.referral_plus_until;
+  let cols = ["referral_plus_until", "beta_splove_plus_unlocked"];
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select(cols.join(", "))
+      .eq("id", profileId)
+      .maybeSingle();
+
+    if (!error) {
+      const row = data as {
+        referral_plus_until?: string | null;
+        beta_splove_plus_unlocked?: boolean | null;
+      } | null;
+      if (row?.beta_splove_plus_unlocked === true) return true;
+      const u = row?.referral_plus_until ?? null;
       return Boolean(u && new Date(u).getTime() > Date.now());
     }
-    return false;
+
+    const low = (error.message ?? "").toLowerCase();
+    const missing =
+      error.code === "42703" || low.includes("does not exist") || low.includes("could not find");
+    if (!missing) return false;
+
+    const m = (error.message ?? "").match(/column\s+["']?([a-zA-Z0-9_]+)["']?/i);
+    const missingCol = m?.[1] ?? null;
+    if (!missingCol || !cols.includes(missingCol)) {
+      cols = ["referral_plus_until"];
+    } else {
+      cols = cols.filter((c) => c !== missingCol);
+    }
+    if (cols.length === 0) return false;
   }
-  const row = data as {
-    referral_plus_until?: string | null;
-    beta_splove_plus_unlocked?: boolean | null;
-  } | null;
-  if (row?.beta_splove_plus_unlocked === true) return true;
-  const u = row?.referral_plus_until ?? null;
-  if (!u) return false;
-  return new Date(u).getTime() > Date.now();
+
+  return false;
 }
 
 /**

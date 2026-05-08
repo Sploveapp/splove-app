@@ -18,19 +18,88 @@ export function ProtectedRoute({ children }: Props) {
     pathname === "/messages" ||
     pathname.startsWith("/match/") ||
     pathname.startsWith("/chat/");
+  const authUserId = session?.user?.id ?? null;
+  const profileFetchResult = profile ? "ok" : "null";
+
+  if (import.meta.env.DEV) {
+    console.info("[ProtectedRoute diagnostics] decision_input", {
+      current_route: pathname,
+      auth_user_id: authUserId,
+      profile_fetch_result: profileFetchResult,
+      profile_completed: profile?.profile_completed ?? null,
+      is_auth_initialized: isAuthInitialized,
+      is_loading: isLoading,
+      is_profile_loading: isProfileLoading,
+    });
+  }
 
   if (!isAuthInitialized || isLoading) {
+    if (import.meta.env.DEV) {
+      console.info("[ProtectedRoute diagnostics] redirect_decision", {
+        current_route: pathname,
+        auth_user_id: authUserId,
+        profile_fetch_result: profileFetchResult,
+        profile_completed: profile?.profile_completed ?? null,
+        redirect_decision: "show_splash_auth_bootstrap",
+      });
+    }
     return <SplashScreen />;
   }
 
   if (!session) {
     console.log("[ONBOARDING_GUARD] no-session -> /auth", { pathname });
+    if (import.meta.env.DEV) {
+      console.info("[ProtectedRoute diagnostics] redirect_decision", {
+        current_route: pathname,
+        auth_user_id: authUserId,
+        profile_fetch_result: profileFetchResult,
+        profile_completed: profile?.profile_completed ?? null,
+        redirect_decision: "navigate_auth",
+      });
+    }
     return <Navigate to="/auth" replace />;
   }
 
   if (isProfileLoading) {
     console.log("[ONBOARDING_GUARD] profile-loading", { pathname });
+    if (import.meta.env.DEV) {
+      console.info("[ProtectedRoute diagnostics] redirect_decision", {
+        current_route: pathname,
+        auth_user_id: authUserId,
+        profile_fetch_result: profileFetchResult,
+        profile_completed: profile?.profile_completed ?? null,
+        redirect_decision: "show_splash_profile_loading",
+      });
+    }
     return <SplashScreen />;
+  }
+
+  // Stable failure state: avoid /onboarding redirect loops when profile fetch returns null.
+  if (!profile && !isOnboardingPath) {
+    if (import.meta.env.DEV) {
+      console.info("[ProtectedRoute diagnostics] redirect_decision", {
+        current_route: pathname,
+        auth_user_id: authUserId,
+        profile_fetch_result: profileFetchResult,
+        profile_completed: null,
+        redirect_decision: "show_profile_fetch_error_state",
+      });
+    }
+    return (
+      <main className="mx-auto min-h-screen w-full max-w-md px-6 py-16 text-app-text">
+        <h1 className="text-lg font-semibold">Profil indisponible</h1>
+        <p className="mt-3 text-sm text-app-muted">
+          Impossible de charger ton profil pour le moment. Verifie ta connexion puis reessaie.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-5 rounded-xl bg-app-brand px-4 py-2 text-sm font-semibold text-white"
+        >
+          Reessayer
+        </button>
+      </main>
+    );
   }
 
   if (profile?.profile_completed !== true && !isOnboardingPath) {
@@ -39,6 +108,15 @@ export function ProtectedRoute({ children }: Props) {
       profile_completed: profile?.profile_completed ?? null,
       blocked_scope: isMainFeaturePath ? "main_features" : "protected_area",
     });
+    if (import.meta.env.DEV) {
+      console.info("[ProtectedRoute diagnostics] redirect_decision", {
+        current_route: pathname,
+        auth_user_id: authUserId,
+        profile_fetch_result: profileFetchResult,
+        profile_completed: profile?.profile_completed ?? null,
+        redirect_decision: "navigate_onboarding",
+      });
+    }
     return <Navigate to="/onboarding" replace />;
   }
 
@@ -46,6 +124,15 @@ export function ProtectedRoute({ children }: Props) {
     console.log("[ONBOARDING_GUARD] access_granted", {
       pathname,
       profile_completed: profile?.profile_completed === true,
+    });
+  }
+  if (import.meta.env.DEV) {
+    console.info("[ProtectedRoute diagnostics] redirect_decision", {
+      current_route: pathname,
+      auth_user_id: authUserId,
+      profile_fetch_result: profileFetchResult,
+      profile_completed: profile?.profile_completed ?? null,
+      redirect_decision: "allow_route",
     });
   }
 

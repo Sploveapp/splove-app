@@ -110,7 +110,10 @@ type Profile = {
   needs_adapted_activities?: boolean | null;
   /** Rythme de pratique affiché sur Discover : solo | adapted | flexible */
   sport_practice_type?: string | null;
-  profile_sports?: { sports: { label: string | null; slug?: string | null } | null }[];
+  profile_sports?: {
+    sport_id?: string | number | null;
+    sports: { id?: string | number | null; label: string | null; slug?: string | null } | null;
+  }[];
   profile_completed?: boolean | null;
   last_active_at?: string | null;
   latitude?: number | null;
@@ -699,11 +702,90 @@ function discoverDevPipelineDiff(
   }
 }
 
+
+function discoverRelationshipToken(raw: string | null | undefined): string {
+  const t = (raw ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^a-z0-9_, -]+/g, "");
+  if (t === "men") return "male";
+  if (t === "women") return "female";
+  return t;
+}
+
+function discoverCanonicalGender(raw: string | null | undefined): string | null {
+  const t = discoverRelationshipToken(raw);
+  if (!t) return null;
+  if (["femme", "femmes", "female", "woman", "women"].includes(t)) return "female";
+  if (["homme", "hommes", "male", "man", "men"].includes(t)) return "male";
+  if (["femme trans", "trans_female", "trans woman", "trans women", "trans_women"].includes(t))
+    return "trans_female";
+  if (["homme trans", "trans_male", "trans man", "trans men", "trans_men"].includes(t))
+    return "trans_male";
+  if (["non-binaire", "non binaire", "non_binary", "nonbinary", "non-binary"].includes(t))
+    return "non_binary";
+  return null;
+}
+
+function discoverParseLookingFor(raw: string | null | undefined): Set<string> {
+  const out = new Set<string>();
+  const source = discoverRelationshipToken(raw)
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  for (const t of source) {
+    if (["tous", "all", "everyone"].includes(t)) {
+      out.clear();
+      out.add("all");
+      return out;
+    }
+    if (["femme", "femmes", "women", "female"].includes(t)) out.add("female");
+    else if (["homme", "hommes", "men", "male"].includes(t)) out.add("male");
+    else if (["femmes trans", "femme trans", "trans_women", "trans women"].includes(t))
+      out.add("trans_female");
+    else if (["hommes trans", "homme trans", "trans_men", "trans men"].includes(t))
+      out.add("trans_male");
+    else if (["non-binaires", "non-binaire", "non_binary", "nonbinary"].includes(t))
+      out.add("non_binary");
+  }
+  return out;
+}
+
+function discoverLookingForAcceptsGender(lookingFor: Set<string>, gender: string | null): boolean {
+  if (!gender) return false;
+  if (lookingFor.has("all")) return true;
+  return lookingFor.has(gender);
+}
+
+function discoverExtractProfileSportIds(profile: Pick<Profile, "profile_sports"> | null | undefined): string[] {
+  const out = new Set<string>();
+  const list = profile?.profile_sports;
+  if (!Array.isArray(list)) return [];
+  for (const row of list) {
+    const direct = row?.sport_id;
+    if (typeof direct === "string" || typeof direct === "number") out.add(String(direct));
+    const nested = row?.sports?.id;
+    if (typeof nested === "string" || typeof nested === "number") out.add(String(nested));
+  }
+  return [...out];
+}
+
+function discoverLogStageCount(stage: string, count: number, extra?: Record<string, unknown>): void {
+  if (!import.meta.env.DEV) return;
+  console.info("[Discover diagnostics] stage_count", {
+    stage,
+    count,
+    ...(extra ?? {}),
+  });
+}
+
 const DISCOVER_DISPLAY_LIMIT = 10;
 /** Source Supabase du fil Discover (classement serveur) — repli côté client si colonne absente. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
 const DISCOVER_FALLBACK_SELECT =
-  "id, first_name, city, birth_date, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, open_to_adapted_activities, pref_open_to_adapted_activity, sport_phrase, sport_time, is_photo_verified, photo_status, needs_adapted_activities, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, profile_sports(sports(label, slug))";
+  "id, first_name, city, birth_date, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, open_to_adapted_activities, pref_open_to_adapted_activity, sport_phrase, sport_time, is_photo_verified, photo_status, needs_adapted_activities, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Message utilisateur sûr (aucun détail technique backend). */
 function discoverFetchFailedMsg(language: "fr" | "en"): string {
@@ -764,11 +846,14 @@ function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremiu
  * Badge « vérifié » : uniquement `photo_status === 'approved'`.
  */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, is_active_mode, sport_practice_type, profile_sports(sports(label, slug))";
+  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Profil viewer Discover : uniquement colonnes plates sur `profiles` (sports chargés séparément sur `profile_sports`). */
 const DISCOVER_VIEWER_ME_SELECT =
-  "city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, needs_adapted_activities, sport_practice_type, sport_time, open_to_adapted_activities, pref_open_to_adapted_activity";
+  "id, first_name, city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, profile_completed, photo_status, portrait_url, fullbody_url, main_photo_url";
+
+const DISCOVER_VIEWER_ME_OPTIONAL_SELECT =
+  "needs_adapted_activities, sport_practice_type, sport_time, open_to_adapted_activities, pref_open_to_adapted_activity";
 
 /** Reconstruit une carte Discover après rewind (hors re-score filtre feed). */
 async function buildAffinityProfileForRewind(input: {
@@ -1164,7 +1249,11 @@ export default function Discover() {
   }, [currentUserId]);
 
   const refreshRewindStatus = useCallback(() => {
-    void getDiscoverRewindStatus().then(setRewindStatus);
+    void getDiscoverRewindStatus()
+      .then(setRewindStatus)
+      .catch((e) => {
+        console.warn("[Discover diagnostics] getDiscoverRewindStatus rejected", e);
+      });
   }, []);
 
   useEffect(() => {
@@ -1185,9 +1274,13 @@ export default function Discover() {
   useEffect(() => {
     if (!currentUserId) return;
     let cancelled = false;
-    void getOrCreateReferralCode(currentUserId, profile?.first_name ?? null).then((c) => {
-      if (!cancelled) setReferralCodeState(c);
-    });
+    void getOrCreateReferralCode(currentUserId, profile?.first_name ?? null)
+      .then((c) => {
+        if (!cancelled) setReferralCodeState(c);
+      })
+      .catch((e) => {
+        console.warn("[Discover diagnostics] getOrCreateReferralCode rejected", e);
+      });
     return () => {
       cancelled = true;
     };
@@ -1195,12 +1288,16 @@ export default function Discover() {
 
   useEffect(() => {
     if (!currentUserId) return;
-    void loadLocalImpact();
+    void loadLocalImpact().catch((e) => {
+      console.warn("[Discover diagnostics] loadLocalImpact rejected", e);
+    });
   }, [currentUserId, loadLocalImpact]);
 
   useEffect(() => {
     if (referralModalWasOpenRef.current && !referralModalOpen && currentUserId) {
-      void loadLocalImpact();
+      void loadLocalImpact().catch((e) => {
+        console.warn("[Discover diagnostics] loadLocalImpact (modal-close) rejected", e);
+      });
     }
     referralModalWasOpenRef.current = referralModalOpen;
   }, [referralModalOpen, currentUserId, loadLocalImpact]);
@@ -1210,7 +1307,9 @@ export default function Discover() {
       Boolean(currentUserId) && !loading && !errorMessage && profiles.length <= 3;
     if (!eligible || inviteViewTrackedRef.current) return;
     inviteViewTrackedRef.current = true;
-    void trackReferralEvent("invite_view", { variant: referralVariant, source: "discover" });
+    void trackReferralEvent("invite_view", { variant: referralVariant, source: "discover" }).catch((e) => {
+      console.warn("[Discover diagnostics] trackReferralEvent rejected", e);
+    });
   }, [currentUserId, loading, errorMessage, profiles.length, referralVariant]);
 
   function openReportPhotoFromDiscover(p: ProfileWithAffinity) {
@@ -1328,8 +1427,13 @@ export default function Discover() {
     void (async () => {
       try {
         const viewerAuthId = user?.id ?? currentUserId;
-        const [meRes, meSportsRes, candRes, distRes] = await Promise.all([
+        const [meRes, meOptionalRes, meSportsRes, candRes, distRes] = await Promise.all([
           supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
+          supabase
+            .from("profiles")
+            .select(DISCOVER_VIEWER_ME_OPTIONAL_SELECT)
+            .eq("id", viewerAuthId)
+            .maybeSingle(),
           supabase.from("profile_sports").select("sports(slug, label)").eq("profile_id", viewerAuthId),
           supabase.from("profiles").select(DISCOVER_PROFILES_DETAIL_SELECT).eq("id", requestedProfileId).maybeSingle(),
           supabase.rpc("profile_distances_from_viewer", { p_candidate_ids: [requestedProfileId] }),
@@ -1337,15 +1441,26 @@ export default function Discover() {
         if (cancelled) return;
 
         const meProfileSportRows = Array.isArray(meSportsRes.data) ? meSportsRes.data : [];
+        const optionalLow = (meOptionalRes.error?.message ?? "").toLowerCase();
+        const optionalMissing =
+          meOptionalRes.error?.code === "42703" ||
+          optionalLow.includes("does not exist") ||
+          optionalLow.includes("could not find");
+        if (meOptionalRes.error && !optionalMissing) {
+          console.warn("[Discover] viewer optional profiles fields query failed:", meOptionalRes.error.message);
+        }
+        const meProfileOptional = meOptionalRes.data as Partial<Profile> | null;
         const meProfile: Profile =
           meRes.data != null
             ? {
                 ...(meRes.data as unknown as Profile),
+                ...(meProfileOptional ?? {}),
                 profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
               }
             : {
                 id: viewerAuthId,
                 first_name: null,
+                ...(meProfileOptional ?? {}),
                 profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
               };
         let p = candRes.data as Profile | null;
@@ -1469,7 +1584,9 @@ export default function Discover() {
       profile_completed: profile?.profile_completed,
       photo_status: profile?.photo_status,
     });
-    void loadProfiles();
+    void loadProfiles().catch((e) => {
+      console.error("[Discover diagnostics] loadProfiles rejected", e);
+    });
   }, [authLoading, user?.id]);
 
   const weeklySuggestions = useMemo(
@@ -1496,6 +1613,12 @@ export default function Discover() {
 
   async function loadProfiles() {
     if (!currentUserId) {
+      if (import.meta.env.DEV) {
+        console.info("[Discover diagnostics] early_return", {
+          stage: "loadProfiles:start",
+          exclusion_reason: "missing currentUserId",
+        });
+      }
       setLoading(false);
       return;
     }
@@ -1508,30 +1631,46 @@ export default function Discover() {
       void (async () => {
         try {
           await supabase.rpc("touch_profile_activity");
-        } catch {
-          // Silent by design: should never block Discover rendering.
+        } catch (e) {
+          console.warn("[Discover diagnostics] optional touch_profile_activity skipped", e);
         }
       })();
 
       const viewerAuthId = user?.id ?? currentUserId;
-      const [likedIds, matchedIds, meRes, meSportsRes, blockDetail] = await Promise.all([
+      const [likedIds, matchedIds, meRes, meOptionalRes, meSportsRes, blockDetail] = await Promise.all([
         fetchOutgoingLikedUserIds(currentUserId),
         fetchMatchedUserIds(currentUserId),
         supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
-        supabase.from("profile_sports").select("sports(slug, label)").eq("profile_id", viewerAuthId),
+        supabase
+          .from("profiles")
+          .select(DISCOVER_VIEWER_ME_OPTIONAL_SELECT)
+          .eq("id", viewerAuthId)
+          .maybeSingle(),
+        supabase.from("profile_sports").select("sport_id, sports(id, slug, label)").eq("profile_id", viewerAuthId),
         fetchBlockExclusionDetail(currentUserId),
       ]);
 
       const meProfileSportRows = Array.isArray(meSportsRes.data) ? meSportsRes.data : [];
+      const optionalLow = (meOptionalRes.error?.message ?? "").toLowerCase();
+      const optionalMissing =
+        meOptionalRes.error?.code === "42703" ||
+        optionalLow.includes("does not exist") ||
+        optionalLow.includes("could not find");
+      if (meOptionalRes.error && !optionalMissing) {
+        console.warn("[Discover] viewer optional profiles fields query failed:", meOptionalRes.error.message);
+      }
+      const meProfileOptional = meOptionalRes.data as Partial<Profile> | null;
       const meProfile: Profile =
         meRes.data != null
           ? {
               ...(meRes.data as unknown as Profile),
+              ...(meProfileOptional ?? {}),
               profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
             }
           : {
               id: viewerAuthId,
               first_name: null,
+              ...(meProfileOptional ?? {}),
               profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
             };
 
@@ -1542,13 +1681,22 @@ export default function Discover() {
       const sportsSet = collectSportMatchKeysFromProfile(meProfile);
       setMySportMatchKeys(sportsSet);
       if (import.meta.env.DEV) {
+        const viewerGenderNormalized = discoverCanonicalGender(meProfile.gender ?? null);
+        const viewerLookingForNormalized = [...discoverParseLookingFor(meProfile.looking_for ?? null)];
+        const viewerProfileSportIds = discoverExtractProfileSportIds(meProfile);
         console.info("[Discover diagnostics] viewer_profile", {
           auth_user_id: viewerAuthId,
           current_profile_fetch_error: meRes.error ?? null,
           current_profile_fetch_result: meRes.data ?? null,
+          current_profile_optional_fields_error: meOptionalRes.error ?? null,
           current_profile_profile_sports_error: meSportsRes.error ?? null,
           current_profile_id_used: meRes.data ? viewerAuthId : null,
           current_profile_sports_match_keys: [...sportsSet],
+          raw_db_gender: meProfile.gender ?? null,
+          normalized_gender: viewerGenderNormalized,
+          raw_db_looking_for: meProfile.looking_for ?? null,
+          normalized_looking_for: viewerLookingForNormalized,
+          loaded_profile_sports_ids: viewerProfileSportIds,
         });
       }
       if (meRes.error) {
@@ -1565,6 +1713,11 @@ export default function Discover() {
           console.info("[Discover diagnostics] viewer_profile_missing", {
             auth_user_id: currentUserId,
             exclusion_reason: meRes.error ? "RLS/no row" : "profile fetch failed",
+            current_profile_fetch_error: meRes.error ?? null,
+          });
+          console.info("[Discover diagnostics] early_return", {
+            stage: "viewer_profile_check",
+            exclusion_reason: meRes.error ? "viewer profile fetch error" : "viewer profile missing",
             current_profile_fetch_error: meRes.error ?? null,
           });
         }
@@ -1601,6 +1754,14 @@ export default function Discover() {
           code: error.code,
           message: error.message,
         });
+        if (import.meta.env.DEV) {
+          console.info("[Discover diagnostics] early_return", {
+            stage: "get_discover_feed_alive",
+            exclusion_reason: "feed RPC query failed",
+            error_code: error.code ?? null,
+            error_message: error.message ?? null,
+          });
+        }
         setErrorMessage(discoverFetchFailedMsg(language));
         return;
       }
@@ -1633,12 +1794,30 @@ export default function Discover() {
               ...p,
               profile_sports: Array.isArray(p.profile_sports)
                 ? p.profile_sports.map((entry) => {
-                    const rawSports = (entry as { sports?: unknown } | null)?.sports;
+                    const e = (entry as {
+                      sport_id?: string | number | null;
+                      sports?: unknown;
+                    } | null) ?? { sport_id: null, sports: null };
+                    const rawSports = e.sports;
                     if (Array.isArray(rawSports)) {
-                      const first = rawSports[0] as { label?: string | null; slug?: string | null } | undefined;
-                      return { sports: first ? { label: first.label ?? null, slug: first.slug ?? null } : null };
+                      const first = rawSports[0] as
+                        | { id?: string | number | null; label?: string | null; slug?: string | null }
+                        | undefined;
+                      return {
+                        sport_id: e.sport_id ?? null,
+                        sports: first
+                          ? { id: first.id ?? null, label: first.label ?? null, slug: first.slug ?? null }
+                          : null,
+                      };
                     }
-                    return entry as { sports: { label: string | null; slug?: string | null } | null };
+                    const one = rawSports as
+                      | { id?: string | number | null; label?: string | null; slug?: string | null }
+                      | null
+                      | undefined;
+                    return {
+                      sport_id: e.sport_id ?? null,
+                      sports: one ? { id: one.id ?? null, label: one.label ?? null, slug: one.slug ?? null } : null,
+                    };
                   })
                 : [],
             }))
@@ -1663,6 +1842,12 @@ export default function Discover() {
         }
       }
       console.log("[Discover feed] raw profiles count:", profilesFromRpc.length);
+      if (import.meta.env.DEV) {
+        console.info("[Discover diagnostics] candidate_counts", {
+          stage: "before_filtering",
+          count: profilesFromRpc.length,
+        });
+      }
       if (import.meta.env.DEV) {
         const feedQuerySources: string[] = ["get_discover_feed_alive (RPC)"];
         if (mergedFromProfilesFallback) feedQuerySources.push("profiles (table fallback)");
@@ -1697,8 +1882,55 @@ export default function Discover() {
       let raw: Profile[] = profilesFromRpc;
       if (BETA_MODE) {
         const before = raw;
-        raw = raw.filter((p) => String(p.photo_status ?? "").toLowerCase().trim() === "approved");
+        raw = raw.filter((p) => {
+          const st = String(p.photo_status ?? "").toLowerCase().trim();
+          return st === "approved" || st === "pending";
+        });
         discoverDevPipelineDiff(before, raw, "beta_approved_photo_only", discoverBetaPhotoRejectReason);
+      }
+      discoverLogStageCount("raw candidates fetched", profilesFromRpc.length);
+      discoverLogStageCount("after RLS", raw.length, {
+        note: "RLS is server-side in feed RPC/view; client gets post-RLS rows.",
+      });
+      if (import.meta.env.DEV) {
+        const viewerGenderDiag = discoverCanonicalGender(meProfile.gender ?? null);
+        const viewerLookingForDiag = discoverParseLookingFor(meProfile.looking_for ?? null);
+        const afterGenderLookingFor = raw.filter((c) => {
+          const cg = discoverCanonicalGender(c.gender ?? null);
+          const cl = discoverParseLookingFor(c.looking_for ?? null);
+          return (
+            discoverLookingForAcceptsGender(viewerLookingForDiag, cg) &&
+            discoverLookingForAcceptsGender(cl, viewerGenderDiag)
+          );
+        });
+        discoverLogStageCount("after gender/looking_for filtering", afterGenderLookingFor.length, {
+          diagnostic_only: true,
+        });
+        const afterBannedPhoto = raw.filter((c) => {
+          const b = c as Profile & {
+            is_banned?: boolean | null;
+            status?: string | null;
+            banned_until?: string | null;
+          };
+          const banned =
+            b.is_banned === true ||
+            String(b.status ?? "").trim().toLowerCase() === "banned" ||
+            (typeof b.banned_until === "string" && b.banned_until.trim().length > 0 &&
+              Number.isFinite(new Date(b.banned_until).getTime()) &&
+              new Date(b.banned_until).getTime() > Date.now());
+          const hasMain = typeof c.main_photo_url === "string" && c.main_photo_url.trim().length > 0;
+          return !banned && hasMain;
+        });
+        discoverLogStageCount("after banned/photo filtering", afterBannedPhoto.length, {
+          diagnostic_only: true,
+          beta_pending_allowed: BETA_MODE,
+        });
+        discoverLogStageCount("relationship_mapping_verification", 2, {
+          female_looking_for_men_matches_male_looking_for_female:
+            discoverLookingForAcceptsGender(new Set(["male"]), "male") &&
+            discoverLookingForAcceptsGender(new Set(["female"]), "female"),
+          normalized_aliases: { men: discoverRelationshipToken("men"), women: discoverRelationshipToken("women") },
+        });
       }
       console.log("[Discover detail] profils détaillés reçus", {
         count: raw.length,
@@ -1751,6 +1983,7 @@ export default function Discover() {
         discoverDevPipelineDiff(before, raw, "sanity_valid_id_not_self", (p) =>
           p.id === currentUserId ? "self" : "missing required field",
         );
+        discoverLogStageCount("after self exclusion", raw.length);
       }
       if (likedIds.size > 0) {
         const before = raw;
@@ -1767,6 +2000,10 @@ export default function Discover() {
         raw = raw.filter((p) => !matchedIds.has(p.id));
         discoverDevPipelineDiff(before, raw, "exclude_matches", () => "already matched");
       }
+      discoverLogStageCount("after swipe exclusion", raw.length, {
+        liked_set_size: likedIds.size,
+        matched_set_size: matchedIds.size,
+      });
       {
         const before = raw;
         raw = raw.filter((p) => !isProfileGhostActive(p.id));
@@ -1774,7 +2011,10 @@ export default function Discover() {
       }
       {
         const before = raw;
-        raw = raw.filter((p) => isWithinVisibilityWindow(p.created_at ?? null, hasPlus));
+        raw = raw.filter((p) => {
+          if (BETA_MODE || import.meta.env.DEV) return true;
+          return isWithinVisibilityWindow(p.created_at ?? null, hasPlus);
+        });
         discoverDevPipelineDiff(before, raw, "discover_visibility_window", () => "missing required field", "discover_visibility_window");
       }
 
@@ -1823,6 +2063,73 @@ export default function Discover() {
         }
       }
 
+      if (stage.length > 0) {
+        const hydrationIds = stage.map((p) => p.id).filter(Boolean);
+        const { data: hydrationRows, error: hydrationErr } = await supabase
+          .from("profiles")
+          .select("id, gender, looking_for, intent, profile_sports(sport_id, sports(id, slug, label))")
+          .in("id", hydrationIds);
+        if (hydrationErr) {
+          console.warn("[Discover feed] candidate hydration batch:", hydrationErr.message);
+        } else {
+          const hydrationById = new Map<
+            string,
+            {
+              gender?: string | null;
+              looking_for?: string | null;
+              intent?: string | null;
+              profile_sports?: Profile["profile_sports"];
+            }
+          >();
+          for (const row of ((hydrationRows ?? []) as unknown[]) as Array<{
+            id?: string;
+            gender?: string | null;
+            looking_for?: string | null;
+            intent?: string | null;
+            profile_sports?: unknown;
+          }>) {
+            const pid = typeof row.id === "string" ? row.id : "";
+            if (!pid) continue;
+            const normalizedProfileSports = Array.isArray(row.profile_sports)
+              ? (row.profile_sports as Profile["profile_sports"])
+              : [];
+            hydrationById.set(pid, {
+              gender: row.gender ?? null,
+              looking_for: row.looking_for ?? null,
+              intent: row.intent ?? null,
+              profile_sports: normalizedProfileSports,
+            });
+          }
+          stage = stage.map((p) => {
+            const h = hydrationById.get(p.id);
+            if (!h) return p;
+            return {
+              ...p,
+              gender: h.gender ?? p.gender ?? null,
+              looking_for: h.looking_for ?? p.looking_for ?? null,
+              intent: h.intent ?? p.intent ?? null,
+              profile_sports: h.profile_sports ?? p.profile_sports ?? [],
+            };
+          });
+
+          if (import.meta.env.DEV) {
+            const rows = stage.map((p) => ({
+              id: p.id,
+              first_name: p.first_name ?? null,
+              raw_db_gender: p.gender ?? null,
+              normalized_gender: discoverCanonicalGender(p.gender ?? null),
+              raw_db_looking_for: p.looking_for ?? null,
+              normalized_looking_for: [...discoverParseLookingFor(p.looking_for ?? null)],
+              loaded_profile_sports_ids: discoverExtractProfileSportIds(p),
+            }));
+            console.info("[Discover diagnostics] candidate_profile_hydration", {
+              count: rows.length,
+              rows,
+            });
+          }
+        }
+      }
+
       const sploveFlagsById = new Map<string, { boost: boolean; priority_meet: boolean }>();
       if (stage.length > 0) {
         const { data: flagRows, error: flagErr } = await supabase.rpc(
@@ -1852,6 +2159,7 @@ export default function Discover() {
           open_to_adapted_activities?: string | null;
           pref_open_to_adapted_activity?: boolean | null;
         };
+      const viewerSportIdsForScoring = discoverExtractProfileSportIds(meProfile);
 
       if (import.meta.env.DEV) {
         console.info("[Discover diagnostics] candidates_before_scoring_filters", {
@@ -1869,6 +2177,7 @@ export default function Discover() {
           viewer: {
             id: currentUserId,
             city: meProfile.city ?? null,
+            profile_completed: meProfile.profile_completed ?? null,
             gender: meProfile.gender ?? null,
             looking_for: meProfile.looking_for ?? null,
             intent: meProfile.intent ?? null,
@@ -1882,6 +2191,7 @@ export default function Discover() {
           matchedIds,
           blockedIds: blockExclude,
           mySportMatchKeys: sportsSet,
+          viewerSportIds: viewerSportIdsForScoring,
           distanceById: distById,
           sploveFlagsById,
         },
@@ -1895,6 +2205,13 @@ export default function Discover() {
           count: discoverFiltered.length,
           ids: discoverFiltered.map((p) => p.id),
           names: discoverFiltered.map((p) => ({ id: p.id, first_name: p.first_name })),
+        });
+      }
+      discoverLogStageCount("after scoring", discoverFiltered.length);
+      if (import.meta.env.DEV) {
+        console.info("[Discover diagnostics] candidate_counts", {
+          stage: "after_filtering",
+          count: discoverFiltered.length,
         });
       }
 
@@ -1987,6 +2304,7 @@ export default function Discover() {
       const slice = safe.slice(0, DISCOVER_DISPLAY_LIMIT);
       resultCount = slice.length;
       console.log("[Discover feed] final profiles count:", resultCount);
+      discoverLogStageCount("final rendered count", resultCount);
       if (import.meta.env.DEV) {
         console.info("[Discover diagnostics] summary_counts", {
           auth_user_id: currentUserId,
@@ -1995,6 +2313,28 @@ export default function Discover() {
           candidates_after_scoring_filters: discoverFiltered.length,
           final_ui_slice: slice.length,
         });
+        if (resultCount === 0) {
+          const stageName =
+            profilesFromRpc.length === 0
+              ? "raw candidates fetched"
+              : stage.length === 0
+                ? "after swipe exclusion"
+                : discoverFiltered.length === 0
+                  ? "after scoring"
+                  : "final rendered count";
+          const reason =
+            profilesFromRpc.length === 0
+              ? "no candidates returned by server feed / RLS"
+              : stage.length === 0
+                ? "all candidates excluded by client self/swipe/block/visibility filters"
+                : discoverFiltered.length === 0
+                  ? "all candidates excluded by scoring filters"
+                  : "no cards left after final ordering/slice";
+          console.info("[Discover diagnostics] empty_candidates", {
+            stage: stageName,
+            exclusion_reason: reason,
+          });
+        }
       }
       setProfiles(slice);
       setSwipeHistory([]);

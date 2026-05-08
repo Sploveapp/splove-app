@@ -1,5 +1,4 @@
 import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
-import { getSharedSportLabelsForMatch } from "../lib/sportMatchGroups";
 import { evaluateDiscoverV3, viewerOpenAdaptedResolved } from "../lib/discoverScoreV3";
 import { BETA_MODE } from "../constants/beta";
 
@@ -31,6 +30,7 @@ type DiscoverProfile = {
 type ViewerProfile = {
   id?: string | null;
   city?: string | null;
+  profile_completed?: boolean | null;
   gender?: string | null;
   looking_for?: string | null;
   intent?: string | null;
@@ -48,6 +48,8 @@ export type DiscoverScoringContext = {
   matchedIds: Set<string>;
   blockedIds?: Set<string>;
   mySportMatchKeys: Set<string>;
+  /** Optional direct viewer sport ids from `profile_sports.sport_id` hydration. */
+  viewerSportIds?: Array<string | number>;
   distanceById: Map<string, number | null>;
   /** SPLove+ visibility / meeting priority from `discover_candidate_splove_ranking_flags` RPC */
   sploveFlagsById?: Map<string, { boost: boolean; priority_meet: boolean }>;
@@ -93,8 +95,42 @@ function isSameCity(a: string | null | undefined, b: string | null | undefined):
 function canonicalGender(raw: string | null | undefined): string | null {
   const t = normalizeRelationshipComparableToken(normalizeToken(raw));
   if (!t) return null;
-  if (["femme", "femmes", "female", "woman", "women"].includes(t)) return "female";
-  if (["homme", "hommes", "male", "man", "men"].includes(t)) return "male";
+  if (
+    [
+      "femme",
+      "femmes",
+      "female",
+      "woman",
+      "women",
+      "feminin",
+      "feminine",
+      "femelle",
+      "femme cis",
+      "female cis",
+      "cis female",
+      "cis woman",
+    ].includes(t)
+  ) {
+    return "female";
+  }
+  if (
+    [
+      "homme",
+      "hommes",
+      "male",
+      "man",
+      "men",
+      "masculin",
+      "masculine",
+      "male",
+      "homme cis",
+      "male cis",
+      "cis male",
+      "cis man",
+    ].includes(t)
+  ) {
+    return "male";
+  }
   if (["femme trans", "trans_female", "trans woman", "trans women", "trans_women"].includes(t))
     return "trans_female";
   if (["homme trans", "trans_male", "trans man", "trans men", "trans_men"].includes(t))
@@ -117,8 +153,41 @@ function parseLookingFor(raw: string | null | undefined): Set<string> {
       out.add("all");
       return out;
     }
-    if (["femme", "femmes", "women", "female"].includes(t)) out.add("female");
-    else if (["homme", "hommes", "men", "male"].includes(t)) out.add("male");
+    if (
+      [
+        "femme",
+        "femmes",
+        "women",
+        "female",
+        "woman",
+        "feminin",
+        "feminine",
+        "femelle",
+        "femme cis",
+        "female cis",
+        "cis female",
+        "cis woman",
+      ].includes(t)
+    ) {
+      out.add("female");
+    } else if (
+      [
+        "homme",
+        "hommes",
+        "men",
+        "male",
+        "man",
+        "masculin",
+        "masculine",
+        "male",
+        "homme cis",
+        "male cis",
+        "cis male",
+        "cis man",
+      ].includes(t)
+    ) {
+      out.add("male");
+    }
     else if (["femmes trans", "femme trans", "trans_women", "trans women"].includes(t))
       out.add("trans_female");
     else if (["hommes trans", "homme trans", "trans_men", "trans men"].includes(t))
@@ -127,6 +196,82 @@ function parseLookingFor(raw: string | null | undefined): Set<string> {
       out.add("non_binary");
   }
   return out;
+}
+
+
+function extractNormalizedSportIdsFromValue(raw: unknown): Set<string> {
+  const out = new Set<string>();
+  if (!raw) return out;
+  const add = (v: unknown) => {
+    if (v == null) return;
+    if (typeof v === "number" && Number.isFinite(v)) {
+      out.add(String(v));
+      return;
+    }
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (!t) return;
+      out.add(t);
+    }
+  };
+  if (Array.isArray(raw)) {
+    for (const x of raw) add(x);
+    return out;
+  }
+  add(raw);
+  return out;
+}
+
+function extractViewerSportIds(ctx: DiscoverScoringContext): Set<string> {
+  const out = new Set<string>();
+  const maybeViewerSportIds = (ctx as { viewerSportIds?: unknown }).viewerSportIds;
+  for (const id of extractNormalizedSportIdsFromValue(maybeViewerSportIds)) out.add(id);
+  for (const key of ctx.mySportMatchKeys) {
+    const t = String(key ?? "").trim();
+    const m = t.match(/^id:(.+)$/i);
+    if (m?.[1]) out.add(m[1].trim());
+  }
+  return out;
+}
+
+function extractCandidateSportIds(candidate: DiscoverProfile): Set<string> {
+  const out = new Set<string>();
+  const list = (candidate as { profile_sports?: unknown }).profile_sports;
+  if (!Array.isArray(list)) return out;
+  for (const row of list as Array<Record<string, unknown> | null>) {
+    if (!row || typeof row !== "object") continue;
+    for (const id of extractNormalizedSportIdsFromValue(row.sport_id)) out.add(id);
+    const sports = row.sports;
+    if (Array.isArray(sports)) {
+      for (const sportObj of sports as Array<Record<string, unknown> | null>) {
+        if (!sportObj || typeof sportObj !== "object") continue;
+        for (const id of extractNormalizedSportIdsFromValue(sportObj.id)) out.add(id);
+      }
+    } else if (sports && typeof sports === "object") {
+      for (const id of extractNormalizedSportIdsFromValue((sports as Record<string, unknown>).id)) out.add(id);
+    }
+  }
+  return out;
+}
+
+function intersectSportIds(a: Set<string>, b: Set<string>): string[] {
+  if (a.size === 0 || b.size === 0) return [];
+  const small = a.size <= b.size ? a : b;
+  const big = small === a ? b : a;
+  const out: string[] = [];
+  for (const id of small) {
+    if (big.has(id)) out.push(id);
+  }
+  return out;
+}
+
+function normalizeIntentForDiag(raw: string | null | undefined): string {
+  const t = normalizeToken(raw);
+  if (!t) return "";
+  if (["amoureux", "serious", "love", "dating"].some((x) => t.includes(x))) return "dating";
+  if (["amical", "friends", "friendly", "sport_social"].some((x) => t.includes(x))) return "sport_social";
+  if (["both", "open", "les deux", "lesdeux"].some((x) => t.includes(x.replace(/\s+/g, "")))) return "both";
+  return t;
 }
 
 function lookingForAcceptsGender(lookingFor: Set<string>, gender: string | null): boolean {
@@ -178,6 +323,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     ctx.viewer.open_to_adapted_activities ?? null,
     ctx.viewer.pref_open_to_adapted_activity ?? null,
   );
+  const viewerSportIds = extractViewerSportIds(ctx);
 
   const kept: DiscoverScoredCandidate<T>[] = [];
 
@@ -186,6 +332,11 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       candidate_count: candidates.length,
       viewer_id: ctx.viewerId,
       viewer_sport_match_key_count: ctx.mySportMatchKeys.size,
+      viewer_sport_ids: [...viewerSportIds],
+      viewer_gender_normalized: viewerGender,
+      viewer_looking_for_normalized: [...viewerLookingFor],
+      viewer_intent_normalized: normalizeIntentForDiag(ctx.viewer.intent ?? null),
+      viewer_sport_ids_missing: viewerSportIds.size === 0,
     });
   }
 
@@ -193,6 +344,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const excludedReasons: string[] = [];
     const diagExtra: Record<string, unknown> = {};
     if (!candidate?.id || candidate.id === ctx.viewerId) excludedReasons.push("self");
+    if (ctx.viewer.profile_completed !== true) excludedReasons.push("viewer incomplete");
     if (candidate.profile_completed !== true) excludedReasons.push("incomplete");
     if (isBanned(candidate)) {
       excludedReasons.push("missing required field");
@@ -207,13 +359,9 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       if (d.photo_status != null) diagExtra.photo_status = d.photo_status;
     }
 
-    const sharedSports = getSharedSportLabelsForMatch(
-      ctx.mySportMatchKeys,
-      candidate as {
-        profile_sports?: { sports?: { slug?: string | null; label?: string | null } | null }[] | null;
-      },
-    );
-    const sharedCount = sharedSports.length;
+    const candidateSportIds = extractCandidateSportIds(candidate);
+    const commonSportIds = intersectSportIds(viewerSportIds, candidateSportIds);
+    const sharedCount = commonSportIds.length;
     if (sharedCount < 1) excludedReasons.push("no common sport");
 
     const candidateGender = canonicalGender(candidate.gender);
@@ -223,11 +371,54 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     if (!meToThem) excludedReasons.push("looking_for mismatch");
     if (!themToMe) excludedReasons.push("gender mismatch");
 
+    const mismatchReasons: string[] = [];
+    if (!meToThem) mismatchReasons.push("viewer_looking_for_does_not_accept_candidate_gender");
+    if (!themToMe) mismatchReasons.push("candidate_looking_for_does_not_accept_viewer_gender");
+
+    diagExtra.viewer_sport_ids = [...viewerSportIds];
+    diagExtra.candidate_sport_ids = [...candidateSportIds];
+    diagExtra.shared_sport_ids = commonSportIds;
+    diagExtra.viewer_gender_raw = ctx.viewer.gender ?? null;
+    diagExtra.viewer_looking_for_raw = ctx.viewer.looking_for ?? null;
+    diagExtra.viewer_intent_raw = ctx.viewer.intent ?? null;
+    diagExtra.candidate_gender_raw = candidate.gender ?? null;
+    diagExtra.candidate_looking_for_raw = candidate.looking_for ?? null;
+    diagExtra.candidate_intent_raw = candidate.intent ?? null;
+    diagExtra.viewer_gender_normalized = viewerGender;
+    diagExtra.candidate_gender_normalized = candidateGender;
+    diagExtra.viewer_looking_for_normalized = [...viewerLookingFor];
+    diagExtra.candidate_looking_for_normalized = [...candidateLookingFor];
+    diagExtra.viewer_intent_normalized = normalizeIntentForDiag(ctx.viewer.intent ?? null);
+    diagExtra.candidate_intent_normalized = normalizeIntentForDiag(candidate.intent ?? null);
+    diagExtra.match_check_me_to_them = meToThem;
+    diagExtra.match_check_them_to_me = themToMe;
+    diagExtra.exact_mismatch_reason = mismatchReasons;
+
     const distanceKm = ctx.distanceById.get(candidate.id) ?? null;
     const viewerRadius =
       typeof ctx.viewer.discovery_radius_km === "number" && Number.isFinite(ctx.viewer.discovery_radius_km)
         ? ctx.viewer.discovery_radius_km
         : null;
+    const sameCity = isSameCity(ctx.viewer.city, candidate.city);
+    const hasGpsDistance = distanceKm != null && Number.isFinite(distanceKm);
+    const insideRadius = hasGpsDistance && viewerRadius != null && viewerRadius > 0 ? distanceKm <= viewerRadius : false;
+    // Beta fallback: do not exclude solely because GPS is missing.
+    // If other hard constraints pass (shared sport + compatibility + safety checks), candidate may pass without distance.
+    const gpsMissingSharedSportFallback = !sameCity && !hasGpsDistance;
+    const locationAccepted = sameCity || insideRadius || gpsMissingSharedSportFallback;
+    const distanceSource: "gps" | "missing_gps_shared_sport_fallback" = hasGpsDistance
+      ? "gps"
+      : "missing_gps_shared_sport_fallback";
+    if (!locationAccepted) {
+      excludedReasons.push("outside discovery radius");
+    }
+
+    diagExtra.viewer_city = ctx.viewer.city ?? null;
+    diagExtra.candidate_city = candidate.city ?? null;
+    diagExtra.same_city = sameCity;
+    diagExtra.distance_km = distanceKm;
+    diagExtra.distance_source = distanceSource;
+    diagExtra.discovery_radius_km = viewerRadius;
 
     if (excludedReasons.length > 0) {
       if (import.meta.env.DEV) {
@@ -236,6 +427,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
           first_name: candidate.first_name ?? null,
           id: candidate.id ?? null,
           exclusion_reason: excludedReasons,
+          distance_km: distanceKm,
           ...diagExtra,
           ...(hl ? { diag_highlight_name: true } : {}),
         };
@@ -243,6 +435,42 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
         else console.info("[Discover diagnostics] scoring excluded", row);
       }
       continue;
+    }
+
+    if (import.meta.env.DEV) {
+      const hl = isDiscoverDiagHighlightName(candidate.first_name);
+      const n = String(candidate.first_name ?? "").trim().toLowerCase();
+      const isTarget = /\b(linda|jacob)\b/i.test(n);
+      if (hl || isTarget) {
+        console.info("[Discover diagnostics] compatibility accepted", {
+          first_name: candidate.first_name ?? null,
+          id: candidate.id ?? null,
+          exclusion_reason: [],
+          viewer_city: ctx.viewer.city ?? null,
+          candidate_city: candidate.city ?? null,
+          same_city: sameCity,
+          distance_km: distanceKm,
+          discovery_radius_km: viewerRadius,
+          viewer_sport_ids: [...viewerSportIds],
+          candidate_sport_ids: [...candidateSportIds],
+          shared_sport_ids: commonSportIds,
+          viewer_gender_raw: ctx.viewer.gender ?? null,
+          viewer_looking_for_raw: ctx.viewer.looking_for ?? null,
+          viewer_intent_raw: ctx.viewer.intent ?? null,
+          candidate_gender_raw: candidate.gender ?? null,
+          candidate_looking_for_raw: candidate.looking_for ?? null,
+          candidate_intent_raw: candidate.intent ?? null,
+          viewer_gender_normalized: viewerGender,
+          candidate_gender_normalized: candidateGender,
+          viewer_looking_for_normalized: [...viewerLookingFor],
+          candidate_looking_for_normalized: [...candidateLookingFor],
+          viewer_intent_normalized: normalizeIntentForDiag(ctx.viewer.intent ?? null),
+          candidate_intent_normalized: normalizeIntentForDiag(candidate.intent ?? null),
+          match_check_me_to_them: meToThem,
+          match_check_them_to_me: themToMe,
+          exact_mismatch_reason: mismatchReasons,
+        });
+      }
     }
 
     const flags = ctx.sploveFlagsById?.get(candidate.id);
@@ -267,7 +495,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       priorityMeetActive: priorityActive,
     });
 
-    if (v3.outside_radius && !BETA_MODE) {
+    if (v3.outside_radius && !sameCity) {
       if (import.meta.env.DEV) {
         const hl = isDiscoverDiagHighlightName(candidate.first_name);
         const row = {
@@ -275,8 +503,14 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
           id: candidate.id ?? null,
           exclusion_reason: ["distance/GPS"],
           outside_radius: true,
-          distanceKm,
-          viewer_discovery_radius_km: viewerRadius,
+          viewer_city: ctx.viewer.city ?? null,
+          candidate_city: candidate.city ?? null,
+          same_city: sameCity,
+          distance_km: distanceKm,
+          discovery_radius_km: viewerRadius,
+          viewer_sport_ids: [...viewerSportIds],
+          candidate_sport_ids: [...candidateSportIds],
+          shared_sport_ids: commonSportIds,
           ...(hl ? { diag_highlight_name: true } : {}),
         };
         if (hl) console.info("[Discover diagnostics] scoring excluded (Bruno/Sofiane)", row);
@@ -308,15 +542,14 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
 
     const cityFallbackBoost = distanceKm == null && isSameCity(ctx.viewer.city, candidate.city) ? 12 : 0;
     const betaSharedSportsBoost = BETA_MODE ? sharedCount * 8 : 0;
-    const betaOutsideRadiusPenalty = BETA_MODE && v3.outside_radius ? -18 : 0;
-    const totalScore =
-      (v3?.total ?? 0) + cityFallbackBoost + betaSharedSportsBoost + betaOutsideRadiusPenalty;
+    const totalScore = (v3?.total ?? 0) + cityFallbackBoost + betaSharedSportsBoost;
     const reasons: string[] = [`V3 ${Math.round(totalScore)} · ${sharedCount} sport(s) en commun`];
     if (distanceKm != null && Number.isFinite(distanceKm))
       reasons.push(`distance ${Math.round(distanceKm)} km`);
     if (cityFallbackBoost > 0) reasons.push("même ville (fallback beta)");
+    if (gpsMissingSharedSportFallback) reasons.push("gps_missing_allowed_by_shared_sport_beta");
     if (betaSharedSportsBoost > 0) reasons.push(`beta +${betaSharedSportsBoost} sports communs`);
-    if (betaOutsideRadiusPenalty < 0) reasons.push("hors rayon (garde beta)");
+    // outside-radius candidates are now always excluded above
     if (boostActive) reasons.push("Boost actif");
     if (priorityActive) reasons.push("Priorité rencontre");
 
@@ -325,7 +558,8 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
         id: candidate.id,
         first_name: candidate.first_name,
         sharedCount,
-        distanceKm,
+        distance_km: distanceKm,
+        shared_sport_ids: commonSportIds,
         practice_score,
         discoverScore: totalScore,
       });

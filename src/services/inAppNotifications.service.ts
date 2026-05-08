@@ -11,12 +11,20 @@ export type InAppNotificationRow = {
   created_at: string;
 };
 
+function isMissingRpcOrTableError(error: { code?: string | number; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const c = String(error.code ?? "");
+  const m = (error.message ?? "").toLowerCase();
+  if (c === "42883" || c === "42P01" || c === "PGRST202" || c === "404") return true;
+  return m.includes("does not exist") || m.includes("could not find the function") || m.includes("not found");
+}
+
 /** Traite les jobs dus pour l’utilisateur courant ; retourne le nombre de notifications non lues. */
 export async function pulseInAppNotifications(): Promise<number> {
   const { data, error } = await supabase.rpc("pulse_my_in_app_notifications");
   if (error) {
-    const low = (error.message ?? "").toLowerCase();
-    if (error.code === "42883" || low.includes("does not exist")) {
+    if (isMissingRpcOrTableError(error)) {
+      console.warn("[inAppNotifications] pulse skipped (missing RPC)", error.message ?? error);
       return 0;
     }
     console.warn("[inAppNotifications] pulse", error.message);

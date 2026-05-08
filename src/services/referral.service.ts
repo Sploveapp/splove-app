@@ -118,28 +118,44 @@ export type GrowthProfileRow = {
 };
 
 export async function fetchGrowthProfileFields(userId: string): Promise<GrowthProfileRow | null> {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select(
-      "referral_code, referred_by_user_id, rewind_credits, referral_plus_until, boost_credits, beta_splove_plus_unlocked",
-    )
-    .eq("id", userId)
-    .maybeSingle();
-  if (error) {
+  const baseCols = ["referral_code", "referred_by_user_id", "rewind_credits", "referral_plus_until"];
+  const optionalCols = ["boost_credits", "beta_splove_plus_unlocked"];
+  let cols = [...baseCols, ...optionalCols];
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select(cols.join(", "))
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (!error) return data as unknown as GrowthProfileRow;
+
     const low = (error.message ?? "").toLowerCase();
-    if (error.code === "42703" || low.includes("does not exist")) {
-      const fallback = await supabase
+    const missing =
+      error.code === "42703" || low.includes("does not exist") || low.includes("could not find");
+    if (!missing) {
+      console.warn("[referral] fetchGrowthProfileFields", error.message);
+      return null;
+    }
+
+    const m = (error.message ?? "").match(/column\s+["']?([a-zA-Z0-9_]+)["']?/i);
+    const missingCol = m?.[1] ?? null;
+    if (!missingCol || !cols.includes(missingCol)) {
+      const safe = await supabase
         .from("profiles")
-        .select("referral_code, referred_by_user_id, rewind_credits, referral_plus_until")
+        .select(baseCols.join(", "))
         .eq("id", userId)
         .maybeSingle();
-      if (fallback.error) return null;
-      return fallback.data as GrowthProfileRow;
+      if (safe.error) return null;
+      return safe.data as unknown as GrowthProfileRow;
     }
-    console.warn("[referral] fetchGrowthProfileFields", error.message);
-    return null;
+
+    cols = cols.filter((c) => c !== missingCol);
+    if (cols.length === 0) return null;
   }
-  return data as GrowthProfileRow;
+
+  return null;
 }
 
 /** Lien d’inscription avec parrain (HashRouter : path en hash). */

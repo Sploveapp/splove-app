@@ -20,6 +20,14 @@
 import { supabase } from "./supabase";
 import { fetchGrowthProfileFields } from "../services/referral.service";
 
+function isMissingDbObjectError(error: { code?: string | number; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const c = String(error.code ?? "");
+  const m = (error.message ?? "").toLowerCase();
+  if (c === "42P01" || c === "PGRST205" || c === "404") return true;
+  return m.includes("does not exist") || m.includes("could not find");
+}
+
 function hashDigitsFromUserId(userId: string, salt: number): string {
   let h = salt >>> 0;
   for (let i = 0; i < userId.length; i++) {
@@ -119,10 +127,11 @@ export async function trackReferralEvent(
       payload: payload ?? {},
     });
     if (error) {
-      const low = (error.message ?? "").toLowerCase();
-      if (error.code !== "42P01" && !low.includes("does not exist")) {
-        console.warn("[referral] referral_events insert", error.message);
+      if (isMissingDbObjectError(error)) {
+        console.warn("[referral] referral_events skipped (missing table)", error.message ?? error);
+        return;
       }
+      console.warn("[referral] referral_events insert", error.message);
     }
   } catch (e) {
     console.warn("[referral] trackReferralEvent", e);

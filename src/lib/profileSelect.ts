@@ -5,7 +5,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const PROFILE_COLUMNS_CORE =
-  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, is_photo_verified, photo_status, needs_adapted_activities, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, photo1_status, photo2_status, photo_moderation_overall, is_under_review, moderation_strikes_count";
+  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, is_photo_verified, photo_status, needs_adapted_activities, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_time, sport_intensity, meet_vibe, sport_motivation, sport_phrase, photo1_status, photo2_status, photo_moderation_overall, is_under_review, moderation_strikes_count";
 
 export const PROFILE_SELECT_CORE = PROFILE_COLUMNS_CORE;
 
@@ -15,10 +15,10 @@ const PROFILE_WITH_LOCATION = `${PROFILE_COLUMNS_CORE}, location_source`;
 
 /** Sans empreinte modération (058 etc.) + `location_source` (057). */
 const PROFILE_SELECT_NO_PHOTO_MOD =
-  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, is_photo_verified, photo_status, needs_adapted_activities, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, location_source";
+  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, is_photo_verified, photo_status, needs_adapted_activities, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_time, sport_intensity, meet_vibe, sport_motivation, sport_phrase, location_source";
 
 const PROFILE_SELECT_MID_LIFE =
-  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, planning_style, sport_phrase, onboarding_sports_count, onboarding_sports_with_level_count";
+  "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, sport_phrase, onboarding_sports_count, onboarding_sports_with_level_count";
 
 const PROFILE_SELECT_CORE_IDENTITY_GEO =
   "id, first_name, birth_date, gender, looking_for, intent, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity";
@@ -63,23 +63,23 @@ export const PROFILE_LOAD_TIERS_FOR_AUTH: string[] = [
 ];
 
 const ONBOARDING_HYDRATE_FULL =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, onboarding_variant, sport_motivation, sport_phrase, needs_adapted_activities, open_to_adapted_activities, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, onboarding_variant, sport_motivation, sport_phrase, needs_adapted_activities, open_to_adapted_activities, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 /** Même jeu de colonnes qu’avant `094_profiles_open_to_adapted_activities` (colonnes absentes en prod). */
 const ONBOARDING_HYDRATE_PRE_ADAPTED_OPENNESS =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, onboarding_variant, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, onboarding_variant, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_NO_PRACTICE_PREFS =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, sport_motivation, sport_phrase, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_NO_LOC_SOURCE =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, meet_vibe, planning_style, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, meet_vibe, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_NO_MEET_VIBE =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, planning_style, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_COMPACT =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, planning_style, sport_phrase, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, sport_phrase, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_BASE =
   "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
