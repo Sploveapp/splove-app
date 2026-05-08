@@ -33,22 +33,14 @@ export function intentLabelShort(intent: unknown): string | null {
 }
 
 /**
- * Raisons Discover affichables sur carte — évite le doublon distance si déjà en ligne dédiée.
+ * Raisons Discover (V3, beta, GPS fallback, etc.) — conservées sur le profil pour scoring / logs,
+ * mais jamais rendues sur les cartes Discover : sports, zone et texte profil sont déjà couverts ailleurs.
  */
 export function filterDiscoverReasonsForDisplay(
-  reasons: string[],
-  locLine1: string | null,
+  _reasons: string[],
+  _locLine1: string | null,
 ): string[] {
-  const locHasKm = locLine1 != null && locLine1.toLowerCase().includes("km");
-  const out: string[] = [];
-  for (const r of reasons) {
-    const t = r.trim();
-    if (!t) continue;
-    if (locHasKm && t.toLowerCase().includes("km")) continue;
-    out.push(t);
-    if (out.length >= 3) break;
-  }
-  return out;
+  return [];
 }
 
 /** Indication de zone floue — jamais de distance km exacte sans géoloc serveur. */
