@@ -23,73 +23,9 @@ import { IconSignOut } from "../components/ui/Icon";
 
 const SPORT_PHRASE_MAX_LEN = 120;
 
-const MEETUP_HOUR_MS = 60 * 60 * 1000;
-const MEETUP_DURATION_H = 24;
 const SPORT_PHRASE_SAVED_FLAG = "__phrase_saved__";
 
-const MEETUP_GREEN = "#22C55D";
-const MEETUP_CARD_BG = "#121215";
-const MEETUP_CARD_BORDER_ACTIVE = "rgba(34, 197, 94, 0.42)";
-
 const ACCESSIBILITY_SAVE_SUCCESS = "Preferences enregistrees.";
-
-type MeetupModeSession = { endAt: number; startTime: number; durationH: number };
-
-function meetupStorageKeys(userId: string) {
-  return {
-    mode: `splove_${userId}_active_meetup_mode`,
-    start: `splove_${userId}_active_meetup_start_time`,
-    duration: `splove_${userId}_active_meetup_duration`,
-  } as const;
-}
-
-function clearMeetupModeStorage(userId: string) {
-  const k = meetupStorageKeys(userId);
-  try {
-    localStorage.removeItem(k.mode);
-    localStorage.removeItem(k.start);
-    localStorage.removeItem(k.duration);
-  } catch {
-    // ignore
-  }
-}
-
-function readMeetupModeSession(userId: string, clearIfExpired: boolean): MeetupModeSession | null {
-  const k = meetupStorageKeys(userId);
-  let mode: string | null;
-  let startS: string | null;
-  let durationS: string | null;
-  try {
-    mode = localStorage.getItem(k.mode);
-    startS = localStorage.getItem(k.start);
-    durationS = localStorage.getItem(k.duration);
-  } catch {
-    return null;
-  }
-  if (mode !== "true" || !startS || !durationS) return null;
-  const start = parseInt(startS, 10);
-  const durationH = parseInt(durationS, 10);
-  if (!Number.isFinite(start) || !Number.isFinite(durationH) || durationH <= 0) {
-    if (clearIfExpired) clearMeetupModeStorage(userId);
-    return null;
-  }
-  const endAt = start + durationH * MEETUP_HOUR_MS;
-  if (Date.now() >= endAt) {
-    if (clearIfExpired) clearMeetupModeStorage(userId);
-    return null;
-  }
-  return { endAt, startTime: start, durationH };
-}
-
-function isMissingOptionalSchemaError(error: { code?: string | number; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  const code = String(error.code ?? "");
-  const msg = (error.message ?? "").toLowerCase();
-  if (code === "42703" || code === "42883" || code === "42P01" || code === "PGRST202" || code === "404") {
-    return true;
-  }
-  return msg.includes("does not exist") || msg.includes("could not find");
-}
 
 const sectionHeadingButtonStyle: CSSProperties = {
   margin: "0 0 12px 0",
@@ -134,12 +70,8 @@ export default function Profile() {
   const [phraseDraft, setPhraseDraft] = useState("");
   const [phraseSaving, setPhraseSaving] = useState(false);
   const [phraseMessage, setPhraseMessage] = useState<string | null>(null);
-  const [meetupModeTick, setMeetupModeTick] = useState(0);
-  const [meetupModeError, setMeetupModeError] = useState<string | null>(null);
   const failedProfileImageSourcesRef = useRef<Set<string>>(new Set());
   const profileImageFailureCountRef = useRef(0);
-  const meetupSyncInFlightRef = useRef(false);
-  const meetupLastSyncKeyRef = useRef<string | null>(null);
 
   const syncAccessibilityFromProfile = useCallback(() => {
     if (!profile) return;
@@ -197,150 +129,13 @@ export default function Profile() {
     return () => window.clearTimeout(timer);
   }, [phraseMessage]);
 
-  useEffect(() => {
-    if (!user?.id) return;
-    const id = window.setInterval(() => setMeetupModeTick((n) => n + 1), 30_000);
-    return () => window.clearInterval(id);
-  }, [user?.id]);
+  // Disabled temporarily: active meeting mode caused profile reload loop
+  // (meetup mode tick interval + is_active_mode Supabase sync + refetch removed)
 
   useEffect(() => {
     if (!user?.id) return;
     void fetchGrowthProfileFields(user.id).then(setGrowth);
   }, [user?.id]);
-
-  useEffect(() => {
-    if (!user?.id || !profile) return;
-    const session = readMeetupModeSession(user.id, true);
-    const pr = profile as Record<string, unknown>;
-    const dbActive = pr.is_active_mode === true;
-    const shouldBeActive = session !== null;
-    if (dbActive === shouldBeActive) {
-      meetupLastSyncKeyRef.current = `${user.id}:${shouldBeActive}`;
-      return;
-    }
-    const syncKey = `${user.id}:${shouldBeActive}`;
-    if (meetupSyncInFlightRef.current || meetupLastSyncKeyRef.current === syncKey) return;
-
-    meetupSyncInFlightRef.current = true;
-    meetupLastSyncKeyRef.current = syncKey;
-    void (async () => {
-      try {
-        const { error, data } = await supabase
-          .from("profiles")
-          .update({ is_active_mode: shouldBeActive })
-          .eq("id", user.id);
-        console.log("[Profile active mode debug] supabase update result", {
-          userId: user.id,
-          fromEffect: true,
-          shouldBeActive,
-          error,
-          data,
-        });
-        if (error) {
-          if (isMissingOptionalSchemaError(error)) {
-            console.warn("[Profile active mode debug] optional schema missing, skipping sync", {
-              userId: user.id,
-              shouldBeActive,
-              error,
-            });
-            return;
-          }
-          meetupLastSyncKeyRef.current = null;
-          return;
-        }
-        console.log("[Profile active mode debug] refetch triggered", {
-          userId: user.id,
-          fromEffect: true,
-        });
-        void refetchProfile();
-      } finally {
-        meetupSyncInFlightRef.current = false;
-      }
-    })();
-  }, [user?.id, profile, meetupModeTick, refetchProfile]);
-
-  async function handleMeetupModeCardClick() {
-    if (!user?.id) return;
-    setMeetupModeError(null);
-    const session = readMeetupModeSession(user.id, true);
-    const prevActive = session !== null;
-    const nextActive = !prevActive;
-    console.log("[Profile active mode debug] toggle clicked", {
-      userId: user.id,
-      previousActiveState: prevActive,
-      nextActiveState: nextActive,
-    });
-    if (session) {
-      clearMeetupModeStorage(user.id);
-      setMeetupModeTick((n) => n + 1);
-      const { error, data } = await supabase
-        .from("profiles")
-        .update({ is_active_mode: false })
-        .eq("id", user.id);
-      console.log("[Profile active mode debug] supabase update result", {
-        userId: user.id,
-        previousActiveState: prevActive,
-        nextActiveState: nextActive,
-        error,
-        data,
-      });
-      if (error) {
-        if (isMissingOptionalSchemaError(error)) {
-          console.warn("[Profile active mode debug] optional schema missing, skipping toggle update", {
-            userId: user.id,
-            previousActiveState: prevActive,
-            nextActiveState: nextActive,
-            error,
-          });
-          return;
-        }
-        setMeetupModeError(error.message || t("action_impossible"));
-        return;
-      }
-      console.log("[Profile active mode debug] refetch triggered", { userId: user.id, fromEffect: false });
-      await refetchProfile();
-      return;
-    }
-    const k = meetupStorageKeys(user.id);
-    const now = Date.now();
-    try {
-      localStorage.setItem(k.mode, "true");
-      localStorage.setItem(k.start, now.toString());
-      localStorage.setItem(k.duration, String(MEETUP_DURATION_H));
-    } catch {
-      setMeetupModeError(t("action_impossible"));
-      return;
-    }
-    setMeetupModeTick((n) => n + 1);
-    const { error, data } = await supabase
-      .from("profiles")
-      .update({ is_active_mode: true })
-      .eq("id", user.id);
-    console.log("[Profile active mode debug] supabase update result", {
-      userId: user.id,
-      previousActiveState: prevActive,
-      nextActiveState: nextActive,
-      error,
-      data,
-    });
-    if (error) {
-      if (isMissingOptionalSchemaError(error)) {
-        console.warn("[Profile active mode debug] optional schema missing, skipping toggle update", {
-          userId: user.id,
-          previousActiveState: prevActive,
-          nextActiveState: nextActive,
-          error,
-        });
-        return;
-      }
-      clearMeetupModeStorage(user.id);
-      setMeetupModeTick((n) => n + 1);
-      setMeetupModeError(error.message || t("action_impossible"));
-      return;
-    }
-    console.log("[Profile active mode debug] refetch triggered", { userId: user.id, fromEffect: false });
-    await refetchProfile();
-  }
 
   async function handleLogout() {
     await signOut();
@@ -356,6 +151,9 @@ export default function Profile() {
     setPhraseSaving(true);
     setPhraseMessage(null);
     try {
+      console.log("[PROFILE_QUERY_SAFE]", {
+        sport_phrase: phraseText.length > 0 ? phraseText.slice(0, SPORT_PHRASE_MAX_LEN) : null,
+      });
       const { error } = await supabase
         .from("profiles")
         .update({
@@ -391,7 +189,6 @@ export default function Profile() {
         latitude: lat,
         longitude: lng,
         discovery_radius_km: radiusFinal,
-        location_source: "manual",
       });
       if (error) {
         setLocMessage(error.message || t("action_impossible"));
@@ -425,7 +222,6 @@ export default function Profile() {
         latitude: c.lat,
         longitude: c.lng,
         discovery_radius_km: radiusFinal,
-        location_source: "device",
       });
       if (error) {
         setLocMessage(error.message || t("action_impossible"));
@@ -447,6 +243,7 @@ export default function Profile() {
     setAccessibilityMessage(null);
     setAccessibilitySaving(true);
     try {
+      console.log("[PROFILE_QUERY_SAFE]", { needs_adapted_activities: needsAdaptedActivities });
       const { error } = await supabase
         .from("profiles")
         .update({
@@ -463,11 +260,6 @@ export default function Profile() {
       setAccessibilitySaving(false);
     }
   }
-
-  const meetupSession = user?.id ? readMeetupModeSession(user.id, true) : null;
-  const meetupModeOn = meetupSession !== null;
-  const meetupRemainingMs = meetupSession ? Math.max(0, meetupSession.endAt - Date.now()) : 0;
-  const meetupHoursLeft = Math.floor(meetupRemainingMs / MEETUP_HOUR_MS);
 
   return (
     <div
@@ -1085,137 +877,7 @@ export default function Profile() {
             </button>
           </div>
 
-          <div
-            style={{
-              background: APP_CARD,
-              borderRadius: "20px",
-              padding: "20px 24px 22px",
-              boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
-              marginBottom: "20px",
-            }}
-          >
-            <h2
-              style={{
-                margin: "0 0 8px 0",
-                fontSize: "16px",
-                fontWeight: 600,
-                color: APP_TEXT,
-              }}
-            >
-              {t("profile_active_mode_title")}
-            </h2>
-            <p
-              style={{
-                margin: "0 0 16px 0",
-                fontSize: "13px",
-                fontWeight: 500,
-                color: APP_TEXT_MUTED,
-                lineHeight: 1.45,
-              }}
-            >
-              {t("profile_active_mode_description")}
-            </p>
-            <button
-              type="button"
-              onClick={() => void handleMeetupModeCardClick()}
-              aria-pressed={meetupModeOn}
-              style={{
-                width: "100%",
-                margin: 0,
-                padding: "16px 16px 14px",
-                borderRadius: "16px",
-                border: `1px solid ${meetupModeOn ? MEETUP_CARD_BORDER_ACTIVE : APP_BORDER}`,
-                background: MEETUP_CARD_BG,
-                boxShadow: meetupModeOn
-                  ? "0 0 0 1px rgba(34, 197, 94, 0.12), 0 10px 40px rgba(34, 197, 94, 0.14)"
-                  : "0 1px 0 rgba(0,0,0,0.2)",
-                cursor: "pointer",
-                textAlign: "left",
-                position: "relative",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "12px",
-                }}
-              >
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <p
-                    style={{
-                      margin: "0 0 4px 0",
-                      fontSize: "16px",
-                      fontWeight: 600,
-                      color: meetupModeOn ? MEETUP_GREEN : APP_TEXT,
-                      letterSpacing: "0.01em",
-                    }}
-                  >
-                    {meetupModeOn ? t("profile_active_mode_cta_on") : t("profile_active_mode_cta_off")}
-                  </p>
-                </div>
-                <div
-                  aria-hidden
-                  style={{
-                    width: 52,
-                    height: 30,
-                    borderRadius: 999,
-                    background: meetupModeOn ? "rgba(34, 197, 94, 0.28)" : "rgba(255,255,255,0.1)",
-                    border: `1px solid ${meetupModeOn ? "rgba(34, 197, 94, 0.55)" : APP_BORDER}`,
-                    position: "relative",
-                    flexShrink: 0,
-                    transition: "background 0.2s ease, border-color 0.2s ease",
-                  }}
-                >
-                  <div
-                    style={{
-                      position: "absolute",
-                      top: 3,
-                      left: meetupModeOn ? 24 : 3,
-                      width: 24,
-                      height: 24,
-                      borderRadius: 999,
-                      background: meetupModeOn ? MEETUP_GREEN : "rgba(255,255,255,0.65)",
-                      boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
-                      transition: "left 0.18s ease",
-                    }}
-                  />
-                </div>
-              </div>
-              {meetupModeOn ? (
-                <>
-                  <p
-                    style={{
-                      margin: "12px 0 0 0",
-                      fontSize: "13px",
-                      fontWeight: 500,
-                      color: APP_TEXT_MUTED,
-                      lineHeight: 1.45,
-                    }}
-                  >
-                    {t("profile_active_mode_on_hint")}
-                  </p>
-                  <p
-                    style={{
-                      margin: "8px 0 0 0",
-                      fontSize: "13px",
-                      fontWeight: 600,
-                      color: MEETUP_GREEN,
-                      letterSpacing: "0.02em",
-                    }}
-                  >
-                    {meetupHoursLeft >= 1
-                      ? t("profile_active_mode_countdown", { hours: meetupHoursLeft })
-                      : t("profile_active_mode_countdown_soon")}
-                  </p>
-                </>
-              ) : null}
-            </button>
-            {meetupModeError ? (
-              <p style={{ margin: "10px 0 0 0", fontSize: "13px", color: "rgb(251 191 36)" }}>{meetupModeError}</p>
-            ) : null}
-          </div>
+          {/* Disabled temporarily: active meeting mode caused profile reload loop — whole "Mode rencontre active" card (title, description, toggle, countdown, error). */}
 
           <div
             style={{

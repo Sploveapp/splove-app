@@ -172,11 +172,6 @@ export const OPTIONAL_PROFILE_FIELDS = [
   "sport_time",
   "open_to_adapted_activities",
   "pref_open_to_adapted_activity",
-  "sport_practice_type",
-  "referral_code",
-  "referred_by_user_id",
-  "rewind_credits",
-  "referral_plus_until",
   "boost_credits",
   "beta_splove_plus_unlocked",
 ] as const;

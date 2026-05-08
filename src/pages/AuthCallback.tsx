@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { SplashScreen } from "../components/SplashScreen";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
+import { replaceWithHashRoute } from "../lib/authRedirect";
 import { BRAND_BG } from "../constants/theme";
 
 const STEP_TIMEOUT_MS = 8000;
@@ -108,7 +108,6 @@ function DevDebugPanel({ debug }: { debug: CallbackDebug }) {
 }
 
 export default function AuthCallback() {
-  const navigate = useNavigate();
   const { syncAuthSession } = useAuth();
   const [error, setError] = useState<"noSession" | "profileStuck" | null>(null);
   const [technicalError, setTechnicalError] = useState<string | null>(null);
@@ -248,7 +247,7 @@ export default function AuthCallback() {
         if (!doneRef.current) {
           doneRef.current = true;
           console.log("[AuthCallback] redirect target", "/onboarding");
-          navigate("/onboarding", { replace: true });
+          replaceWithHashRoute("/onboarding");
         }
         return;
       }
@@ -271,7 +270,7 @@ export default function AuthCallback() {
         if (!doneRef.current) {
           doneRef.current = true;
           console.log("[AuthCallback] redirect target", "/onboarding");
-          navigate("/onboarding", { replace: true });
+          replaceWithHashRoute("/onboarding");
         }
         return;
       }
@@ -292,14 +291,14 @@ export default function AuthCallback() {
         if (!doneRef.current) {
           doneRef.current = true;
           console.log("[AuthCallback] redirect target", "/onboarding");
-          navigate("/onboarding", { replace: true });
+          replaceWithHashRoute("/onboarding");
         }
         return;
       }
 
       const profile = profileRow;
       const done = profile?.profile_completed === true;
-      const target = done ? "/discover" : "/onboarding";
+      const target = done ? "/profile" : "/onboarding";
       console.log("[ONBOARDING_GUARD] oauth-callback profile status", {
         profile_completed: done,
         target,
@@ -311,7 +310,7 @@ export default function AuthCallback() {
       window.clearTimeout(capTimer);
       if (!doneRef.current) {
         doneRef.current = true;
-        navigate(target, { replace: true });
+        replaceWithHashRoute(target);
       }
     };
 
@@ -331,7 +330,7 @@ export default function AuthCallback() {
       cancelRef.current = true;
       window.clearTimeout(capTimer);
     };
-  }, [navigate, syncAuthSession]);
+  }, [syncAuthSession]);
 
   if (error === "noSession") {
     return (
@@ -450,7 +449,7 @@ export default function AuthCallback() {
             type="button"
             onClick={() => {
               void syncAuthSession();
-              navigate("/onboarding", { replace: true });
+              replaceWithHashRoute("/onboarding");
             }}
             style={{
               border: "none",

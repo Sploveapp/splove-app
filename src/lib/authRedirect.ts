@@ -26,3 +26,12 @@ export function isAuthCallbackPath(): boolean {
   }
   return /^#\/auth\/callback([/?]|$)/.test(window.location.hash);
 }
+
+/**
+ * After OAuth, react-router `navigate` only updates the hash and leaves `pathname` as `/auth/callback`
+ * (`/auth/callback#/profile`). Full replace normalizes to `origin#/…`.
+ */
+export function replaceWithHashRoute(routePath: string): void {
+  const path = routePath.startsWith("/") ? routePath : `/${routePath}`;
+  window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#${path}`);
+}

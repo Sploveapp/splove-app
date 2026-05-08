@@ -109,20 +109,20 @@ export async function tryPersistProfileReferralCode(userId: string, code: string
 }
 
 export type GrowthProfileRow = {
-  referral_code: string | null;
-  referred_by_user_id: string | null;
-  rewind_credits: number | null;
-  referral_plus_until: string | null;
+  referral_code?: string | null;
+  referred_by_user_id?: string | null;
+  rewind_credits?: number | null;
+  referral_plus_until?: string | null;
   boost_credits?: number | null;
   beta_splove_plus_unlocked?: boolean | null;
 };
 
 export async function fetchGrowthProfileFields(userId: string): Promise<GrowthProfileRow | null> {
-  const baseCols = ["referral_code", "referred_by_user_id", "rewind_credits", "referral_plus_until"];
-  const optionalCols = ["boost_credits", "beta_splove_plus_unlocked"];
-  let cols = [...baseCols, ...optionalCols];
+  const baseCols = ["boost_credits", "beta_splove_plus_unlocked"];
+  let cols = [...baseCols];
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
+    console.log("[PROFILE_QUERY_SAFE]", cols.join(", "));
     const { data, error } = await supabase
       .from("profiles")
       .select(cols.join(", "))
@@ -142,6 +142,7 @@ export async function fetchGrowthProfileFields(userId: string): Promise<GrowthPr
     const m = (error.message ?? "").match(/column\s+["']?([a-zA-Z0-9_]+)["']?/i);
     const missingCol = m?.[1] ?? null;
     if (!missingCol || !cols.includes(missingCol)) {
+      console.log("[PROFILE_QUERY_SAFE]", baseCols.join(", "));
       const safe = await supabase
         .from("profiles")
         .select(baseCols.join(", "))

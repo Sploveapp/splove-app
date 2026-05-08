@@ -27,6 +27,15 @@ import Notifications from "./pages/Notifications";
 import LegalCGU from "./pages/LegalCGU.tsx";
 import PrivacyPolicy from "./pages/PrivacyPolicy.tsx";
 function App() {
+  const hash = window.location.hash;
+  if (
+    window.location.pathname === "/auth/callback" &&
+    hash &&
+    /^#\/(profile|discover|onboarding)(\/|$|[?#])/.test(hash)
+  ) {
+    window.location.replace(window.location.origin + hash);
+    return null;
+  }
   if (window.location.pathname === "/auth/callback" && !window.location.hash) {
     window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/auth/callback${window.location.search}`);
     return null;
