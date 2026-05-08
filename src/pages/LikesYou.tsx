@@ -14,8 +14,10 @@ import { supabase } from "../lib/supabase";
 import { insertBlock } from "../services/blocks.service";
 import { useTranslation } from "../i18n/useTranslation";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import { mergeOptionalProfileFields } from "../lib/profileSelect";
 import {
   fetchConversationIdForUserPair,
+  LIKES_PROFILE_BATCH_SELECT,
   normalizeCreateLikeRpcResult,
   rpcPayloadIndicatesLikeSuccess,
 } from "../services/likes.service";
@@ -116,13 +118,19 @@ export default function LikesYou() {
     console.log("PROFILE_FOR_MODAL", withJoins.profiles);
     setProfilePreviewLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", like.liker_id)
-        .single();
+      const [{ data, error }, mergedOpt] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select(LIKES_PROFILE_BATCH_SELECT)
+          .eq("id", like.liker_id)
+          .maybeSingle(),
+        mergeOptionalProfileFields(supabase, like.liker_id),
+      ]);
       if (data && !error) {
-        setSelectedProfile(data as unknown as LikesPreviewProfile);
+        setSelectedProfile({
+          ...(data as unknown as LikesPreviewProfile),
+          ...(mergedOpt as Partial<LikesPreviewProfile>),
+        });
         return;
       }
       if (error) {

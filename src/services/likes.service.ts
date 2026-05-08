@@ -14,8 +14,11 @@ export type CreateLikeRpcResult = {
   conversation_id: string | null;
 };
 
-const PROFILE_SELECT =
+/** Colonnes stables pour liste Likes / preview (pas de `select *`). */
+export const LIKES_PROFILE_BATCH_SELECT =
   "id, first_name, city, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, is_photo_verified, photo_status, profile_completed, is_active, is_paused, is_banned, deleted_at, profile_sports(sports(label, slug))";
+
+const PROFILE_SELECT = LIKES_PROFILE_BATCH_SELECT;
 
 type LikesProfileVisibilityFields = {
   profile_completed?: boolean | null;

@@ -63,6 +63,7 @@ import {
   rewindLastDiscoverSwipe,
   type DiscoverRewindStatus,
 } from "../services/discoverSwipes.service";
+import { mergeOptionalProfileFields } from "../lib/profileSelect";
 import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
 import ReferralCard from "../components/referral/ReferralCard";
 import ReferralModal from "../components/referral/ReferralModal";
@@ -785,7 +786,7 @@ const DISCOVER_DISPLAY_LIMIT = 10;
 /** Source Supabase du fil Discover (classement serveur) — repli côté client si colonne absente. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
 const DISCOVER_FALLBACK_SELECT =
-  "id, first_name, city, birth_date, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, open_to_adapted_activities, pref_open_to_adapted_activity, sport_phrase, sport_time, is_photo_verified, photo_status, needs_adapted_activities, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, city, birth_date, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, sport_phrase, is_photo_verified, photo_status, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Message utilisateur sûr (aucun détail technique backend). */
 function discoverFetchFailedMsg(language: "fr" | "en"): string {
@@ -846,14 +847,11 @@ function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremiu
  * Badge « vérifié » : uniquement `photo_status === 'approved'`.
  */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, sport_time, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, needs_adapted_activities, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Profil viewer Discover : uniquement colonnes plates sur `profiles` (sports chargés séparément sur `profile_sports`). */
 const DISCOVER_VIEWER_ME_SELECT =
   "id, first_name, city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, profile_completed, photo_status, portrait_url, fullbody_url, main_photo_url";
-
-const DISCOVER_VIEWER_ME_OPTIONAL_SELECT =
-  "needs_adapted_activities, sport_practice_type, sport_time, open_to_adapted_activities, pref_open_to_adapted_activity";
 
 /** Reconstruit une carte Discover après rewind (hors re-score filtre feed). */
 async function buildAffinityProfileForRewind(input: {
@@ -1427,13 +1425,8 @@ export default function Discover() {
     void (async () => {
       try {
         const viewerAuthId = user?.id ?? currentUserId;
-        const [meRes, meOptionalRes, meSportsRes, candRes, distRes] = await Promise.all([
+        const [meRes, meSportsRes, candRes, distRes] = await Promise.all([
           supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
-          supabase
-            .from("profiles")
-            .select(DISCOVER_VIEWER_ME_OPTIONAL_SELECT)
-            .eq("id", viewerAuthId)
-            .maybeSingle(),
           supabase.from("profile_sports").select("sports(slug, label)").eq("profile_id", viewerAuthId),
           supabase.from("profiles").select(DISCOVER_PROFILES_DETAIL_SELECT).eq("id", requestedProfileId).maybeSingle(),
           supabase.rpc("profile_distances_from_viewer", { p_candidate_ids: [requestedProfileId] }),
@@ -1441,26 +1434,21 @@ export default function Discover() {
         if (cancelled) return;
 
         const meProfileSportRows = Array.isArray(meSportsRes.data) ? meSportsRes.data : [];
-        const optionalLow = (meOptionalRes.error?.message ?? "").toLowerCase();
-        const optionalMissing =
-          meOptionalRes.error?.code === "42703" ||
-          optionalLow.includes("does not exist") ||
-          optionalLow.includes("could not find");
-        if (meOptionalRes.error && !optionalMissing) {
-          console.warn("[Discover] viewer optional profiles fields query failed:", meOptionalRes.error.message);
-        }
-        const meProfileOptional = meOptionalRes.data as Partial<Profile> | null;
+        const meProfileOptional = (await mergeOptionalProfileFields(
+          supabase,
+          viewerAuthId,
+        )) as Partial<Profile>;
         const meProfile: Profile =
           meRes.data != null
             ? {
                 ...(meRes.data as unknown as Profile),
-                ...(meProfileOptional ?? {}),
+                ...meProfileOptional,
                 profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
               }
             : {
                 id: viewerAuthId,
                 first_name: null,
-                ...(meProfileOptional ?? {}),
+                ...meProfileOptional,
                 profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
               };
         let p = candRes.data as Profile | null;
@@ -1637,40 +1625,28 @@ export default function Discover() {
       })();
 
       const viewerAuthId = user?.id ?? currentUserId;
-      const [likedIds, matchedIds, meRes, meOptionalRes, meSportsRes, blockDetail] = await Promise.all([
+      const [likedIds, matchedIds, meRes, meSportsRes, blockDetail] = await Promise.all([
         fetchOutgoingLikedUserIds(currentUserId),
         fetchMatchedUserIds(currentUserId),
         supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
-        supabase
-          .from("profiles")
-          .select(DISCOVER_VIEWER_ME_OPTIONAL_SELECT)
-          .eq("id", viewerAuthId)
-          .maybeSingle(),
         supabase.from("profile_sports").select("sport_id, sports(id, slug, label)").eq("profile_id", viewerAuthId),
         fetchBlockExclusionDetail(currentUserId),
       ]);
 
       const meProfileSportRows = Array.isArray(meSportsRes.data) ? meSportsRes.data : [];
-      const optionalLow = (meOptionalRes.error?.message ?? "").toLowerCase();
-      const optionalMissing =
-        meOptionalRes.error?.code === "42703" ||
-        optionalLow.includes("does not exist") ||
-        optionalLow.includes("could not find");
-      if (meOptionalRes.error && !optionalMissing) {
-        console.warn("[Discover] viewer optional profiles fields query failed:", meOptionalRes.error.message);
-      }
-      const meProfileOptional = meOptionalRes.data as Partial<Profile> | null;
+      const meProfileOptionalMerge = await mergeOptionalProfileFields(supabase, viewerAuthId);
+      const meProfileOptional = meProfileOptionalMerge as Partial<Profile>;
       const meProfile: Profile =
         meRes.data != null
           ? {
               ...(meRes.data as unknown as Profile),
-              ...(meProfileOptional ?? {}),
+              ...meProfileOptional,
               profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
             }
           : {
               id: viewerAuthId,
               first_name: null,
-              ...(meProfileOptional ?? {}),
+              ...meProfileOptional,
               profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
             };
 
@@ -1688,7 +1664,7 @@ export default function Discover() {
           auth_user_id: viewerAuthId,
           current_profile_fetch_error: meRes.error ?? null,
           current_profile_fetch_result: meRes.data ?? null,
-          current_profile_optional_fields_error: meOptionalRes.error ?? null,
+          current_profile_optional_merge_keys: Object.keys(meProfileOptionalMerge),
           current_profile_profile_sports_error: meSportsRes.error ?? null,
           current_profile_id_used: meRes.data ? viewerAuthId : null,
           current_profile_sports_match_keys: [...sportsSet],

@@ -13,8 +13,8 @@ import { supabase } from "../lib/supabase";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import {
   PROFILE_LOAD_TIERS_FOR_AUTH,
+  mergeOptionalProfileFields,
   selectProfilesFirstMatch,
-  tryMergeOptionalAuthProfileFields,
 } from "../lib/profileSelect";
 import type { AppProfile } from "../lib/appProfile";
 import { isProfileRecord } from "../lib/appProfile";
@@ -128,6 +128,14 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
   }
 
   if (!data) {
+    if (import.meta.env.DEV) {
+      console.log("[PROFILE_CORE_LOAD_FAILED]", {
+        context: "[AuthContext] fetchProfile",
+        userId: userId.slice(0, 8) + "…",
+        message: lastError?.message ?? "no_row",
+        code: lastError?.code ?? null,
+      });
+    }
     console.warn("[AuthContext] fetchProfile: no row after cascade", {
       lastError: lastError?.message ?? null,
       code: lastError?.code ?? null,
@@ -135,18 +143,31 @@ async function fetchProfile(userId: string): Promise<Profile | null> {
     return null;
   }
 
+  if (import.meta.env.DEV) {
+    console.log("[PROFILE_CORE_LOAD_OK]", {
+      context: "[AuthContext] fetchProfile",
+      userId: userId.slice(0, 8) + "…",
+    });
+  }
+
   console.debug("[AuthContext] fetchProfile tier used", {
     usedSelectSample: usedSelect ? usedSelect.slice(0, 100) + (usedSelect.length > 100 ? "…" : "") : null,
   });
 
   if (!isProfileRecord(data)) {
+    if (import.meta.env.DEV) {
+      console.log("[PROFILE_CORE_LOAD_FAILED]", {
+        context: "[AuthContext] fetchProfile invalid row shape",
+        userId: userId.slice(0, 8) + "…",
+      });
+    }
     console.warn("[AuthContext] fetchProfile: unexpected profile row shape");
     return null;
   }
 
   const normalized = profileRowToProfile(data as AppProfile);
 
-  const extra = await tryMergeOptionalAuthProfileFields(supabase, userId);
+  const extra = await mergeOptionalProfileFields(supabase, userId);
   if (extra && typeof extra === "object") {
     Object.assign(normalized, extra);
   }
@@ -206,6 +227,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         lastLoadedUserIdRef.current = p.id;
       }
       setProfile((prev) => {
+        if (p == null && prev?.id === userId) {
+          if (import.meta.env.DEV) {
+            console.log("[PROFILE_CORE_LOAD_FAILED]", {
+              context: "[AuthContext] loadProfile retaining stable profile",
+              userId: userId.slice(0, 8) + "…",
+            });
+          }
+          return prev;
+        }
         if (
           p &&
           prev &&
@@ -259,6 +289,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (p) {
         flushSync(() => {
           setProfile(p);
+        });
+      } else if (import.meta.env.DEV) {
+        console.log("[PROFILE_CORE_LOAD_FAILED]", {
+          context: "[AuthContext] refetchProfile — keeping cached profile",
+          userId: user.id.slice(0, 8) + "…",
         });
       }
       return p;

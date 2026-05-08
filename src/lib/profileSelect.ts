@@ -64,26 +64,26 @@ export const PROFILE_LOAD_TIERS_FOR_AUTH: string[] = [
 ];
 
 const ONBOARDING_HYDRATE_FULL =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, onboarding_variant, sport_motivation, sport_phrase, needs_adapted_activities, open_to_adapted_activities, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_intensity, meet_vibe, onboarding_variant, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 /** Même jeu de colonnes qu’avant `094_profiles_open_to_adapted_activities` (colonnes absentes en prod). */
 const ONBOARDING_HYDRATE_PRE_ADAPTED_OPENNESS =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, onboarding_variant, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_intensity, meet_vibe, onboarding_variant, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_NO_PRACTICE_PREFS =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_time, sport_intensity, meet_vibe, sport_motivation, sport_phrase, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_intensity, meet_vibe, sport_motivation, sport_phrase, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_NO_LOC_SOURCE =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, meet_vibe, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_intensity, meet_vibe, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_NO_MEET_VIBE =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_intensity, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_COMPACT =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, sport_phrase, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_intensity, sport_phrase, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_BASE =
-  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_time, sport_intensity, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
+  "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, sport_intensity, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
 
 const ONBOARDING_HYDRATE_MIN =
   "id, first_name, birth_date, gender, looking_for, intent, city, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
@@ -163,7 +163,11 @@ export function isRecoverableUnknownColumnError(
   return false;
 }
 
-const OPTIONAL_AUTH_PROFILE_MERGE_FIELDS = [
+/**
+ * Colonnes `profiles` absentes sur certains schémas prod : chargées uniquement via
+ * `mergeOptionalProfileFields` (repli silencieux si colonne / cache / PGRST204).
+ */
+export const OPTIONAL_PROFILE_FIELDS = [
   "needs_adapted_activities",
   "sport_time",
   "open_to_adapted_activities",
@@ -181,11 +185,11 @@ const OPTIONAL_AUTH_PROFILE_MERGE_FIELDS = [
  * Sélection optionnelle après un noyau `profiles` réussi : ne jette jamais ;
  * retire les colonnes manquantes jusqu’à liste vide.
  */
-export async function tryMergeOptionalAuthProfileFields(
+export async function mergeOptionalProfileFields(
   client: SupabaseClient,
   userId: string,
 ): Promise<Record<string, unknown>> {
-  let cols = [...OPTIONAL_AUTH_PROFILE_MERGE_FIELDS];
+  let cols = [...OPTIONAL_PROFILE_FIELDS];
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (cols.length === 0) return {};
     const { data, error } = await client
@@ -202,7 +206,7 @@ export async function tryMergeOptionalAuthProfileFields(
       const m = msg.match(/column\s+["']?([a-zA-Z0-9_]+)["']?/i);
       const miss = m?.[1] ?? null;
       if (import.meta.env.DEV) {
-        console.log("[Profile fetch debug] optional profile fields skipped", {
+        console.log("[PROFILE_OPTIONAL_FIELDS_SKIPPED]", {
           reason: "missing_column_retry",
           column: miss,
           message: msg.slice(0, 200),
@@ -216,7 +220,7 @@ export async function tryMergeOptionalAuthProfileFields(
       continue;
     }
     if (import.meta.env.DEV) {
-      console.log("[Profile fetch debug] optional profile fields skipped", {
+      console.log("[PROFILE_OPTIONAL_FIELDS_SKIPPED]", {
         reason: "terminal_error",
         code: error.code,
         message: error.message ?? null,
@@ -226,6 +230,9 @@ export async function tryMergeOptionalAuthProfileFields(
   }
   return {};
 }
+
+/** @deprecated Utiliser mergeOptionalProfileFields — alias compat. */
+export const tryMergeOptionalAuthProfileFields = mergeOptionalProfileFields;
 
 /**
  * Premier `select` de la liste qui réussit. Erreur schéma → palier suivant. RLS → arrêt.

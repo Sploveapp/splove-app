@@ -9,6 +9,7 @@ import { SplashScreen } from "../components/SplashScreen";
 import { isAdultFromBirthIso } from "../lib/ageGate";
 import { isOnboardingComplete } from "../lib/profileCompleteness";
 import {
+  mergeOptionalProfileFields,
   ONBOARDING_PROFILE_HYDRATE_TIERS,
   PROFILE_UPSERT_ONBOARDING_SELECT,
   PROFILE_UPSERT_ONBOARDING_SELECT_CORE,
@@ -812,6 +813,7 @@ export default function Onboarding() {
         console.debug("[Onboarding draft] hydrate OK", { usedSelectSample: usedSelect?.slice(0, 90) });
         if (cancelled || !p || typeof p !== "object") return;
         const row = p as Record<string, unknown>;
+        Object.assign(row, await mergeOptionalProfileFields(supabase, userId));
         setFirstName(String(row.first_name ?? ""));
         const isoBirth = typeof row.birth_date === "string" ? row.birth_date : "";
         setBirthDate(isoBirth);
