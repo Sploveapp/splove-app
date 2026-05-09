@@ -1753,6 +1753,7 @@ export default function Discover() {
         }
         setErrorMessage("Impossible de charger ton profil courant.");
         setProfiles([]);
+        swipeHistoryRef.current = [];
         setSwipeHistory([]);
         return;
       }
@@ -2428,6 +2429,7 @@ export default function Discover() {
         }
       }
       setProfiles(slice);
+      swipeHistoryRef.current = [];
       setSwipeHistory([]);
     } catch (e) {
       console.error("[Discover] loadProfiles erreur inattendue:", e);
@@ -2472,7 +2474,11 @@ export default function Discover() {
     });
     if (removed != null) {
       const p = removed;
-      setSwipeHistory((h) => [...h, { profile: p, action: "pass" }]);
+      setSwipeHistory((h) => {
+        const next: DiscoverSwipeHistoryEntry[] = [...h, { profile: p, action: "pass" as const }];
+        swipeHistoryRef.current = next;
+        return next;
+      });
     }
     if (removed?.id === lastRestoredProfileId) {
       setLastRestoredProfileId(null);
@@ -2615,7 +2621,11 @@ export default function Discover() {
       refreshRewindStatus();
     });
 
-    setSwipeHistory((h) => [...h, { profile, action: "like" }]);
+    setSwipeHistory((h) => {
+      const next: DiscoverSwipeHistoryEntry[] = [...h, { profile, action: "like" as const }];
+      swipeHistoryRef.current = next;
+      return next;
+    });
 
     const removeFromFeed = () => {
       setProfiles((prev) => prev.filter((p) => p.id !== profile.id));
@@ -2732,13 +2742,19 @@ export default function Discover() {
     try {
       const res = await rewindLastDiscoverSwipe();
       if (!res.ok || !res.target_id) {
-        if (optimistic) {
+        if (optimistic && !IS_BETA_UNDO_FREE) {
           setProfiles((p) => p.filter((x) => x.id !== optimistic.profile.id));
-          setSwipeHistory((prev) => [...prev, optimistic]);
+          setSwipeHistory((prev) => {
+            const next = [...prev, optimistic];
+            swipeHistoryRef.current = next;
+            return next;
+          });
         }
         const err = (res.error ?? "generic").toLowerCase();
         if (IS_BETA_UNDO_FREE) {
-          setRewindToast(t("nav_undo_none_soft"));
+          if (!optimistic) {
+            setRewindToast(t("nav_undo_none_soft"));
+          }
           return;
         }
         if (err.includes("time_window") || err.includes("rewind_rate")) {
@@ -2783,7 +2799,9 @@ export default function Discover() {
       if (!optimistic) {
         setSwipeHistory((prev) => {
           if (prev.length && prev[prev.length - 1].profile.id === res.target_id) {
-            return prev.slice(0, -1);
+            const next = prev.slice(0, -1);
+            swipeHistoryRef.current = next;
+            return next;
           }
           return prev;
         });
@@ -2794,12 +2812,18 @@ export default function Discover() {
       setRewindToast("Profil restaure");
       refreshRewindStatus();
     } catch {
-      if (optimistic) {
+      if (optimistic && !IS_BETA_UNDO_FREE) {
         setProfiles((p) => p.filter((x) => x.id !== optimistic.profile.id));
-        setSwipeHistory((prev) => [...prev, optimistic]);
+        setSwipeHistory((prev) => {
+          const next = [...prev, optimistic];
+          swipeHistoryRef.current = next;
+          return next;
+        });
       }
       if (IS_BETA_UNDO_FREE) {
-        setRewindToast(t("nav_undo_none_soft"));
+        if (!optimistic) {
+          setRewindToast(t("nav_undo_none_soft"));
+        }
       } else {
         setRewindError(t("discover_rewind_err_generic"));
       }
@@ -2815,8 +2839,10 @@ export default function Discover() {
     const h = swipeHistoryRef.current;
     const last = h[h.length - 1] ?? null;
     if (last) {
-      setSwipeHistory((prev) => prev.slice(0, -1));
-      setProfiles((p) => (p.some((x) => x.id === last.profile.id ? true : false) ? p : [last.profile, ...p]));
+      const nextHist = h.slice(0, -1);
+      swipeHistoryRef.current = nextHist;
+      setSwipeHistory(nextHist);
+      setProfiles((p) => (p.some((x) => x.id === last.profile.id) ? p : [last.profile, ...p]));
       setRewindRestoredId(last.profile.id);
       setRewindRestoredFrom(last.action === "pass" ? "left" : "right");
       setRewindToast("Profil restaure");
