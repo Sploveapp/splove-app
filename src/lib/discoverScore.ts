@@ -3,6 +3,7 @@
  * — Match sports + exclusion géo (rayon) si distance connue via RPC.
  */
 
+import { encodeDiscoverScoringReason } from "./discoverScoringReasons";
 import { getSharedSportLabelsForMatch } from "./sportMatchGroups";
 
 export type DiscoverScoreProfileInput = {
@@ -223,11 +224,15 @@ export function buildDiscoverScore(
   const reasons: string[] = [];
   reasons.push(
     sharedSportsCount >= 2
-      ? `${sharedSportsCount} sports en commun`
-      : "1 sport en commun",
+      ? encodeDiscoverScoringReason("discover_legacy_n_shared_sports", { count: sharedSportsCount })
+      : encodeDiscoverScoringReason("discover_legacy_one_shared_sport"),
   );
   if (distancePart.distanceKm != null) {
-    reasons.push(`À ${Math.round(distancePart.distanceKm)} km`);
+    reasons.push(
+      encodeDiscoverScoringReason("discover_legacy_distance_km_at", {
+        km: Math.round(distancePart.distanceKm),
+      }),
+    );
   }
 
   const sharedSportsNormalized = Math.min(sharedSportsCount, 3) / 3;
@@ -242,8 +247,8 @@ export function buildDiscoverScore(
     qualityNormalized * W_QUALITY +
     sharedPlaceNormalized * W_SHARED_PLACE;
   const weightedScore = Math.round(weighted * 1000);
-  if (sharedSportsCount >= 2) reasons.push("Affinité sport forte");
-  if (sharedPlaceNormalized > 0) reasons.push("Lieu commun");
+  if (sharedSportsCount >= 2) reasons.push(encodeDiscoverScoringReason("discover_legacy_strong_sport_affinity"));
+  if (sharedPlaceNormalized > 0) reasons.push(encodeDiscoverScoringReason("discover_legacy_shared_place"));
 
   return {
     score: weightedScore,

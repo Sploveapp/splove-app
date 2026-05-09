@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { ACCESSIBILITY_PREF_BOTH_REQUIRED } from "../constants/copy";
@@ -47,10 +47,12 @@ import { useTranslation } from "../i18n/useTranslation";
 import { buildAuthReferralLink, fetchGrowthProfileFields, type GrowthProfileRow } from "../services/referral.service";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import LanguageSwitcher from "../components/LanguageSwitcher";
+import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
+import { normalizePreferredAgeRange } from "../lib/profileAge";
 export default function Profile() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { user, profile, refetchProfile, signOut } = useAuth();
+  const { user, profile, refetchProfile, commitProfileRow, signOut } = useAuth();
   const mainPhoto = profile?.main_photo_url?.trim() || null;
   const mainPhotoDisplay = useProfilePhotoSignedUrl(mainPhoto) ?? null;
   const [imageError, setImageError] = useState(false);
@@ -101,6 +103,17 @@ export default function Profile() {
       setLocRadius("");
     }
   }, [profile]);
+
+  const preferredMeetingAgeBounds = useMemo(
+    () => normalizePreferredAgeRange(profile?.preferred_age_min, profile?.preferred_age_max),
+    [profile?.preferred_age_min, profile?.preferred_age_max],
+  );
+
+  const meetingAgePrefsRevisionKey = useMemo(() => {
+    const pr = profile as Record<string, unknown> | undefined;
+    const ua = pr ? String(pr.updated_at ?? "") : "";
+    return `profile-meet-age-${user?.id ?? ""}-${ua}-${preferredMeetingAgeBounds.min}-${preferredMeetingAgeBounds.max}`;
+  }, [user?.id, profile, preferredMeetingAgeBounds.min, preferredMeetingAgeBounds.max]);
 
   useEffect(() => {
     if (!selectedPhotoUrl) return;
@@ -818,6 +831,25 @@ export default function Profile() {
           </div>
 
           {/* Disabled temporarily: active meeting mode caused profile reload loop — whole "Mode rencontre active" card (title, description, toggle, countdown, error). */}
+
+          {user?.id ? (
+            <MeetingAgeRangePreferencesPanel
+              userId={user.id}
+              revisionKey={meetingAgePrefsRevisionKey}
+              preferredMinResolved={preferredMeetingAgeBounds.min}
+              preferredMaxResolved={preferredMeetingAgeBounds.max}
+              onAfterSuccessfulSave={async (min, max) => {
+                if (profile) {
+                  commitProfileRow({
+                    ...profile,
+                    preferred_age_min: min,
+                    preferred_age_max: max,
+                  });
+                }
+                await refetchProfile();
+              }}
+            />
+          ) : null}
 
           <div
             style={{

@@ -170,6 +170,7 @@ export function isRecoverableUnknownColumnError(
 export const OPTIONAL_PROFILE_FIELDS = [
   "preferred_age_min",
   "preferred_age_max",
+  "sport_match_preference",
   "needs_adapted_activities",
   "sport_time",
   "open_to_adapted_activities",

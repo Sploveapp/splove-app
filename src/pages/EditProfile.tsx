@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase";
 import {
@@ -12,6 +13,8 @@ import {
   CTA_DISABLED_BG,
   TEXT_ON_BRAND,
 } from "../constants/theme";
+import { normalizePreferredAgeRange } from "../lib/profileAge";
+import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/sportMatchPreference";
 import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
@@ -39,6 +42,20 @@ const INTENT_OPTIONS = [
   { value: "sport_social", label: "intentions.sport" },
   { value: "both", label: "intentions.both" },
 ] as const;
+
+const EDIT_SPORT_MATCH_OPTIONS: readonly {
+  value: SportMatchPreferenceDb;
+  labelKey: string;
+  descKey: string;
+}[] = [
+  { value: "same_sports", labelKey: "sport_match_pref_same_label", descKey: "sport_match_pref_same_desc" },
+  {
+    value: "open_to_different_sports",
+    labelKey: "sport_match_pref_open_label",
+    descKey: "sport_match_pref_open_desc",
+  },
+  { value: "both", labelKey: "sport_match_pref_both_label", descKey: "sport_match_pref_both_desc" },
+];
 
 const TIME_OPTIONS = ["Matin", "Soir"] as const;
 const INTENSITY_OPTIONS = [
@@ -98,7 +115,7 @@ function parseLookingFor(raw: unknown): LookingForValue[] {
 export default function EditProfile() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { user, profile, refetchProfile } = useAuth();
+  const { user, profile, refetchProfile, commitProfileRow } = useAuth();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -111,6 +128,7 @@ export default function EditProfile() {
   const [sportTime, setSportTime] = useState<(typeof TIME_OPTIONS)[number] | "">("");
   const [sportIntensity, setSportIntensity] = useState<"chill" | "intense" | "">("");
   const [planningStyle, setPlanningStyle] = useState<"spontaneous" | "planned" | "">("");
+  const [sportMatchPreference, setSportMatchPreference] = useState<SportMatchPreferenceDb>("same_sports");
   const [bio, setBio] = useState("");
 
   const [portraitUrl, setPortraitUrl] = useState("");
@@ -175,6 +193,7 @@ export default function EditProfile() {
     setBio(String((profile as Record<string, unknown>).sport_phrase ?? ""));
     setPortraitUrl(String(profile.portrait_url ?? ""));
     setBodyUrl(String(profile.fullbody_url ?? ""));
+    setSportMatchPreference(parseSportMatchPreference((profile as Record<string, unknown>).sport_match_preference));
   }, [profile]);
 
   useEffect(() => {
@@ -208,6 +227,18 @@ export default function EditProfile() {
       })
       .slice(0, 10);
   }, [sportSearch, sportsCatalog, selectedSports]);
+
+  const meetingAgePrefsBounds = useMemo(
+    () => normalizePreferredAgeRange(profile?.preferred_age_min, profile?.preferred_age_max),
+    [profile?.preferred_age_min, profile?.preferred_age_max],
+  );
+
+  const meetingAgePrefsRevisionKey = useMemo(() => {
+    const uid = user?.id ?? "";
+    const pr = profile as Record<string, unknown> | undefined;
+    const ua = pr ? String(pr.updated_at ?? "") : "";
+    return `edit-meet-age-${uid}-${ua}-${meetingAgePrefsBounds.min}-${meetingAgePrefsBounds.max}`;
+  }, [user?.id, profile, meetingAgePrefsBounds.min, meetingAgePrefsBounds.max]);
 
   function toggleSport(sport: SportOption): void {
     setSelectedSports((prev) => {
@@ -265,6 +296,7 @@ export default function EditProfile() {
         portrait_url: nextPortrait || null,
         fullbody_url: nextBody || null,
         main_photo_url: nextPortrait || nextBody || null,
+        sport_match_preference: sportMatchPreference,
         updated_at: new Date().toISOString(),
       };
 
@@ -339,11 +371,11 @@ export default function EditProfile() {
       }
 
       await refetchProfile();
-      setMessage("Profil mis à jour.");
+      setMessage(t("edit_profile_saved"));
       setPortraitFile(null);
       setBodyFile(null);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Impossible d’enregistrer les modifications.";
+      const msg = e instanceof Error ? e.message : t("edit_profile_save_error");
       setMessage(msg);
     } finally {
       setLoading(false);
@@ -354,6 +386,51 @@ export default function EditProfile() {
     <div style={{ minHeight: "100vh", background: APP_BG, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" }}>
       <main style={{ padding: "24px", maxWidth: "560px", margin: "0 auto" }}>
         <h1 style={{ margin: "0 0 18px 0", fontSize: "22px", fontWeight: 700, color: APP_TEXT }}>{t("edit_profile")}</h1>
+
+        {user?.id ? (
+          <MeetingAgeRangePreferencesPanel
+            userId={user.id}
+            revisionKey={meetingAgePrefsRevisionKey}
+            preferredMinResolved={meetingAgePrefsBounds.min}
+            preferredMaxResolved={meetingAgePrefsBounds.max}
+            onAfterSuccessfulSave={async (min, max) => {
+              if (profile) {
+                commitProfileRow({
+                  ...profile,
+                  preferred_age_min: min,
+                  preferred_age_max: max,
+                });
+              }
+              await refetchProfile();
+            }}
+          />
+        ) : null}
+
+        <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 14 }}>
+          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>{t("sport_match_pref_section_title")}</h2>
+          <p style={{ margin: "0 0 12px", fontSize: 12, color: APP_TEXT_MUTED, lineHeight: 1.45 }}>{t("sport_match_pref_section_hint")}</p>
+          <div style={{ display: "grid", gap: 8 }}>
+            {EDIT_SPORT_MATCH_OPTIONS.map((opt) => {
+              const active = sportMatchPreference === opt.value;
+              return (
+                <button key={opt.value} type="button" onClick={() => setSportMatchPreference(opt.value)} style={{ border: `1px solid ${active ? BRAND_BG : APP_BORDER}`, background: active ? BRAND_BG : APP_BG, color: active ? TEXT_ON_BRAND : APP_TEXT, borderRadius: 12, padding: "12px", textAlign: "left" }}>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{t(opt.labelKey)}</div>
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontSize: 11,
+                      fontWeight: 500,
+                      color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                      opacity: active ? 0.92 : 1,
+                    }}
+                  >
+                    {t(opt.descKey)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
 
         <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 14 }}>
           <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>{t("sports_limit")}</h2>

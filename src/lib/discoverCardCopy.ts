@@ -33,8 +33,8 @@ export function intentLabelShort(intent: unknown): string | null {
 }
 
 /**
- * Raisons Discover (V3, beta, GPS fallback, etc.) — conservées sur le profil pour scoring / logs,
- * mais jamais rendues sur les cartes Discover : sports, zone et texte profil sont déjà couverts ailleurs.
+ * Raisons Discover : chaînes encodées (`clé_i18n|{"param":…}` depuis `discoverScoringReasons`).
+ * À afficher via `mapDiscoverReasonsWithI18n` + `t`. Ici on ne les montre pas sur la carte MVP.
  */
 export function filterDiscoverReasonsForDisplay(
   _reasons: string[],

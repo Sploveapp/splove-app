@@ -1,7 +1,7 @@
 import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
 import { evaluateDiscoverV3, viewerOpenAdaptedResolved } from "../lib/discoverScoreV3";
-import { discoverCrossSportSecondaryAllowed } from "../lib/sportMatchPreference";
-import { encodeDiscoverScoringReason } from "../lib/discoverScoringReasons";
+import { discoverCrossSportSecondaryAllowed } from "@/lib/sportMatchPreference";
+import { encodeDiscoverScoringReason } from "@/lib/discoverScoringReasons";
 import { BETA_MODE } from "../constants/beta";
 import { asAgePreferenceScalar, isReciprocalAgeDiscoverMatch } from "../lib/profileAge";
 

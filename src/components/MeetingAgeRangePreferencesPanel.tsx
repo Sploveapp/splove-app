@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import {
   DEFAULT_PREFERRED_AGE_MAX,
@@ -25,7 +25,7 @@ export type MeetingAgeRangePreferencesPanelProps = {
   revisionKey?: string;
   preferredMinResolved: number;
   preferredMaxResolved: number;
-  onAfterSuccessfulSave?: () => void | Promise<unknown>;
+  onAfterSuccessfulSave?: (savedMin: number, savedMax: number) => void | Promise<unknown>;
 };
 
 /**
@@ -40,16 +40,15 @@ export function MeetingAgeRangePreferencesPanel(props: MeetingAgeRangePreference
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  const prefsRef = useRef({ preferredMinResolved, preferredMaxResolved });
+  prefsRef.current = { preferredMinResolved, preferredMaxResolved };
+
   useEffect(() => {
-    const norm = normalizePreferredAgeRange(preferredMinResolved, preferredMaxResolved);
+    const { preferredMinResolved: minR, preferredMaxResolved: maxR } = prefsRef.current;
+    const norm = normalizePreferredAgeRange(minR, maxR);
     setPrefAgeMinStr(String(norm.min));
     setPrefAgeMaxStr(String(norm.max));
-  }, [
-    revisionKey,
-    preferredMinResolved,
-    preferredMaxResolved,
-    userId,
-  ]);
+  }, [revisionKey]);
 
   useEffect(() => {
     if (message !== SAVE_OK) return;
@@ -85,7 +84,9 @@ export function MeetingAgeRangePreferencesPanel(props: MeetingAgeRangePreference
         setMessage(error.message || t("action_impossible"));
         return;
       }
-      await onAfterSuccessfulSave?.();
+      setPrefAgeMinStr(String(min));
+      setPrefAgeMaxStr(String(max));
+      await onAfterSuccessfulSave?.(min, max);
       setMessage(SAVE_OK);
     } finally {
       setSaving(false);
@@ -131,6 +132,7 @@ export function MeetingAgeRangePreferencesPanel(props: MeetingAgeRangePreference
           fontWeight: 500,
           color: APP_TEXT_MUTED,
           lineHeight: 1.45,
+          whiteSpace: "pre-line",
         }}
       >
         {t("meet_prefs_age_hint")}

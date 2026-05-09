@@ -43,6 +43,7 @@ import {
   PROFILE_MIN_VISIBLE_AGE,
   normalizePreferredAgeRange,
 } from "../lib/profileAge";
+import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/sportMatchPreference";
 import {
   type EnergyOptionKey,
   normalizeIntensityForOnboardingHydrate,
@@ -208,7 +209,22 @@ const OPTIONAL_PROFILE_COLUMNS = [
   "has_children",
   "preferred_age_min",
   "preferred_age_max",
+  "sport_match_preference",
 ] as const;
+
+const SPORT_MATCH_PREF_OPTIONS: readonly {
+  value: SportMatchPreferenceDb;
+  labelKey: string;
+  descKey: string;
+}[] = [
+  { value: "same_sports", labelKey: "sport_match_pref_same_label", descKey: "sport_match_pref_same_desc" },
+  {
+    value: "open_to_different_sports",
+    labelKey: "sport_match_pref_open_label",
+    descKey: "sport_match_pref_open_desc",
+  },
+  { value: "both", labelKey: "sport_match_pref_both_label", descKey: "sport_match_pref_both_desc" },
+];
 
 function isMissingOptionalProfileColumnError(
   error: { code?: string | number; message?: string } | null | undefined,
@@ -556,6 +572,7 @@ export default function Onboarding() {
   const [selectedSportIds, setSelectedSportIds] = useState<(string | number)[]>([]);
   const [selectedSports, setSelectedSports] = useState<SportOption[]>([]);
   const [sportLevelsById, setSportLevelsById] = useState<Record<string, string>>({});
+  const [sportMatchPreference, setSportMatchPreference] = useState<SportMatchPreferenceDb>("same_sports");
   const [sportTime, setSportTime] = useState("");
   const [sportMotivations, setSportMotivations] = useState<string[]>([]);
   const [onboardingVariant, setOnboardingVariant] = useState<OnboardingVariant>("A");
@@ -684,6 +701,7 @@ export default function Onboarding() {
         payload.main_photo_url = portraitSavedUrl.trim() || bodySavedUrl.trim() || null;
       }
       if (currentStep >= 9) payload.practice_preferences = practicePreferences;
+      if (currentStep >= 5) payload.sport_match_preference = sportMatchPreference;
       payload.onboarding_sports_count = selectedSportIds.length;
       payload.onboarding_sports_with_level_count = selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length;
       console.log("PROFILE_UPDATE_PAYLOAD", payload);
@@ -903,6 +921,7 @@ export default function Onboarding() {
         );
         setPracticePreferences(Array.isArray(row.practice_preferences) ? (row.practice_preferences as string[]) : []);
         setOpenToAdaptedPractice(parseHydratedOpenToAdapted(row.open_to_adapted_activities));
+        setSportMatchPreference(parseSportMatchPreference(row.sport_match_preference));
         setAdaptedAmenagements(
           adaptedAmenagementsFromProfile(row.needs_adapted_activities, row.open_to_adapted_activities)
         );
@@ -1847,6 +1866,7 @@ export default function Onboarding() {
         practice_preferences: practicePreferences,
         onboarding_sports_count: selectedSportIds.length,
         onboarding_sports_with_level_count: selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length,
+        sport_match_preference: sportMatchPreference,
         needs_adapted_activities: needsAdaptedActivitiesForDb(adaptedAmenagements),
         open_to_adapted_activities: openToAdaptedPractice || null,
         portrait_url: portraitUrl,
@@ -2364,7 +2384,9 @@ export default function Onboarding() {
                   {step1SubStep === 2 ? (
                     <div className="space-y-4">
                       <p className="text-[13px] font-semibold leading-snug text-app-text">{t("meet_prefs_age_heading")}</p>
-                      <p className="text-[12px] leading-relaxed text-app-muted">{t("meet_prefs_age_hint")}</p>
+                      <p className="whitespace-pre-line text-[12px] leading-relaxed text-app-muted">
+                        {t("meet_prefs_age_hint")}
+                      </p>
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div>
                           <label className={labelClassName} htmlFor="ob-pref-age-min">
@@ -2723,6 +2745,46 @@ export default function Onboarding() {
                         ))}
                       </ul>
                     )}
+                  </div>
+
+                  <div className="space-y-3 rounded-2xl border border-app-border/80 bg-app-card/70 p-4">
+                    <div>
+                      <span className={labelClassName}>{t("sport_match_pref_section_title")}</span>
+                      <p className="text-[11px] leading-relaxed text-app-muted">{t("sport_match_pref_section_hint")}</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2.5">
+                      {SPORT_MATCH_PREF_OPTIONS.map((opt) => {
+                        const active = sportMatchPreference === opt.value;
+                        return (
+                          <motion.button
+                            key={opt.value}
+                            type="button"
+                            whileTap={{ scale: 0.985 }}
+                            onClick={() => setSportMatchPreference(opt.value)}
+                            className={`${intentChoiceClass(active)} min-h-[56px] w-full text-left`}
+                            style={
+                              active
+                                ? {
+                                    borderColor: BRAND_BG,
+                                    background: BRAND_BG,
+                                    color: TEXT_ON_BRAND,
+                                  }
+                                : undefined
+                            }
+                            aria-pressed={active}
+                          >
+                            <span className="block text-sm font-semibold leading-snug">{t(opt.labelKey)}</span>
+                            <span
+                              className={`mt-1 block text-[11px] font-normal leading-snug ${
+                                active ? "opacity-90" : "text-app-muted"
+                              }`}
+                            >
+                              {t(opt.descKey)}
+                            </span>
+                          </motion.button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   {loadingSports ? (
