@@ -181,9 +181,10 @@ function UndoBottomItem({
   undo: DiscoverUndoNavState;
   label: string;
 }) {
-  const enabled = undo.undoAvailable && !undo.undoBusy;
-  const stroke = enabled ? UNDO_ACCENT : INACTIVE;
-  const labelColor = enabled ? UNDO_ACCENT : INACTIVE;
+  const highlighted = undo.undoAvailable && !undo.undoBusy;
+  const tappable = undo.undoNavTapEnabled && !undo.undoBusy;
+  const stroke = highlighted ? UNDO_ACCENT : INACTIVE;
+  const labelColor = highlighted ? UNDO_ACCENT : INACTIVE;
   const badge = undo.undoBadgeText?.trim();
 
   const ariaBusy = undo.undoBusy;
@@ -193,13 +194,13 @@ function UndoBottomItem({
   return (
     <button
       type="button"
-      disabled={!undo.undoAvailable || undo.undoBusy}
+      disabled={undo.undoBusy || !undo.undoNavTapEnabled}
       style={{
         WebkitTapHighlightColor: "transparent",
         background: "transparent",
         border: "none",
-        cursor: enabled && !undo.undoBusy ? "pointer" : "not-allowed",
-        opacity: undo.undoBusy ? 0.65 : undo.undoAvailable ? 1 : 0.45,
+        cursor: tappable ? "pointer" : "not-allowed",
+        opacity: undo.undoBusy ? 0.65 : undo.undoNavTapEnabled ? 1 : 0.45,
         color: labelColor,
       }}
       aria-label={ariaLabel}

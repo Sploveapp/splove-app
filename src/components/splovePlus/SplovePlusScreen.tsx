@@ -6,6 +6,7 @@ import { useTranslation } from "../../i18n/useTranslation";
 import type { Language } from "../../i18n";
 import type { TranslationKey } from "../../i18n";
 import { BETA_MODE } from "../../constants/beta";
+import { IS_BETA_UNDO_FREE } from "../../constants/discoverUndo";
 import type { SploveCreditType, SploveTimedFeatureType } from "../../types/sploveCommerce.types";
 import {
   activateFeature,
@@ -384,6 +385,14 @@ export default function SplovePlusScreen() {
 
   async function handleConfirmActivation() {
     if (!confirmFeatureDef?.creditType || !userId || activating) return;
+
+    /** Undo / Retour gratuit en bêta : pas d’activation serveur ni pseudo-achat. */
+    if (IS_BETA_UNDO_FREE && confirmFeatureDef.key === "undo_swipe_return") {
+      setToastMessage(t("splove_plus_undo_beta_free_toast"));
+      closeActivateConfirm();
+      return;
+    }
+
     const qty = creditsQty[confirmFeatureDef.creditType] ?? 0;
     const flow = pickActivationSource(qty);
     if (flow === "purchase") {

@@ -176,6 +176,7 @@ const en = {
   splove_plus_purchase_back: "Choose again",
   splove_plus_need_sign_in: "Sign in to continue.",
   splove_plus_activated_toast: "Done — SPLove+ applied.",
+  splove_plus_undo_beta_free_toast: "Undo is free during beta",
   splove_plus_error_generic: "Couldn’t do that right now. Try again.",
   splove_plus_coming_title: "Coming soon",
   splove_plus_coming_detail: "This perk ships in an upcoming release.",

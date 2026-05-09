@@ -8,7 +8,10 @@ import {
 } from "react";
 
 export type DiscoverUndoNavState = {
+  /** Violet + badge : le serveur indique une action rewindable tout de suite */
   undoAvailable: boolean;
+  /** Tap autorisé (bêta undo gratuit même sans évidence « badge », pour message ou tentative rewind). */
+  undoNavTapEnabled: boolean;
   undoBadgeText: string | null;
   undoBusy: boolean;
   triggerUndo: () => void;
@@ -16,6 +19,7 @@ export type DiscoverUndoNavState = {
 
 const DEFAULT_UNDO_NAV: DiscoverUndoNavState = {
   undoAvailable: false,
+  undoNavTapEnabled: false,
   undoBadgeText: null,
   undoBusy: false,
   triggerUndo: () => {},

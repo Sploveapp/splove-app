@@ -178,6 +178,7 @@ const fr = {
   splove_plus_purchase_back: "Modifier le choix",
   splove_plus_need_sign_in: "Connecte-toi pour continuer.",
   splove_plus_activated_toast: "C’est parti — SPLove+ appliqué.",
+  splove_plus_undo_beta_free_toast: "Retour activé gratuitement pendant la bêta",
   splove_plus_error_generic: "Impossible tout de suite. Réessaie.",
   splove_plus_coming_title: "Bientôt",
   splove_plus_coming_detail: "Cette fonction reste réservée à une mise à jour prochaine.",

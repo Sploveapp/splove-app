@@ -2666,16 +2666,23 @@ export default function Discover() {
     const latest = await getDiscoverRewindStatus();
     if (latest) setRewindStatus(latest);
 
-    if (
-      !latest?.last_swipe_at ||
-      latest.last_is_match ||
-      !isLastSwipeRewindable(latest.last_action)
-    ) {
+    const localLast = swipeHistoryRef.current.at(-1) ?? null;
+    const serverRewindable =
+      Boolean(latest) &&
+      Boolean(latest?.last_swipe_at) &&
+      !latest!.last_is_match &&
+      isLastSwipeRewindable(latest!.last_action);
+    const localRewindBeta =
+      IS_BETA_UNDO_FREE &&
+      localLast != null &&
+      (localLast.action === "pass" || localLast.action === "like");
+
+    if (!serverRewindable && !localRewindBeta) {
       setRewindToast(t("nav_undo_none_soft"));
       return;
     }
 
-    if (!IS_BETA_UNDO_FREE && !latest.can_rewind) {
+    if (!IS_BETA_UNDO_FREE && latest != null && !latest.can_rewind) {
       navigate("/splove-plus", { state: { sploveHighlightFeature: "undo_swipe_return" } });
       return;
     }
@@ -2720,6 +2727,10 @@ export default function Discover() {
           setSwipeHistory((prev) => [...prev, optimistic]);
         }
         const err = (res.error ?? "generic").toLowerCase();
+        if (IS_BETA_UNDO_FREE) {
+          setRewindToast(t("nav_undo_none_soft"));
+          return;
+        }
         if (err.includes("time_window") || err.includes("rewind_rate")) {
           setRewindError(t("discover_rewind_err_upgrade"));
         } else if (err.includes("no_undo_credits")) {
@@ -2735,7 +2746,11 @@ export default function Discover() {
 
       const me = profile as Profile | null;
       if (!me?.id) {
-        setRewindError(t("discover_rewind_err_generic"));
+        if (IS_BETA_UNDO_FREE) {
+          setRewindToast(t("nav_undo_none_soft"));
+        } else {
+          setRewindError(t("discover_rewind_err_generic"));
+        }
         return;
       }
       let restored: ProfileWithAffinity | null = fromLocal;
@@ -2748,7 +2763,11 @@ export default function Discover() {
         });
       }
       if (!restored) {
-        setRewindError(t("discover_rewind_restore_failed"));
+        if (IS_BETA_UNDO_FREE) {
+          setRewindToast(t("nav_undo_none_soft"));
+        } else {
+          setRewindError(t("discover_rewind_restore_failed"));
+        }
         return;
       }
       if (!optimistic) {
@@ -2764,6 +2783,16 @@ export default function Discover() {
       setRewindRestoredId(card.id);
       setRewindToast("Profil restaure");
       refreshRewindStatus();
+    } catch {
+      if (optimistic) {
+        setProfiles((p) => p.filter((x) => x.id !== optimistic.profile.id));
+        setSwipeHistory((prev) => [...prev, optimistic]);
+      }
+      if (IS_BETA_UNDO_FREE) {
+        setRewindToast(t("nav_undo_none_soft"));
+      } else {
+        setRewindError(t("discover_rewind_err_generic"));
+      }
     } finally {
       setRewindBusy(false);
     }
@@ -2782,7 +2811,7 @@ export default function Discover() {
       setRewindRestoredFrom(last.action === "pass" ? "left" : "right");
       setRewindToast("Profil restaure");
     }
-    void runRewindFlow(last);
+    await runRewindFlow(last);
   }
 
   undoTapLatestRef.current = handleUndoTap;
@@ -2797,6 +2826,7 @@ export default function Discover() {
     const discoverReady = Boolean(!errorMessage && !loading);
     setDiscoverUndoNav({
       undoAvailable: discoverReady && canUndo,
+      undoNavTapEnabled: Boolean(discoverReady && (IS_BETA_UNDO_FREE || canUndo)),
       undoBadgeText: discoverReady && canUndo ? "1" : null,
       undoBusy: rewindBusy,
       triggerUndo: () => void undoTapLatestRef.current(),
