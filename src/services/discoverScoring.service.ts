@@ -1,5 +1,7 @@
 import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
 import { evaluateDiscoverV3, viewerOpenAdaptedResolved } from "../lib/discoverScoreV3";
+import { discoverCrossSportSecondaryAllowed } from "../lib/sportMatchPreference";
+import { encodeDiscoverScoringReason } from "../lib/discoverScoringReasons";
 import { BETA_MODE } from "../constants/beta";
 import { asAgePreferenceScalar, isReciprocalAgeDiscoverMatch } from "../lib/profileAge";
 
@@ -28,6 +30,7 @@ type DiscoverProfile = {
   photo_status?: string | null;
   needs_adapted_activities?: boolean | null;
   is_photo_verified?: boolean | null;
+  sport_match_preference?: string | null;
   [key: string]: unknown;
 };
 
@@ -46,6 +49,7 @@ type ViewerProfile = {
   open_to_adapted_activities?: string | null;
   pref_open_to_adapted_activity?: boolean | null;
   discovery_radius_km?: number | null;
+  sport_match_preference?: string | null;
 };
 
 export type DiscoverScoringContext = {
@@ -301,6 +305,9 @@ function isBanned(candidate: DiscoverProfile): boolean {
 /** Exclude hard incompatible inclusivity (viewer « no » vs adapted candidate). */
 const INCLUSIVITY_EXCLUDE_THRESHOLD = -10;
 
+/** Score secondaire léger lorsque 0 sport commun mais ouverture cross-sport (reste bien sous sportPointsV3(1)). */
+const CROSS_SPORT_SECONDARY_SCORE_BONUS = 10;
+
 /** Dev diagnostics: always surface these first names when present in the candidate pool. */
 const DISCOVER_DIAG_NAME_RE = /\b(bruno|sofiane)\b/i;
 
@@ -347,6 +354,44 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     });
   }
 
+  if (import.meta.env.DEV && candidates.length > 0) {
+    const probeViewerSports = extractViewerSportIds(ctx);
+    let ageReciprocalPass = 0;
+    let sportCompatPass = 0;
+    for (const c of candidates) {
+      const cr = c as { preferred_age_min?: unknown; preferred_age_max?: unknown };
+      if (
+        isReciprocalAgeDiscoverMatch(
+          {
+            birth_date: ctx.viewer.birth_date ?? null,
+            preferred_age_min: asAgePreferenceScalar(ctx.viewer.preferred_age_min),
+            preferred_age_max: asAgePreferenceScalar(ctx.viewer.preferred_age_max),
+          },
+          {
+            birth_date: c.birth_date ?? null,
+            preferred_age_min: asAgePreferenceScalar(cr.preferred_age_min),
+            preferred_age_max: asAgePreferenceScalar(cr.preferred_age_max),
+          },
+        )
+      ) {
+        ageReciprocalPass += 1;
+      }
+      const sharedN = intersectSportIds(probeViewerSports, extractCandidateSportIds(c)).length;
+      if (
+        sharedN >= 1 ||
+        discoverCrossSportSecondaryAllowed(ctx.viewer.sport_match_preference, c.sport_match_preference)
+      ) {
+        sportCompatPass += 1;
+      }
+    }
+    console.info("[Discover diagnostics] pipeline_filter_counts", {
+      note: "Isolated checks on scoring input (likes/blocks already stripped upstream).",
+      candidate_count: candidates.length,
+      age_reciprocal_pass: ageReciprocalPass,
+      sport_compat_pass: sportCompatPass,
+    });
+  }
+
   for (const candidate of candidates) {
     const excludedReasons: string[] = [];
     const diagExtra: Record<string, unknown> = {};
@@ -369,7 +414,10 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const candidateSportIds = extractCandidateSportIds(candidate);
     const commonSportIds = intersectSportIds(viewerSportIds, candidateSportIds);
     const sharedCount = commonSportIds.length;
-    if (sharedCount < 1) excludedReasons.push("no common sport");
+    const allowZeroSharedSports =
+      sharedCount >= 1 ||
+      discoverCrossSportSecondaryAllowed(ctx.viewer.sport_match_preference, candidate.sport_match_preference);
+    if (!allowZeroSharedSports) excludedReasons.push("no common sport");
 
     const candidateGender = canonicalGender(candidate.gender);
     const candidateLookingFor = parseLookingFor(candidate.looking_for);
@@ -426,7 +474,8 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const insideRadius = hasGpsDistance && viewerRadius != null && viewerRadius > 0 ? distanceKm <= viewerRadius : false;
     // Beta fallback: do not exclude solely because GPS is missing.
     // If other hard constraints pass (shared sport + compatibility + safety checks), candidate may pass without distance.
-    const gpsMissingSharedSportFallback = !sameCity && !hasGpsDistance;
+    const gpsMissingSharedSportFallback =
+      sharedCount >= 1 && !sameCity && !hasGpsDistance;
     const locationAccepted = sameCity || insideRadius || gpsMissingSharedSportFallback;
     const distanceSource: "gps" | "missing_gps_shared_sport_fallback" = hasGpsDistance
       ? "gps"
@@ -564,16 +613,52 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
 
     const cityFallbackBoost = distanceKm == null && isSameCity(ctx.viewer.city, candidate.city) ? 12 : 0;
     const betaSharedSportsBoost = BETA_MODE ? sharedCount * 8 : 0;
-    const totalScore = (v3?.total ?? 0) + cityFallbackBoost + betaSharedSportsBoost;
-    const reasons: string[] = [`V3 ${Math.round(totalScore)} · ${sharedCount} sport(s) en commun`];
-    if (distanceKm != null && Number.isFinite(distanceKm))
-      reasons.push(`distance ${Math.round(distanceKm)} km`);
-    if (cityFallbackBoost > 0) reasons.push("même ville (fallback beta)");
-    if (gpsMissingSharedSportFallback) reasons.push("gps_missing_allowed_by_shared_sport_beta");
-    if (betaSharedSportsBoost > 0) reasons.push(`beta +${betaSharedSportsBoost} sports communs`);
-    // outside-radius candidates are now always excluded above
-    if (boostActive) reasons.push("Boost actif");
-    if (priorityActive) reasons.push("Priorité rencontre");
+    const crossSportSecondaryBonus =
+      sharedCount === 0 &&
+      discoverCrossSportSecondaryAllowed(ctx.viewer.sport_match_preference, candidate.sport_match_preference)
+        ? CROSS_SPORT_SECONDARY_SCORE_BONUS
+        : 0;
+    const totalScore = (v3?.total ?? 0) + cityFallbackBoost + betaSharedSportsBoost + crossSportSecondaryBonus;
+    const reasons: string[] = [];
+    if (sharedCount >= 1) {
+      reasons.push(
+        encodeDiscoverScoringReason("discover_scoring_v3_primary_shared", {
+          total: Math.round(totalScore),
+          shared: sharedCount,
+        }),
+      );
+    } else {
+      reasons.push(
+        encodeDiscoverScoringReason("discover_scoring_v3_primary_cross_secondary", {
+          total: Math.round(totalScore),
+        }),
+      );
+    }
+    if (distanceKm != null && Number.isFinite(distanceKm)) {
+      reasons.push(
+        encodeDiscoverScoringReason("discover_scoring_distance_km", { km: Math.round(distanceKm) }),
+      );
+    }
+    if (cityFallbackBoost > 0) reasons.push(encodeDiscoverScoringReason("discover_scoring_same_city_fallback_beta"));
+    if (gpsMissingSharedSportFallback) {
+      reasons.push(encodeDiscoverScoringReason("discover_scoring_gps_beta_shared_sport"));
+    }
+    if (crossSportSecondaryBonus > 0) {
+      reasons.push(
+        encodeDiscoverScoringReason("discover_scoring_cross_sport_bonus", {
+          bonus: crossSportSecondaryBonus,
+        }),
+      );
+    }
+    if (betaSharedSportsBoost > 0) {
+      reasons.push(
+        encodeDiscoverScoringReason("discover_scoring_beta_shared_sports_boost", {
+          pts: betaSharedSportsBoost,
+        }),
+      );
+    }
+    if (boostActive) reasons.push(encodeDiscoverScoringReason("discover_scoring_boost_active"));
+    if (priorityActive) reasons.push(encodeDiscoverScoringReason("discover_scoring_priority_meet"));
 
     if (import.meta.env.DEV && isDiscoverDiagHighlightName(candidate.first_name)) {
       console.info("[Discover diagnostics] scoring included (Bruno/Sofiane)", {
@@ -601,6 +686,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
   kept.sort((a, b) => {
     if (b.discoverScore !== a.discoverScore) return b.discoverScore - a.discoverScore;
     if (b.practice_score !== a.practice_score) return b.practice_score - a.practice_score;
+    if (b.commonSportsCount !== a.commonSportsCount) return b.commonSportsCount - a.commonSportsCount;
     const bActive = safeTimeMs(b.last_active_at);
     const aActive = safeTimeMs(a.last_active_at);
     if (bActive !== aActive) return bActive - aActive;

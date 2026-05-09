@@ -102,6 +102,7 @@ type Profile = {
   /** Ouverture pratique adaptée (migration 094+) */
   open_to_adapted_activities?: string | null;
   pref_open_to_adapted_activity?: boolean | null;
+  sport_match_preference?: string | null;
   sport_phrase?: string | null;
   sport_time?: string | null;
   /** Voir `profiles.is_photo_verified` (Veriff). */
@@ -787,7 +788,7 @@ const DISCOVER_DISPLAY_LIMIT = 10;
 /** Source Supabase du fil Discover (classement serveur) — repli côté client si colonne absente. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
 const DISCOVER_FALLBACK_SELECT =
-  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, sport_phrase, is_photo_verified, photo_status, identity_verified, veriff_status, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, sport_phrase, is_photo_verified, photo_status, identity_verified, veriff_status, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, sport_match_preference, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Message utilisateur sûr (aucun détail technique backend). */
 function discoverFetchFailedMsg(language: "fr" | "en"): string {
@@ -893,7 +894,7 @@ function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremiu
 
 /** Colonnes Discover depuis `public.profiles` uniquement — pas de colonnes optionnelles absentes en prod. */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, identity_verified, veriff_status, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, identity_verified, veriff_status, is_active_mode, sport_practice_type, sport_match_preference, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Profil viewer Discover : uniquement colonnes plates sur `profiles` (sports chargés séparément sur `profile_sports`). */
 const DISCOVER_VIEWER_ME_SELECT =
@@ -2093,7 +2094,9 @@ export default function Discover() {
         const hydrationIds = stage.map((p) => p.id).filter(Boolean);
         const { data: hydrationRows, error: hydrationErr } = await supabase
           .from("profiles")
-          .select("id, gender, looking_for, intent, profile_sports(sport_id, sports(id, slug, label))")
+          .select(
+            "id, birth_date, preferred_age_min, preferred_age_max, gender, looking_for, intent, sport_match_preference, profile_sports(sport_id, sports(id, slug, label))",
+          )
           .in("id", hydrationIds);
         if (hydrationErr) {
           console.warn("[Discover feed] candidate hydration batch:", hydrationErr.message);
@@ -2101,14 +2104,21 @@ export default function Discover() {
           const hydrationById = new Map<
             string,
             {
+              birth_date?: string | null;
+              preferred_age_min?: number | null;
+              preferred_age_max?: number | null;
               gender?: string | null;
               looking_for?: string | null;
               intent?: string | null;
               profile_sports?: Profile["profile_sports"];
+              sport_match_preference?: string | null;
             }
           >();
           for (const row of ((hydrationRows ?? []) as unknown[]) as Array<{
             id?: string;
+            birth_date?: string | null;
+            preferred_age_min?: unknown;
+            preferred_age_max?: unknown;
             gender?: string | null;
             looking_for?: string | null;
             intent?: string | null;
@@ -2120,10 +2130,23 @@ export default function Discover() {
               ? (row.profile_sports as Profile["profile_sports"])
               : [];
             hydrationById.set(pid, {
+              birth_date: typeof row.birth_date === "string" ? row.birth_date : null,
+              preferred_age_min:
+                typeof row.preferred_age_min === "number" && Number.isFinite(row.preferred_age_min)
+                  ? row.preferred_age_min
+                  : null,
+              preferred_age_max:
+                typeof row.preferred_age_max === "number" && Number.isFinite(row.preferred_age_max)
+                  ? row.preferred_age_max
+                  : null,
               gender: row.gender ?? null,
               looking_for: row.looking_for ?? null,
               intent: row.intent ?? null,
               profile_sports: normalizedProfileSports,
+              sport_match_preference:
+                typeof (row as { sport_match_preference?: unknown }).sport_match_preference === "string"
+                  ? String((row as { sport_match_preference?: string }).sport_match_preference)
+                  : null,
             });
           }
           stage = stage.map((p) => {
@@ -2131,10 +2154,14 @@ export default function Discover() {
             if (!h) return p;
             return {
               ...p,
+              birth_date: h.birth_date ?? p.birth_date ?? null,
+              preferred_age_min: h.preferred_age_min ?? (p as { preferred_age_min?: number | null }).preferred_age_min ?? null,
+              preferred_age_max: h.preferred_age_max ?? (p as { preferred_age_max?: number | null }).preferred_age_max ?? null,
               gender: h.gender ?? p.gender ?? null,
               looking_for: h.looking_for ?? p.looking_for ?? null,
               intent: h.intent ?? p.intent ?? null,
               profile_sports: h.profile_sports ?? p.profile_sports ?? [],
+              sport_match_preference: h.sport_match_preference ?? p.sport_match_preference ?? null,
             };
           });
 
@@ -2189,8 +2216,13 @@ export default function Discover() {
 
       if (import.meta.env.DEV) {
         console.info("[Discover diagnostics] candidates_before_scoring_filters", {
+          viewer_id: currentUserId,
           count: stage.length,
           candidates_after_query_before_pipeline: candidatesAfterQueryBeforeClientFilters,
+          after_outgoing_likes_blocks_matches_swipe_pipeline: stage.length,
+          outgoing_liked_target_count: likedIds.size,
+          blocked_count: blockExclude.size,
+          matched_exclude_count: matchedIds.size,
           ids: stage.map((p) => p.id),
           names: stage.map((p) => ({ id: p.id, first_name: p.first_name })),
         });
@@ -2222,6 +2254,7 @@ export default function Discover() {
             discovery_radius_km: meProfile.discovery_radius_km ?? null,
             open_to_adapted_activities: meAdapted.open_to_adapted_activities ?? null,
             pref_open_to_adapted_activity: meAdapted.pref_open_to_adapted_activity ?? null,
+            sport_match_preference: meProfile.sport_match_preference ?? null,
           },
           likedIds,
           matchedIds,
@@ -2367,8 +2400,17 @@ export default function Discover() {
                   ? "all candidates excluded by scoring filters"
                   : "no cards left after final ordering/slice";
           console.info("[Discover diagnostics] empty_candidates", {
+            viewer_id: currentUserId,
             stage: stageName,
             exclusion_reason: reason,
+            counts: {
+              raw_merged: profilesFromRpc.length,
+              after_client_pipeline: stage.length,
+              after_scoring: discoverFiltered.length,
+              final_slice: slice.length,
+            },
+            incoming_like_note:
+              "Outgoing likes use liker_id=viewer only; people who liked you are not excluded by the likes table.",
           });
         }
       }

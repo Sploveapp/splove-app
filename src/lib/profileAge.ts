@@ -86,7 +86,12 @@ export function isReciprocalAgeDiscoverMatch(
 ): boolean {
   const vAge = ageYearsFromBirthDate(viewer.birth_date ?? null, ref);
   const cAge = ageYearsFromBirthDate(candidate.birth_date ?? null, ref);
-  if (vAge === null || cAge === null) return false;
+  /** Âge inconnu d'un côté : on n'applique pas la réciproque stricte (sinon Discover peut se vider). */
+  if (vAge === null || cAge === null) {
+    if (vAge !== null && vAge < PROFILE_MIN_VISIBLE_AGE) return false;
+    if (cAge !== null && cAge < PROFILE_MIN_VISIBLE_AGE) return false;
+    return true;
+  }
   if (vAge < PROFILE_MIN_VISIBLE_AGE || cAge < PROFILE_MIN_VISIBLE_AGE) return false;
 
   const vPrefs = normalizePreferredAgeRange(viewer.preferred_age_min, viewer.preferred_age_max);
