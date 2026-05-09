@@ -89,6 +89,8 @@ const en = {
   manage_account: "Manage my account",
   use_current_location: "Use my current location",
   save_location: "Save location",
+  profile_location_geocode_failed:
+    "We couldn't place this city on the map. Refine the city or use your current location.",
   location: "Location",
   city: "City",
   search_radius_km: "Search radius (km)",
@@ -357,6 +359,7 @@ const en = {
   "photos.primary": "Primary photo",
   "photos.secondary": "Secondary photo",
   "photos.no_preview": "No preview",
+  "photos.file_too_large": "Photo too large. Maximum size: 10 MB.",
   "profile.bio_title": "Bio",
   "profile.bio_placeholder": "Tell us a bit about you...",
   "gender.female": "Woman",
@@ -793,6 +796,10 @@ const en = {
   onboarding_err_interested: "Indicate who you want to see.",
   onboarding_err_intent: "Pick an option.",
   onboarding_err_city: "Add your city or use your current location.",
+  location_city_pick_list_prompt:
+    "Pick your city from the list or refine your search to enable nearby profiles on Discover.",
+  location_city_pick_list_helper:
+    "Choose a suggestion or continue — we save an approximate position for Discover.",
   onboarding_err_radius: "Choose a search radius.",
   onboarding_err_sport_min: "Add at least one sport (sports step).",
   onboarding_err_sport_min_short: "Select at least one sport.",

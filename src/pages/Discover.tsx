@@ -1766,6 +1766,16 @@ export default function Discover() {
         intent: meProfile?.intent ?? (meRes.data as { intent?: string | null })?.intent ?? null,
       };
       if (import.meta.env.DEV) {
+        const vl =
+          typeof meProfile?.latitude === "number" && typeof meProfile?.longitude === "number"
+            ? Number.isFinite(meProfile.latitude) && Number.isFinite(meProfile.longitude)
+            : false;
+        console.info("[Discover diagnostics] viewer_gps_status", {
+          has_finite_coords: vl,
+          city: typeof meProfile?.city === "string" ? meProfile.city : null,
+          discovery_radius_km:
+            typeof meProfile?.discovery_radius_km === "number" ? meProfile.discovery_radius_km : null,
+        });
         console.log("[Discover] meProfile raw =", meProfile);
         console.log("[Discover] meProfile.intent raw =", meProfile?.intent);
         console.log("[Discover] parseProfileIntent result =", parseProfileIntent(meProfile?.intent));
@@ -1809,7 +1819,7 @@ export default function Discover() {
           feed_reason: row.feed_reason,
         }));
 
-      if (BETA_MODE || profilesFromRpc.length === 0) {
+      {
         const { data: fallbackRows, error: fallbackErr } = await supabase
           .from("profiles")
           .select(DISCOVER_FALLBACK_SELECT)

@@ -18,7 +18,7 @@ import {
   selectProfilesFirstMatch,
 } from "../lib/profileSelect";
 import { isProfileRecord } from "../lib/appProfile";
-import { reverseGeocodeCity } from "../lib/geocoding";
+import { forwardGeocodeFirst, reverseGeocodeCity, searchCitiesApprox } from "../lib/geocoding";
 import { getCurrentPositionCoords } from "../utils/geolocation";
 import {
   APP_BORDER,
@@ -568,6 +568,8 @@ export default function Onboarding() {
   const [obLocLng, setObLocLng] = useState<number | null>(null);
   const [obLocSource, setObLocSource] = useState<"manual" | "device" | null>(null);
   const [obLocGeoLoading, setObLocGeoLoading] = useState(false);
+  const [obCitySuggestions, setObCitySuggestions] = useState<{ label: string; lat: number; lng: number }[]>([]);
+  const [obCitySuggestLoading, setObCitySuggestLoading] = useState(false);
   const [sportsCatalog, setSportsCatalog] = useState<SportOption[]>([]);
   const [selectedSportIds, setSelectedSportIds] = useState<(string | number)[]>([]);
   const [selectedSports, setSelectedSports] = useState<SportOption[]>([]);
@@ -608,6 +610,30 @@ export default function Onboarding() {
   useEffect(() => {
     console.log("Onboarding variant:", onboardingVariant);
   }, [onboardingVariant]);
+
+  useEffect(() => {
+    if (step !== 4) {
+      setObCitySuggestions([]);
+      return;
+    }
+    const q = obLocCity.trim();
+    if (q.length < 3) {
+      setObCitySuggestions([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        setObCitySuggestLoading(true);
+        try {
+          const rows = await searchCitiesApprox(q);
+          setObCitySuggestions(rows);
+        } finally {
+          setObCitySuggestLoading(false);
+        }
+      })();
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [obLocCity, step]);
 
   function logDetailedError(
     step: string,
@@ -1214,7 +1240,9 @@ export default function Onboarding() {
   })();
 
   const locationReady =
-    (obLocCity.trim().length >= 2 || (obLocLat != null && obLocLng != null)) &&
+    obLocCity.trim().length >= 2 &&
+    obLocLat != null &&
+    obLocLng != null &&
     [10, 25, 50, 100].includes(obLocRadiusKm);
 
   const isPlanningStyleSelected = (value: typeof planningStyle): value is PlanningStyleValue =>
@@ -1251,7 +1279,8 @@ export default function Onboarding() {
     if (intent === "") return t("onboarding_err_intent");
     if (!locationReady) {
       if (![10, 25, 50, 100].includes(obLocRadiusKm)) return t("onboarding_err_radius");
-      return t("onboarding_err_city");
+      if (obLocCity.trim().length < 2) return t("onboarding_err_city");
+      return t("location_city_pick_list_prompt");
     }
     if (selectedSportIds.length < 1) return t("onboarding_err_sport_min");
     if (selectedSportIds.length > 3) return t("onboarding_err_sport_max");
@@ -1393,7 +1422,7 @@ export default function Onboarding() {
     setBirthDate(tryParseBirthIso(digits) ?? "");
   }
 
-  function validateStep(current: number): boolean {
+  function validateStep(current: number, locOverride?: { lat: number; lng: number } | null): boolean {
     setStepHint(null);
     if (current === 1) {
       if (!firstName.trim()) {
@@ -1431,9 +1460,21 @@ export default function Onboarding() {
     }
     if (current === 4) {
       const cityOk = obLocCity.trim().length >= 2;
-      const coordsOk = obLocLat != null && obLocLng != null;
-      if (!cityOk && !coordsOk) {
+      const latV = locOverride?.lat ?? obLocLat;
+      const lngV = locOverride?.lng ?? obLocLng;
+      const coordsOk =
+        latV != null &&
+        lngV != null &&
+        typeof latV === "number" &&
+        typeof lngV === "number" &&
+        Number.isFinite(latV) &&
+        Number.isFinite(lngV);
+      if (!cityOk) {
         setStepHint(t("onboarding_err_city"));
+        return false;
+      }
+      if (!coordsOk) {
+        setStepHint(t("location_city_pick_list_prompt"));
         return false;
       }
       if (![10, 25, 50, 100].includes(obLocRadiusKm)) {
@@ -1575,7 +1616,31 @@ export default function Onboarding() {
         return;
       }
     }
-    if (!validateStep(step)) return;
+    let step4LocOverride: { lat: number; lng: number } | undefined;
+    if (step === 4) {
+      const cityTrim = obLocCity.trim();
+      if (cityTrim.length < 2) {
+        setStepHint(t("onboarding_err_city"));
+        return;
+      }
+      if (![10, 25, 50, 100].includes(obLocRadiusKm)) {
+        setStepHint(t("onboarding_err_radius"));
+        return;
+      }
+      if (obLocLat == null || obLocLng == null) {
+        const resolved = await forwardGeocodeFirst(cityTrim);
+        if (!resolved) {
+          setStepHint(t("location_city_pick_list_prompt"));
+          return;
+        }
+        step4LocOverride = { lat: resolved.lat, lng: resolved.lng };
+        setObLocLat(resolved.lat);
+        setObLocLng(resolved.lng);
+        setObLocCity(resolved.label);
+        setObLocSource("manual");
+      }
+    }
+    if (!validateStep(step, step4LocOverride)) return;
     if (step === 8 && photoUploadingKind !== null) {
       setPhotoStepError(t("onboarding_photo_uploading"));
       return;
@@ -2574,10 +2639,42 @@ export default function Onboarding() {
                       onChange={(e) => {
                         setObLocCity(e.target.value);
                         setObLocSource(null);
+                        setObLocLat(null);
+                        setObLocLng(null);
                       }}
                       autoComplete="address-level2"
                       className={inputClassName}
                     />
+                    {obCitySuggestLoading ? (
+                      <p className="mt-1.5 text-xs text-app-muted">{t("loading")}</p>
+                    ) : null}
+                    {obCitySuggestions.length > 0 ? (
+                      <ul
+                        className="mt-2 max-h-40 overflow-y-auto rounded-xl border border-app-border bg-app-card py-1 text-sm shadow-sm"
+                        role="listbox"
+                        aria-label={t("city")}
+                      >
+                        {obCitySuggestions.map((sug) => (
+                          <li key={`${sug.lat}-${sug.lng}-${sug.label.slice(0, 48)}`}>
+                            <button
+                              type="button"
+                              className="w-full px-3 py-2.5 text-left font-medium text-app-text hover:bg-app-border/60"
+                              onClick={() => {
+                                setObLocCity(sug.label);
+                                setObLocLat(sug.lat);
+                                setObLocLng(sug.lng);
+                                setObLocSource("manual");
+                                setObCitySuggestions([]);
+                                setStepHint(null);
+                              }}
+                            >
+                              {sug.label}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    <p className="mt-2 text-xs leading-snug text-app-muted">{t("location_city_pick_list_helper")}</p>
                   </div>
                   <div>
                     <label className={labelClassName} htmlFor="ob-loc-radius">

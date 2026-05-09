@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
 import { useAuth } from "../contexts/AuthContext";
@@ -68,7 +68,7 @@ const PLANNING_OPTIONS = [
 ] as const;
 
 const PHOTO_BUCKET = "profile-photos";
-const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 const PHOTO_ACCEPT_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function mapDbIntentToUi(raw: unknown): (typeof INTENT_OPTIONS)[number]["value"] {
@@ -258,9 +258,39 @@ export default function EditProfile() {
     });
   }
 
+  function handlePortraitFileChange(e: ChangeEvent<HTMLInputElement>): void {
+    const file = e.target.files?.[0] ?? null;
+    if (!file) {
+      setPortraitFile(null);
+      return;
+    }
+    if (file.size > PHOTO_MAX_BYTES) {
+      setMessage(t("photos.file_too_large"));
+      e.target.value = "";
+      return;
+    }
+    setMessage(null);
+    setPortraitFile(file);
+  }
+
+  function handleBodyFileChange(e: ChangeEvent<HTMLInputElement>): void {
+    const file = e.target.files?.[0] ?? null;
+    if (!file) {
+      setBodyFile(null);
+      return;
+    }
+    if (file.size > PHOTO_MAX_BYTES) {
+      setMessage(t("photos.file_too_large"));
+      e.target.value = "";
+      return;
+    }
+    setMessage(null);
+    setBodyFile(file);
+  }
+
   async function uploadPhoto(userId: string, file: File, kind: "portrait" | "full"): Promise<string> {
     if (!PHOTO_ACCEPT_MIMES.has(file.type)) throw new Error("Formats acceptés : JPG, PNG, WebP.");
-    if (file.size > PHOTO_MAX_BYTES) throw new Error("Chaque photo doit faire 5 Mo maximum.");
+    if (file.size > PHOTO_MAX_BYTES) throw new Error(t("photos.file_too_large"));
     const ext = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
     const path = `${userId}/${kind}-${Date.now()}.${ext}`;
     const { error } = await supabase.storage.from(PHOTO_BUCKET).upload(path, file, {
@@ -515,6 +545,9 @@ export default function EditProfile() {
 
         <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 18 }}>
           <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>{t("photos.title")}</h2>
+          {loading ? (
+            <p style={{ margin: "0 0 12px", fontSize: 12, color: APP_TEXT_MUTED }}>{t("loading")}</p>
+          ) : null}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
             <div style={{ border: `1px solid ${APP_BORDER}`, borderRadius: 14, padding: 10, background: APP_BG }}>
               <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.primary")}</p>
@@ -546,11 +579,13 @@ export default function EditProfile() {
                 id="edit-profile-portrait-file"
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
-                onChange={(e) => setPortraitFile(e.target.files?.[0] ?? null)}
+                onChange={handlePortraitFileChange}
+                disabled={loading}
                 style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
               />
               <label
                 htmlFor="edit-profile-portrait-file"
+                aria-disabled={loading}
                 style={{
                   display: "inline-flex",
                   width: "100%",
@@ -562,7 +597,9 @@ export default function EditProfile() {
                   padding: "10px 12px",
                   fontSize: 13,
                   fontWeight: 600,
-                  cursor: "pointer",
+                  cursor: loading ? "default" : "pointer",
+                  opacity: loading ? 0.6 : 1,
+                  pointerEvents: loading ? "none" : "auto",
                 }}
               >
                 {t("replace_photo")}
@@ -598,11 +635,13 @@ export default function EditProfile() {
                 id="edit-profile-body-file"
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
-                onChange={(e) => setBodyFile(e.target.files?.[0] ?? null)}
+                onChange={handleBodyFileChange}
+                disabled={loading}
                 style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
               />
               <label
                 htmlFor="edit-profile-body-file"
+                aria-disabled={loading}
                 style={{
                   display: "inline-flex",
                   width: "100%",
@@ -614,7 +653,9 @@ export default function EditProfile() {
                   padding: "10px 12px",
                   fontSize: 13,
                   fontWeight: 600,
-                  cursor: "pointer",
+                  cursor: loading ? "default" : "pointer",
+                  opacity: loading ? 0.6 : 1,
+                  pointerEvents: loading ? "none" : "auto",
                 }}
               >
                 {t("replace_photo")}

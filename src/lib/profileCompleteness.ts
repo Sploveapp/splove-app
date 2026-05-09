@@ -64,9 +64,14 @@ export function isOnboardingComplete(profile: ProfileCompletenessInput | null | 
       profile.looking_for &&
       profile.intent
   );
-  const hasLocation =
-    Boolean(profile.city?.trim() && profile.city.trim().length >= 2) ||
-    (typeof profile.latitude === "number" && typeof profile.longitude === "number");
+  const hasCoords =
+    typeof profile.latitude === "number" &&
+    typeof profile.longitude === "number" &&
+    Number.isFinite(profile.latitude) &&
+    Number.isFinite(profile.longitude);
+  const hasCityText = Boolean(profile.city?.trim() && profile.city.trim().length >= 2);
+  /** Discover nécessite ville + coordonnées exploitables (RPC distance + classement). */
+  const hasLocation = hasCityText && hasCoords;
   const hasRadius = [10, 25, 50, 100].includes(Number(profile.discovery_radius_km ?? 0));
   const isAdult = Boolean(profile.birth_date && isAdultFromBirthIso(profile.birth_date));
   const hasPhotos = Boolean(profile.portrait_url?.trim() && profile.fullbody_url?.trim());

@@ -21,7 +21,7 @@ import {
 } from "../constants/theme";
 import { supabase } from "../lib/supabase";
 import { getCurrentPositionCoords } from "../utils/geolocation";
-import { reverseGeocodeCity } from "../lib/geocoding";
+import { forwardGeocodeFirst, reverseGeocodeCity } from "../lib/geocoding";
 import { updateProfileLocation } from "../lib/profileLocation";
 import { IconSignOut } from "../components/ui/Icon";
 
@@ -195,10 +195,20 @@ export default function Profile() {
           ? Math.round(radiusParsed)
           : 25;
       const pr = profile as Record<string, unknown>;
-      const lat = typeof pr.latitude === "number" && Number.isFinite(pr.latitude) ? pr.latitude : null;
-      const lng = typeof pr.longitude === "number" && Number.isFinite(pr.longitude) ? pr.longitude : null;
+      let lat = typeof pr.latitude === "number" && Number.isFinite(pr.latitude) ? pr.latitude : null;
+      let lng = typeof pr.longitude === "number" && Number.isFinite(pr.longitude) ? pr.longitude : null;
+      const cityTrim = locCity.trim();
+      if (cityTrim.length >= 2 && (lat == null || lng == null)) {
+        const resolved = await forwardGeocodeFirst(cityTrim);
+        if (!resolved) {
+          setLocMessage(t("profile_location_geocode_failed"));
+          return;
+        }
+        lat = resolved.lat;
+        lng = resolved.lng;
+      }
       const { error } = await updateProfileLocation(supabase, user.id, {
-        city: locCity.trim() || null,
+        city: cityTrim || null,
         latitude: lat,
         longitude: lng,
         discovery_radius_km: radiusFinal,
