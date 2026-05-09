@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { ACCESSIBILITY_PREF_BOTH_REQUIRED } from "../constants/copy";
 import { VerifiedBadge } from "../components/VerifiedBadge";
@@ -43,19 +43,10 @@ const sectionHeadingButtonStyle: CSSProperties = {
   fontWeight: 600,
   color: APP_TEXT,
 };
-import { CHAT_BUBBLE_COLOR_ORDER, CHAT_BUBBLE_COLORS } from "../constants/chatBubbleColors";
-import { getOwnMessageBubbleClassName } from "../lib/messageBubbleTheme";
 import { useTranslation } from "../i18n/useTranslation";
 import { buildAuthReferralLink, fetchGrowthProfileFields, type GrowthProfileRow } from "../services/referral.service";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import LanguageSwitcher from "../components/LanguageSwitcher";
-import {
-  DEFAULT_PREFERRED_AGE_MAX,
-  DEFAULT_PREFERRED_AGE_MIN,
-  normalizePreferredAgeRange,
-} from "../lib/profileAge";
-import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
-
 export default function Profile() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -97,26 +88,6 @@ export default function Profile() {
     if (!profile) return;
     const pr = profile as Record<string, unknown>;
     setPhraseDraft(typeof pr.sport_phrase === "string" ? pr.sport_phrase : "");
-  }, [profile]);
-
-  const preferredMeetingAgeBounds = useMemo(() => {
-    if (!profile) {
-      return normalizePreferredAgeRange(DEFAULT_PREFERRED_AGE_MIN, DEFAULT_PREFERRED_AGE_MAX);
-    }
-    const pr = profile as Record<string, unknown>;
-    function numPref(key: string, fb: number): number {
-      const v = pr[key];
-      if (typeof v === "number" && Number.isFinite(v)) return Math.round(v);
-      if (typeof v === "string" && v.trim()) {
-        const n = Number.parseInt(v.trim(), 10);
-        if (Number.isFinite(n)) return n;
-      }
-      return fb;
-    }
-    return normalizePreferredAgeRange(
-      numPref("preferred_age_min", DEFAULT_PREFERRED_AGE_MIN),
-      numPref("preferred_age_max", DEFAULT_PREFERRED_AGE_MAX),
-    );
   }, [profile]);
 
   useEffect(() => {
@@ -701,78 +672,6 @@ export default function Profile() {
             style={{
               background: APP_CARD,
               borderRadius: "20px",
-              padding: "24px",
-              boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
-              marginBottom: "20px",
-            }}
-          >
-            <h2
-              style={{
-                margin: "0 0 8px 0",
-                fontSize: "16px",
-                fontWeight: 600,
-                color: APP_TEXT,
-              }}
-            >
-              {t("profile_message_color_title")}
-            </h2>
-            <p
-              style={{
-                margin: "0 0 12px 0",
-                fontSize: "13px",
-                fontWeight: 500,
-                color: APP_TEXT_MUTED,
-                lineHeight: 1.45,
-              }}
-            >
-              {t("profile_message_color_desc_prefix")}{" "}
-              <strong style={{ color: APP_TEXT, fontWeight: 600 }}>{t("profile_message_color_desc_strong")}</strong>{" "}
-              {t("profile_message_color_desc_suffix")}
-            </p>
-            <p style={{ margin: "0 0 14px 0", fontSize: "13px", fontWeight: 500, color: APP_TEXT_MUTED }}>
-              <Link
-                to="/messages"
-                style={{ color: BRAND_BG, fontWeight: 600, textDecoration: "underline" }}
-              >
-                {t("profile_open_messages")}
-              </Link>
-            </p>
-            <p
-              style={{
-                margin: "0 0 10px 0",
-                fontSize: "12px",
-                fontWeight: 600,
-                color: APP_TEXT_MUTED,
-                letterSpacing: "0.02em",
-                textTransform: "uppercase",
-              }}
-            >
-              {t("profile_message_style_preview")}
-            </p>
-            <div
-              className="grid grid-cols-2 gap-3 sm:grid-cols-3"
-              aria-hidden="true"
-            >
-              {CHAT_BUBBLE_COLOR_ORDER.map((id) => (
-                <div
-                  key={id}
-                  className="flex flex-col items-stretch gap-2 rounded-xl border border-app-border/95 bg-app-card p-3 text-center"
-                >
-                  <div className="flex w-full min-w-0 justify-end">
-                    <div className={getOwnMessageBubbleClassName(id)}>{t("profile_message_preview_text")}</div>
-                  </div>
-                  <span className="text-center text-[12px] font-semibold text-app-text">
-                    {t(CHAT_BUBBLE_COLORS[id].label)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div
-            style={{
-              background: APP_CARD,
-              borderRadius: "20px",
               padding: "20px 24px",
               boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
               marginBottom: "20px",
@@ -919,16 +818,6 @@ export default function Profile() {
           </div>
 
           {/* Disabled temporarily: active meeting mode caused profile reload loop — whole "Mode rencontre active" card (title, description, toggle, countdown, error). */}
-
-          {user?.id ? (
-            <MeetingAgeRangePreferencesPanel
-              userId={user.id}
-              revisionKey={`${preferredMeetingAgeBounds.min}-${preferredMeetingAgeBounds.max}-${profile?.id ?? ""}`}
-              preferredMinResolved={preferredMeetingAgeBounds.min}
-              preferredMaxResolved={preferredMeetingAgeBounds.max}
-              onAfterSuccessfulSave={() => refetchProfile()}
-            />
-          ) : null}
 
           <div
             style={{
