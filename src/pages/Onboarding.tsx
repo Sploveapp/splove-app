@@ -38,6 +38,12 @@ import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
 import { stashPendingReferralCodeFromSearch, tryCompletePendingReferral } from "../services/referral.service";
 import {
+  DEFAULT_PREFERRED_AGE_MAX,
+  DEFAULT_PREFERRED_AGE_MIN,
+  PROFILE_MIN_VISIBLE_AGE,
+  normalizePreferredAgeRange,
+} from "../lib/profileAge";
+import {
   type EnergyOptionKey,
   normalizeIntensityForOnboardingHydrate,
   type OnboardingVariant,
@@ -153,6 +159,32 @@ function parseHydratedOpenToAdapted(raw: unknown): OpenToAdaptedPractice | "" {
   return (OPEN_TO_ADAPTED_VALUES as readonly string[]).includes(s) ? (s as OpenToAdaptedPractice) : "";
 }
 
+function preferredAgeFromDraftInputs(minStr: string, maxStr: string): { min: number; max: number } {
+  const amin = Number.parseInt(minStr.trim(), 10);
+  const amax = Number.parseInt(maxStr.trim(), 10);
+  return normalizePreferredAgeRange(
+    Number.isFinite(amin) ? amin : DEFAULT_PREFERRED_AGE_MIN,
+    Number.isFinite(amax) ? amax : DEFAULT_PREFERRED_AGE_MAX,
+  );
+}
+
+function hydratePreferredAgeStringsFromProfileRow(row: Record<string, unknown>): { minStr: string; maxStr: string } {
+  const readN = (key: string, fb: number) => {
+    const v = row[key];
+    if (typeof v === "number" && Number.isFinite(v)) return Math.round(v);
+    if (typeof v === "string" && v.trim()) {
+      const n = Number.parseInt(v.trim(), 10);
+      return Number.isFinite(n) ? n : fb;
+    }
+    return fb;
+  };
+  const r = normalizePreferredAgeRange(
+    readN("preferred_age_min", DEFAULT_PREFERRED_AGE_MIN),
+    readN("preferred_age_max", DEFAULT_PREFERRED_AGE_MAX),
+  );
+  return { minStr: String(r.min), maxStr: String(r.max) };
+}
+
 /** Hydrate Q1 uniquement si Q2 déjà renseignée (évite d’inferer un « Non » sur profils anciens). */
 function adaptedAmenagementsFromProfile(
   needs: unknown,
@@ -174,6 +206,8 @@ const OPTIONAL_PROFILE_COLUMNS = [
   "open_to_adapted_activities",
   "height_cm",
   "has_children",
+  "preferred_age_min",
+  "preferred_age_max",
 ] as const;
 
 function isMissingOptionalProfileColumnError(
@@ -503,6 +537,12 @@ export default function Onboarding() {
   const [birthInput, setBirthInput] = useState("");
   /** ISO `YYYY-MM-DD` uniquement si la date est complète et valide. */
   const [birthDate, setBirthDate] = useState("");
+  const [obPreferredAgeMinStr, setObPreferredAgeMinStr] = useState(
+    String(DEFAULT_PREFERRED_AGE_MIN),
+  );
+  const [obPreferredAgeMaxStr, setObPreferredAgeMaxStr] = useState(
+    String(DEFAULT_PREFERRED_AGE_MAX),
+  );
   const [gender, setGender] = useState("");
   const [interestedIn, setInterestedIn] = useState<InterestedInValue[]>([]);
   const [intent, setIntent] = useState<OnboardingIntentUiValue | "">("");
@@ -606,6 +646,9 @@ export default function Onboarding() {
         const heightCm = parseHeightCmInput(heightCmInput);
         payload.height_cm = heightCm;
         payload.has_children = hasChildrenForDb(hasChildrenChoice);
+        const pa = preferredAgeFromDraftInputs(obPreferredAgeMinStr, obPreferredAgeMaxStr);
+        payload.preferred_age_min = pa.min;
+        payload.preferred_age_max = pa.max;
       }
       if (currentStep >= 4) {
         const dbIntent = intent ? dbIntentFromUiIntent(intent) : null;
@@ -831,6 +874,9 @@ export default function Onboarding() {
           const [y, m, d] = isoBirth.split("-");
           setBirthInput(`${d}/${m}/${y}`);
         }
+        const apHydr = hydratePreferredAgeStringsFromProfileRow(row as Record<string, unknown>);
+        setObPreferredAgeMinStr(apHydr.minStr);
+        setObPreferredAgeMaxStr(apHydr.maxStr);
         setGender(String(row.gender ?? ""));
         setInterestedIn(normalizeInterestedInValues(row.looking_for));
         setIntent(uiIntentFromDbIntent(row.intent));
@@ -1136,6 +1182,18 @@ export default function Onboarding() {
     );
   }
 
+  const onboardingPreferredAgeDraftOk = (() => {
+    const aminRaw = Number.parseInt(obPreferredAgeMinStr.trim(), 10);
+    const amaxRaw = Number.parseInt(obPreferredAgeMaxStr.trim(), 10);
+    return (
+      Number.isFinite(aminRaw) &&
+      Number.isFinite(amaxRaw) &&
+      aminRaw >= PROFILE_MIN_VISIBLE_AGE &&
+      amaxRaw >= PROFILE_MIN_VISIBLE_AGE &&
+      aminRaw <= amaxRaw
+    );
+  })();
+
   const locationReady =
     (obLocCity.trim().length >= 2 || (obLocLat != null && obLocLng != null)) &&
     [10, 25, 50, 100].includes(obLocRadiusKm);
@@ -1148,6 +1206,7 @@ export default function Onboarding() {
     firstName.trim() !== "" &&
     birthDate !== "" &&
     isAdultFromBirthIso(birthDate) &&
+    onboardingPreferredAgeDraftOk &&
     gender !== "" &&
     interestedIn.length > 0 &&
     intent !== "" &&
@@ -1167,6 +1226,7 @@ export default function Onboarding() {
     if (firstName.trim() === "") return t("onboarding_err_first_name");
     if (birthDate === "") return t("onboarding_err_birth_incomplete");
     if (!isAdultFromBirthIso(birthDate)) return t("onboarding_err_age");
+    if (!onboardingPreferredAgeDraftOk) return t("profile_age_prefs_invalid");
     if (gender === "") return t("onboarding_err_gender");
     if (interestedIn.length === 0) return t("onboarding_err_interested");
     if (intent === "") return t("onboarding_err_intent");
@@ -1473,7 +1533,25 @@ export default function Onboarding() {
         return;
       }
       if (step1SubStep === 2) {
+        setStepHint(null);
+        const aminRaw = Number.parseInt(obPreferredAgeMinStr.trim(), 10);
+        const amaxRaw = Number.parseInt(obPreferredAgeMaxStr.trim(), 10);
+        if (
+          !Number.isFinite(aminRaw) ||
+          !Number.isFinite(amaxRaw) ||
+          aminRaw < PROFILE_MIN_VISIBLE_AGE ||
+          amaxRaw < PROFILE_MIN_VISIBLE_AGE ||
+          aminRaw > amaxRaw
+        ) {
+          setStepHint(t("profile_age_prefs_invalid"));
+          return;
+        }
         setStep1SubStep(3);
+        await saveOnboardingDraft(1);
+        return;
+      }
+      if (step1SubStep === 3) {
+        setStep1SubStep(4);
         await saveOnboardingDraft(1);
         return;
       }
@@ -1528,7 +1606,7 @@ export default function Onboarding() {
     }
     if (step === 2) {
       setStep(1);
-      setStep1SubStep(3);
+      setStep1SubStep(4);
       return;
     }
     setStep((s) => Math.max(1, s - 1));
@@ -1738,6 +1816,10 @@ export default function Onboarding() {
       const intentDbValue = dbIntentFromUiIntent(intent);
       const finalizedCompletionFlag = completionFlag;
 
+      const onboardingPreferredAge = preferredAgeFromDraftInputs(
+        obPreferredAgeMinStr,
+        obPreferredAgeMaxStr,
+      );
       const profilePayload: Record<string, unknown> = {
         id: authUserId,
         first_name: firstName.trim(),
@@ -1745,6 +1827,8 @@ export default function Onboarding() {
         gender,
         height_cm: parseHeightCmInput(heightCmInput),
         has_children: hasChildrenForDb(hasChildrenChoice),
+        preferred_age_min: onboardingPreferredAge.min,
+        preferred_age_max: onboardingPreferredAge.max,
         looking_for: serializeInterestedInValues(interestedIn),
         intent: intentDbValue,
         meet_pref: intentDbValue,
@@ -2129,7 +2213,7 @@ export default function Onboarding() {
             <div className="flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-app-muted">
               <span>
                 {t("onboarding_step_word")} {step}/{TOTAL_STEPS}
-                {step === 1 ? ` · ${step1SubStep + 1}/4` : ""}
+                {step === 1 ? ` · ${step1SubStep + 1}/5` : ""}
               </span>
               <span className="tabular-nums opacity-90">{Math.round((step / TOTAL_STEPS) * 100)}%</span>
             </div>
@@ -2172,6 +2256,7 @@ export default function Onboarding() {
                     [
                       "onboarding_step1_micro_name_title",
                       "onboarding_step1_micro_birth_title",
+                      "onboarding_step1_micro_age_pref_title",
                       "onboarding_step1_micro_height_title",
                       "onboarding_step1_micro_family_title",
                     ][step1SubStep] ?? "onboarding_step1_title",
@@ -2194,6 +2279,7 @@ export default function Onboarding() {
                     [
                       "onboarding_step1_micro_name_subtitle",
                       "onboarding_step1_micro_birth_subtitle",
+                      "onboarding_step1_micro_age_pref_subtitle",
                       "onboarding_step1_micro_height_subtitle",
                       "onboarding_step1_micro_family_subtitle",
                     ][step1SubStep] ?? "onboarding_step1_subtitle",
@@ -2276,6 +2362,64 @@ export default function Onboarding() {
                     </div>
                   ) : null}
                   {step1SubStep === 2 ? (
+                    <div className="space-y-4">
+                      <p className="text-[13px] font-semibold leading-snug text-app-text">{t("meet_prefs_age_heading")}</p>
+                      <p className="text-[12px] leading-relaxed text-app-muted">{t("meet_prefs_age_hint")}</p>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className={labelClassName} htmlFor="ob-pref-age-min">
+                            {t("meet_prefs_age_from_label")}
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              id="ob-pref-age-min"
+                              type="number"
+                              inputMode="numeric"
+                              min={PROFILE_MIN_VISIBLE_AGE}
+                              max={130}
+                              value={obPreferredAgeMinStr}
+                              onChange={(e) => {
+                                setStepHint(null);
+                                setObPreferredAgeMinStr(e.target.value);
+                              }}
+                              aria-label={`${t("meet_prefs_age_from_label")} ${t("meet_prefs_age_unit")}`}
+                              className={inputClassName}
+                              style={{ flex: 1 }}
+                            />
+                            <span className="shrink-0 text-[13px] font-medium text-app-muted">
+                              {t("meet_prefs_age_unit")}
+                            </span>
+                          </div>
+                        </div>
+                        <div>
+                          <label className={labelClassName} htmlFor="ob-pref-age-max">
+                            {t("meet_prefs_age_to_label")}
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              id="ob-pref-age-max"
+                              type="number"
+                              inputMode="numeric"
+                              min={PROFILE_MIN_VISIBLE_AGE}
+                              max={130}
+                              value={obPreferredAgeMaxStr}
+                              onChange={(e) => {
+                                setStepHint(null);
+                                setObPreferredAgeMaxStr(e.target.value);
+                              }}
+                              aria-label={`${t("meet_prefs_age_to_label")} ${t("meet_prefs_age_unit")}`}
+                              className={inputClassName}
+                              style={{ flex: 1 }}
+                            />
+                            <span className="shrink-0 text-[13px] font-medium text-app-muted">
+                              {t("meet_prefs_age_unit")}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                  {step1SubStep === 3 ? (
                     <div>
                       <label className={labelClassName} htmlFor="ob-height">
                         {t("onboarding_height_label")}
@@ -2298,7 +2442,7 @@ export default function Onboarding() {
                       />
                     </div>
                   ) : null}
-                  {step1SubStep === 3 ? (
+                  {step1SubStep === 4 ? (
                     <div>
                       <span className={labelClassName}>{t("onboarding_children_label")}</span>
                       <p className="mb-2 text-[12px] leading-relaxed text-app-muted">

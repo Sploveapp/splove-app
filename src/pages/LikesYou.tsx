@@ -35,10 +35,29 @@ export default function LikesYou() {
   const { user, profile, isAuthInitialized } = useAuth();
   const navigate = useNavigate();
   const currentUserId = isAuthInitialized && user?.id ? user.id : null;
+  const legacyProfilePrefs = profile as {
+    preferred_age_min?: number | string | null;
+    preferred_age_max?: number | string | null;
+  } | null;
+  const pam =
+    legacyProfilePrefs != null &&
+    legacyProfilePrefs.preferred_age_min != null &&
+    Number.isFinite(Number(legacyProfilePrefs.preferred_age_min))
+      ? Math.round(Number(legacyProfilePrefs.preferred_age_min))
+      : null;
+  const pamx =
+    legacyProfilePrefs != null &&
+    legacyProfilePrefs.preferred_age_max != null &&
+    Number.isFinite(Number(legacyProfilePrefs.preferred_age_max))
+      ? Math.round(Number(legacyProfilePrefs.preferred_age_max))
+      : null;
   const { list, setList, loading, error } = useLikesReceived(
     currentUserId,
     profile?.gender ?? null,
     profile?.looking_for ?? null,
+    profile?.birth_date ?? null,
+    pam,
+    pamx,
   );
 
   /** Seule source pour le map : le state du hook (déjà filtré côté service). */

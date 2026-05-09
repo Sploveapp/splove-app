@@ -45,6 +45,9 @@ export type Profile = {
   veriff_status?: string | null;
   portrait_rejection_code?: string | null;
   body_rejection_code?: string | null;
+  /** Âge préféré pour Discover — migrations `101_profiles_preferred_age_range.sql`. */
+  preferred_age_min?: number | null;
+  preferred_age_max?: number | null;
   /** Modération automatique (slots 1 = portrait, 2 = corps) — migration 058. */
   photo1_status?: string | null;
   photo2_status?: string | null;

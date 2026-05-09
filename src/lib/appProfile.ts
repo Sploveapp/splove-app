@@ -6,6 +6,8 @@ export type AppProfile = {
   id: string;
   profile_completed: boolean;
   birth_date?: string | null;
+  preferred_age_min?: number | null;
+  preferred_age_max?: number | null;
   first_name?: string | null;
   city?: string | null;
   /** Présent sur certaines payloads métier ; pas toujours une colonne `profiles`. */

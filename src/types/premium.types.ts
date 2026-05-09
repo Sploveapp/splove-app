@@ -71,6 +71,9 @@ export type ProfileInLikesYou = {
   id: string;
   first_name: string | null;
   city: string | null;
+  birth_date?: string | null;
+  preferred_age_min?: number | null;
+  preferred_age_max?: number | null;
   main_photo_url: string | null;
   portrait_url?: string | null;
   fullbody_url?: string | null;

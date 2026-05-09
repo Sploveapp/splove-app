@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase";
@@ -13,13 +13,39 @@ import {
   TEXT_ON_BRAND,
 } from "../constants/theme";
 import { useTranslation } from "../i18n/useTranslation";
+import {
+  DEFAULT_PREFERRED_AGE_MAX,
+  DEFAULT_PREFERRED_AGE_MIN,
+  normalizePreferredAgeRange,
+} from "../lib/profileAge";
+import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
 
 const CONFIRM_WORD = "SUPPRIMER";
 
 export default function AccountSettings() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { user, refetchProfile, signOut } = useAuth();
+  const { user, profile, refetchProfile, signOut } = useAuth();
+
+  const meetingPreferredAgeResolved = useMemo(() => {
+    if (!profile) {
+      return normalizePreferredAgeRange(DEFAULT_PREFERRED_AGE_MIN, DEFAULT_PREFERRED_AGE_MAX);
+    }
+    const pr = profile as Record<string, unknown>;
+    function numPref(key: string, fb: number): number {
+      const v = pr[key];
+      if (typeof v === "number" && Number.isFinite(v)) return Math.round(v);
+      if (typeof v === "string" && v.trim()) {
+        const n = Number.parseInt(v.trim(), 10);
+        if (Number.isFinite(n)) return n;
+      }
+      return fb;
+    }
+    return normalizePreferredAgeRange(
+      numPref("preferred_age_min", DEFAULT_PREFERRED_AGE_MIN),
+      numPref("preferred_age_max", DEFAULT_PREFERRED_AGE_MAX),
+    );
+  }, [profile]);
   const [pauseLoading, setPauseLoading] = useState(false);
   const [deactivateLoading, setDeactivateLoading] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -162,6 +188,16 @@ export default function AccountSettings() {
         >
           {t("invite_friend_header")}
         </button>
+
+        {user?.id ? (
+          <MeetingAgeRangePreferencesPanel
+            userId={user.id}
+            revisionKey={`settings-${meetingPreferredAgeResolved.min}-${meetingPreferredAgeResolved.max}-${profile?.id ?? ""}`}
+            preferredMinResolved={meetingPreferredAgeResolved.min}
+            preferredMaxResolved={meetingPreferredAgeResolved.max}
+            onAfterSuccessfulSave={() => refetchProfile()}
+          />
+        ) : null}
 
         <h1
           style={{

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { ACCESSIBILITY_PREF_BOTH_REQUIRED } from "../constants/copy";
@@ -28,7 +28,6 @@ import { IconSignOut } from "../components/ui/Icon";
 const SPORT_PHRASE_MAX_LEN = 120;
 
 const SPORT_PHRASE_SAVED_FLAG = "__phrase_saved__";
-
 const ACCESSIBILITY_SAVE_SUCCESS = "Preferences enregistrees.";
 
 const sectionHeadingButtonStyle: CSSProperties = {
@@ -50,6 +49,12 @@ import { useTranslation } from "../i18n/useTranslation";
 import { buildAuthReferralLink, fetchGrowthProfileFields, type GrowthProfileRow } from "../services/referral.service";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import LanguageSwitcher from "../components/LanguageSwitcher";
+import {
+  DEFAULT_PREFERRED_AGE_MAX,
+  DEFAULT_PREFERRED_AGE_MIN,
+  normalizePreferredAgeRange,
+} from "../lib/profileAge";
+import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
 
 export default function Profile() {
   const { t } = useTranslation();
@@ -92,6 +97,26 @@ export default function Profile() {
     if (!profile) return;
     const pr = profile as Record<string, unknown>;
     setPhraseDraft(typeof pr.sport_phrase === "string" ? pr.sport_phrase : "");
+  }, [profile]);
+
+  const preferredMeetingAgeBounds = useMemo(() => {
+    if (!profile) {
+      return normalizePreferredAgeRange(DEFAULT_PREFERRED_AGE_MIN, DEFAULT_PREFERRED_AGE_MAX);
+    }
+    const pr = profile as Record<string, unknown>;
+    function numPref(key: string, fb: number): number {
+      const v = pr[key];
+      if (typeof v === "number" && Number.isFinite(v)) return Math.round(v);
+      if (typeof v === "string" && v.trim()) {
+        const n = Number.parseInt(v.trim(), 10);
+        if (Number.isFinite(n)) return n;
+      }
+      return fb;
+    }
+    return normalizePreferredAgeRange(
+      numPref("preferred_age_min", DEFAULT_PREFERRED_AGE_MIN),
+      numPref("preferred_age_max", DEFAULT_PREFERRED_AGE_MAX),
+    );
   }, [profile]);
 
   useEffect(() => {
@@ -894,6 +919,16 @@ export default function Profile() {
           </div>
 
           {/* Disabled temporarily: active meeting mode caused profile reload loop — whole "Mode rencontre active" card (title, description, toggle, countdown, error). */}
+
+          {user?.id ? (
+            <MeetingAgeRangePreferencesPanel
+              userId={user.id}
+              revisionKey={`${preferredMeetingAgeBounds.min}-${preferredMeetingAgeBounds.max}-${profile?.id ?? ""}`}
+              preferredMinResolved={preferredMeetingAgeBounds.min}
+              preferredMaxResolved={preferredMeetingAgeBounds.max}
+              onAfterSuccessfulSave={() => refetchProfile()}
+            />
+          ) : null}
 
           <div
             style={{

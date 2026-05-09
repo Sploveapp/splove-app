@@ -63,6 +63,7 @@ import {
   type DiscoverRewindStatus,
 } from "../services/discoverSwipes.service";
 import { mergeOptionalProfileFields } from "../lib/profileSelect";
+import { asAgePreferenceScalar } from "../lib/profileAge";
 import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
 import ReferralCard from "../components/referral/ReferralCard";
 import ReferralModal from "../components/referral/ReferralModal";
@@ -786,7 +787,7 @@ const DISCOVER_DISPLAY_LIMIT = 10;
 /** Source Supabase du fil Discover (classement serveur) — repli côté client si colonne absente. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
 const DISCOVER_FALLBACK_SELECT =
-  "id, first_name, city, birth_date, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, sport_phrase, is_photo_verified, photo_status, identity_verified, veriff_status, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, sport_phrase, is_photo_verified, photo_status, identity_verified, veriff_status, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Message utilisateur sûr (aucun détail technique backend). */
 function discoverFetchFailedMsg(language: "fr" | "en"): string {
@@ -892,11 +893,11 @@ function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremiu
 
 /** Colonnes Discover depuis `public.profiles` uniquement — pas de colonnes optionnelles absentes en prod. */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, identity_verified, veriff_status, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, identity_verified, veriff_status, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Profil viewer Discover : uniquement colonnes plates sur `profiles` (sports chargés séparément sur `profile_sports`). */
 const DISCOVER_VIEWER_ME_SELECT =
-  "id, first_name, city, latitude, longitude, discovery_radius_km, gender, looking_for, intent, profile_completed, photo_status, portrait_url, fullbody_url, main_photo_url";
+  "id, first_name, city, latitude, longitude, discovery_radius_km, birth_date, preferred_age_min, preferred_age_max, gender, looking_for, intent, profile_completed, photo_status, portrait_url, fullbody_url, main_photo_url";
 
 /** Reconstruit une carte Discover après rewind (hors re-score filtre feed). */
 async function buildAffinityProfileForRewind(input: {
@@ -1215,6 +1216,15 @@ export default function Discover() {
   const viewerMeetActive =
     Boolean(profile) &&
     (profile as { is_active_mode?: boolean | null }).is_active_mode === true;
+  /** Recharge Discover après changement des préférences d’âge (profil auth `refetchProfile`). */
+  const discoverPreferredAgeFingerprint = [
+    profile && typeof profile === "object"
+      ? (profile as { preferred_age_min?: unknown }).preferred_age_min ?? "ø"
+      : "ø",
+    profile && typeof profile === "object"
+      ? (profile as { preferred_age_max?: unknown }).preferred_age_max ?? "ø"
+      : "ø",
+  ].join(":");
   const currentUserId = user?.id ?? "";
   const { hasPlus } = usePremium(currentUserId || null);
   const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
@@ -1632,7 +1642,7 @@ export default function Discover() {
     void loadProfiles().catch((e) => {
       console.error("[Discover diagnostics] loadProfiles rejected", e);
     });
-  }, [authLoading, user?.id]);
+  }, [authLoading, user?.id, discoverPreferredAgeFingerprint]);
 
   useEffect(() => {
     if (!hasPlus) return;
@@ -2194,6 +2204,16 @@ export default function Discover() {
             id: currentUserId,
             city: meProfile.city ?? null,
             profile_completed: meProfile.profile_completed ?? null,
+            birth_date:
+              typeof meProfile.birth_date === "string" && meProfile.birth_date.trim().length > 0
+                ? meProfile.birth_date.trim()
+                : null,
+            preferred_age_min: asAgePreferenceScalar(
+              (meProfile as { preferred_age_min?: unknown }).preferred_age_min,
+            ),
+            preferred_age_max: asAgePreferenceScalar(
+              (meProfile as { preferred_age_max?: unknown }).preferred_age_max,
+            ),
             gender: meProfile.gender ?? null,
             looking_for: meProfile.looking_for ?? null,
             intent: meProfile.intent ?? null,

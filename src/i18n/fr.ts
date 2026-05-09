@@ -92,6 +92,27 @@ const fr = {
   location: "Localisation",
   city: "Ville",
   search_radius_km: "Rayon de recherche (km)",
+  meet_prefs_section_title: "Mes préférences de rencontre",
+  meet_prefs_age_heading: "Âge des personnes que je souhaite rencontrer",
+  meet_prefs_age_hint:
+    "Préférences privées : elles ne s’affichent pas sur ta fiche. Elles servent uniquement au fil Discover (toujours en accord réciproque).",
+  meet_prefs_age_from_label: "De",
+  meet_prefs_age_to_label: "À",
+  meet_prefs_age_unit: "ans",
+  meet_prefs_save: "Enregistrer les préférences",
+  onboarding_step1_micro_age_pref_title: "Quel âge pour les rencontres ?",
+  onboarding_step1_micro_age_pref_subtitle:
+    "Les profils hors de cette fourchette n’apparaîtront pas — et ils ne verront pas la tienne non plus si leur plage ne te correspond pas.",
+
+  profile_age_prefs_title: "Âge préféré sur Discover",
+  profile_age_prefs_hint:
+    "On te montre des profils seulement si ton âge est dans leur préférence et le leur dans la tienne. Minimum légal : 18 ans.",
+  profile_age_min_label: "Âge minimum",
+  profile_age_max_label: "Âge maximum",
+  profile_age_prefs_save: "Enregistrer",
+  profile_age_prefs_saved: "Préférences d'âge enregistrées.",
+  profile_age_prefs_invalid:
+    "Vérifie les âges : minimum 18 ans, minimum inférieur ou égal au maximum.",
   no_distance_limit: "Pas de limite de distance",
   account: "Compte",
   account_manage_title: "Gérer mon compte",
@@ -676,8 +697,10 @@ const fr = {
   onboarding_step1_micro_family_hint: "Tu peux laisser vide et appuyer sur Suivant.",
   onboarding_pulse_step_1_micro_0: "Un prénom, et la suite devient plus humaine.",
   onboarding_pulse_step_1_micro_1: "Ici, tout le monde est majeur — pour des sorties alignées.",
-  onboarding_pulse_step_1_micro_2: "Ces infos restent discrètes — seulement si tu le souhaites.",
-  onboarding_pulse_step_1_micro_3: "Tu choisis ce que tu partages.",
+  onboarding_pulse_step_1_micro_2:
+    "Deux curseurs qui se parlent — toi aussi tu respectes leur tranche lorsqu’on te propose quelqu’un.",
+  onboarding_pulse_step_1_micro_3: "Ces infos restent discrètes — seulement si tu le souhaites.",
+  onboarding_pulse_step_1_micro_4: "Tu choisis ce que tu partages.",
   onboarding_step2_title: "Se rencontrer autour du sport.",
   onboarding_step2_subtitle: "Sans blabla. Du mouvement.",
   onboarding_step3_title: "Qui veux-tu croiser ?",

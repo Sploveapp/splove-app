@@ -168,6 +168,8 @@ export function isRecoverableUnknownColumnError(
  * `mergeOptionalProfileFields` (repli silencieux si colonne / cache / PGRST204).
  */
 export const OPTIONAL_PROFILE_FIELDS = [
+  "preferred_age_min",
+  "preferred_age_max",
   "needs_adapted_activities",
   "sport_time",
   "open_to_adapted_activities",

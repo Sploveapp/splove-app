@@ -3,6 +3,7 @@ import {
   filterLikeRowsByViewerPreference,
   logPreferenceCompatibilityPipeline,
 } from "../lib/matchingPreferences";
+import { asAgePreferenceScalar, isReciprocalAgeDiscoverMatch } from "../lib/profileAge";
 import type { LikeReceived, ProfileInLikesYou } from "../types/premium.types";
 import { fetchBlockedRelatedUserIds } from "./blocks.service";
 
@@ -16,7 +17,7 @@ export type CreateLikeRpcResult = {
 
 /** Colonnes stables pour liste Likes / preview (pas de `select *`). */
 export const LIKES_PROFILE_BATCH_SELECT =
-  "id, first_name, city, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, is_photo_verified, photo_status, identity_verified, veriff_status, profile_completed, is_active, is_paused, is_banned, deleted_at, profile_sports(sports(label, slug))";
+  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, is_photo_verified, photo_status, identity_verified, veriff_status, profile_completed, is_active, is_paused, is_banned, deleted_at, profile_sports(sports(label, slug))";
 
 const PROFILE_SELECT = LIKES_PROFILE_BATCH_SELECT;
 
@@ -44,6 +45,9 @@ function isLikeProfileVisible(raw: unknown): boolean {
 export type ViewerPreferenceFields = {
   gender: string | null | undefined;
   looking_for: string | null | undefined;
+  birth_date?: string | null | undefined;
+  preferred_age_min?: number | null | undefined;
+  preferred_age_max?: number | null | undefined;
 };
 
 /** Même source que Discover (`loadProfiles` lit `profiles` pour le viewer) ; repli Auth si ligne absente. */
@@ -65,6 +69,81 @@ function mergeViewerPreferences(
     gender: gDb ?? gAuth,
     looking_for: lDb ?? lAuth,
   };
+}
+
+function trimmedOrNull(raw: unknown): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  return s.length > 0 ? s : null;
+}
+
+function mergeViewerAgeForLikesYou(
+  fromDb: {
+    birth_date?: string | null;
+    preferred_age_min?: number | string | null;
+    preferred_age_max?: number | string | null;
+  } | null,
+  fromAuth: ViewerPreferenceFields | null | undefined,
+): {
+  birth_date: string | null;
+  preferred_age_min: number | null;
+  preferred_age_max: number | null;
+} {
+  const birth =
+    trimmedOrNull(fromDb?.birth_date) ??
+    trimmedOrNull(fromAuth?.birth_date ?? null);
+
+  function pickAgeNum(dbVal: unknown, authVal: unknown): number | null {
+    const fromAuthN =
+      typeof authVal === "number" && Number.isFinite(authVal)
+        ? Math.round(authVal)
+        : typeof authVal === "string"
+          ? Math.round(Number.parseFloat(authVal))
+          : Number.NaN;
+    const fromDbN =
+      typeof dbVal === "number" && Number.isFinite(dbVal)
+        ? Math.round(dbVal as number)
+        : typeof dbVal === "string"
+          ? Math.round(Number.parseFloat(String(dbVal)))
+          : Number.NaN;
+    const v = Number.isFinite(fromDbN) ? fromDbN : Number.isFinite(fromAuthN) ? fromAuthN : Number.NaN;
+    return Number.isFinite(v) ? v : null;
+  }
+
+  return {
+    birth_date: birth,
+    preferred_age_min: pickAgeNum(fromDb?.preferred_age_min, fromAuth?.preferred_age_min),
+    preferred_age_max: pickAgeNum(fromDb?.preferred_age_max, fromAuth?.preferred_age_max),
+  };
+}
+
+/** Même réciproque que Discover (`isReciprocalAgeDiscoverMatch`). */
+function filterLikeRowsByReciprocalAge<T extends { profile?: { birth_date?: string | null } & Record<string, unknown> | null | undefined }>(
+  viewerBirth: string | null,
+  viewerPreferredMin: number | null,
+  viewerPreferredMax: number | null,
+  rows: readonly T[],
+): T[] {
+  return rows.filter((row) => {
+    const p = row.profile;
+    if (!p || typeof p !== "object") return false;
+    return isReciprocalAgeDiscoverMatch(
+      {
+        birth_date: viewerBirth,
+        preferred_age_min: viewerPreferredMin,
+        preferred_age_max: viewerPreferredMax,
+      },
+      {
+        birth_date: typeof p.birth_date === "string" ? p.birth_date.trim() || null : null,
+        preferred_age_min: asAgePreferenceScalar(
+          (p as { preferred_age_min?: unknown }).preferred_age_min,
+        ),
+        preferred_age_max: asAgePreferenceScalar(
+          (p as { preferred_age_max?: unknown }).preferred_age_max,
+        ),
+      },
+    );
+  });
 }
 
 type IncomingLikeRow = {
@@ -162,7 +241,7 @@ export async function getLikesReceived(
 
   const { data: meRow, error: meErr } = await supabase
     .from("profiles")
-    .select("gender, looking_for")
+    .select("gender, looking_for, birth_date, preferred_age_min, preferred_age_max")
     .eq("id", currentUserId)
     .maybeSingle();
 
@@ -172,6 +251,15 @@ export async function getLikesReceived(
 
   const meForCompat = mergeViewerPreferences(
     meRow as { gender?: string | null; looking_for?: string | null } | null,
+    viewerFromAuth ?? null,
+  );
+
+  const meAgePrefs = mergeViewerAgeForLikesYou(
+    meRow as {
+      birth_date?: string | null;
+      preferred_age_min?: number | string | null;
+      preferred_age_max?: number | string | null;
+    } | null,
     viewerFromAuth ?? null,
   );
 
@@ -275,14 +363,27 @@ export async function getLikesReceived(
 
   const withVisibleProfilesOnly = mapped.filter((row) => isLikeProfileVisible(row.profile));
   const beforeCompat = withVisibleProfilesOnly.length;
-  const filtered = filterLikeRowsByViewerPreference(meForCompat, withVisibleProfilesOnly);
+  const afterGenderCompat = filterLikeRowsByViewerPreference(meForCompat, withVisibleProfilesOnly);
+  const filtered = filterLikeRowsByReciprocalAge(
+    meAgePrefs.birth_date,
+    meAgePrefs.preferred_age_min,
+    meAgePrefs.preferred_age_max,
+    afterGenderCompat,
+  );
   logPreferenceCompatibilityPipeline(
     "LikesYou",
     meForCompat,
     beforeCompat,
-    filtered.length,
-    filtered.map((r) => r.profile?.first_name?.trim() ?? "").filter(Boolean),
+    afterGenderCompat.length,
+    afterGenderCompat.map((r) => r.profile?.first_name?.trim() ?? "").filter(Boolean),
   );
+
+  if (import.meta.env.DEV) {
+    console.log("[likesYou] after reciprocal age filter", {
+      before_reciprocal_age: afterGenderCompat.length,
+      final: filtered.length,
+    });
+  }
   console.log("[VISIBLE_LIKES_COUNT] list_consistency", {
     incoming_raw: likesData.length,
     after_block_filter: visible.length,

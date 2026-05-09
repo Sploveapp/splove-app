@@ -1,10 +1,14 @@
 import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
 import { evaluateDiscoverV3, viewerOpenAdaptedResolved } from "../lib/discoverScoreV3";
 import { BETA_MODE } from "../constants/beta";
+import { asAgePreferenceScalar, isReciprocalAgeDiscoverMatch } from "../lib/profileAge";
 
 type DiscoverProfile = {
   id: string;
   first_name?: string | null;
+  birth_date?: string | null;
+  preferred_age_min?: number | string | null;
+  preferred_age_max?: number | string | null;
   city?: string | null;
   created_at?: string | null;
   last_active_at?: string | null;
@@ -31,6 +35,9 @@ type ViewerProfile = {
   id?: string | null;
   city?: string | null;
   profile_completed?: boolean | null;
+  birth_date?: string | null;
+  preferred_age_min?: number | string | null;
+  preferred_age_max?: number | string | null;
   gender?: string | null;
   looking_for?: string | null;
   intent?: string | null;
@@ -370,6 +377,21 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const themToMe = lookingForAcceptsGender(candidateLookingFor, viewerGender);
     if (!meToThem) excludedReasons.push("looking_for mismatch");
     if (!themToMe) excludedReasons.push("gender mismatch");
+
+    const candRec = candidate as { preferred_age_min?: unknown; preferred_age_max?: unknown };
+    const ageReciprocal = isReciprocalAgeDiscoverMatch(
+      {
+        birth_date: ctx.viewer.birth_date ?? null,
+        preferred_age_min: asAgePreferenceScalar(ctx.viewer.preferred_age_min),
+        preferred_age_max: asAgePreferenceScalar(ctx.viewer.preferred_age_max),
+      },
+      {
+        birth_date: candidate.birth_date ?? null,
+        preferred_age_min: asAgePreferenceScalar(candRec.preferred_age_min),
+        preferred_age_max: asAgePreferenceScalar(candRec.preferred_age_max),
+      },
+    );
+    if (!ageReciprocal) excludedReasons.push("age preference");
 
     const mismatchReasons: string[] = [];
     if (!meToThem) mismatchReasons.push("viewer_looking_for_does_not_accept_candidate_gender");

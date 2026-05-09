@@ -10,6 +10,9 @@ export function useLikesReceived(
   profileId: string | null,
   viewerGender?: string | null,
   viewerLookingFor?: string | null,
+  viewerBirthDate?: string | null,
+  viewerPreferredAgeMin?: number | null,
+  viewerPreferredAgeMax?: number | null,
 ) {
   const [list, setList] = useState<LikeReceived[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,6 +37,11 @@ export function useLikesReceived(
     void getLikesReceived(profileId, {
       gender: viewerGender ?? null,
       looking_for: viewerLookingFor ?? null,
+      birth_date: viewerBirthDate ?? null,
+      preferred_age_min:
+        viewerPreferredAgeMin !== undefined ? viewerPreferredAgeMin : undefined,
+      preferred_age_max:
+        viewerPreferredAgeMax !== undefined ? viewerPreferredAgeMax : undefined,
     })
       .then((data) => {
         if (seq !== fetchGenerationRef.current) return;
@@ -47,7 +55,14 @@ export function useLikesReceived(
         if (seq !== fetchGenerationRef.current) return;
         setLoading(false);
       });
-  }, [profileId, viewerGender, viewerLookingFor]);
+  }, [
+    profileId,
+    viewerGender,
+    viewerLookingFor,
+    viewerBirthDate,
+    viewerPreferredAgeMin,
+    viewerPreferredAgeMax,
+  ]);
 
   return { list, setList, loading, error };
 }
