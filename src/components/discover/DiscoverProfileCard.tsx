@@ -83,15 +83,10 @@ export type DiscoverProfileCardProps = {
   onReportPhoto: () => void;
   onPass: (decisionTimeMs?: number) => void;
   onLike: (decisionTimeMs?: number) => void | Promise<void>;
-  onUndo: () => void;
-  canUndo: boolean;
   onReport: () => void;
   /** Carte Discover plein focus — photo plus haute, rythme immersif. */
   immersive?: boolean;
 };
-
-const REWIND_BTN_BG = "#1F1F24";
-const REWIND_ACCENT = "#D1003F";
 
 export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   profile,
@@ -112,8 +107,6 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   onReportPhoto,
   onPass,
   onLike,
-  onUndo,
-  canUndo,
   onReport,
   immersive = false,
 }: DiscoverProfileCardProps) {
@@ -442,7 +435,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
             </p>
           </div>
 
-          <div className="pointer-events-auto relative z-[19] mt-6 flex items-center justify-between gap-3 px-6 sm:px-9">
+          <div className="pointer-events-auto relative z-[19] mt-6 flex items-center justify-center gap-14 px-6 sm:gap-16 sm:px-9">
             <motion.button
               type="button"
               whileTap={{ scale: 0.88 }}
@@ -456,25 +449,6 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
               aria-label={t("pass")}
             >
               <IconPass size={24} />
-            </motion.button>
-            <motion.button
-              type="button"
-              whileTap={{ scale: canUndo ? 0.9 : 1 }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (canUndo) onUndo();
-              }}
-              disabled={!canUndo}
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-lg shadow-lg backdrop-blur-sm disabled:cursor-not-allowed disabled:opacity-35"
-              style={{
-                backgroundColor: REWIND_BTN_BG,
-                color: REWIND_ACCENT,
-                boxShadow: `0 4px 20px rgba(0,0,0,0.45), 0 0 0 1px rgba(209,0,63,0.32)`,
-              }}
-              aria-label={t("discover_undo_action")}
-            >
-              <span aria-hidden>↩</span>
             </motion.button>
             <motion.button
               type="button"

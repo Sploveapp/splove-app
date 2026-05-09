@@ -2,6 +2,10 @@ import { type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { formatBadge } from "../../lib/formatBadge";
 import { useTranslation } from "../../i18n/useTranslation";
+import {
+  useDiscoverUndoNavState,
+  type DiscoverUndoNavState,
+} from "../../contexts/DiscoverUndoNavContext";
 
 const ACTIVE = "#FF3B3B";
 const INACTIVE = "#6B6B76";
@@ -10,6 +14,10 @@ const NAV_BORDER_TOP = "rgba(255,255,255,0.08)";
 /** Badges compteur : discret en production, rouge réservé à l’onglet actif */
 const BADGE_BG = "rgba(255,59,59,0.16)";
 const BADGE_TEXT = "#FCA5A5";
+const UNDO_ACCENT = "#C77DFF";
+const UNDO_BADGE_BG = "rgba(199,125,255,0.22)";
+const UNDO_BADGE_TEXT = "#E9D4FF";
+const UNDO_BADGE_BORDER = "rgba(199,125,255,0.45)";
 
 const ICON_PX = 24;
 const STROKE = 1.65;
@@ -50,6 +58,7 @@ export function SPLoveBottomNav({
   const navigate = useNavigate();
   const { t } = useTranslation();
   const path = activeRoute;
+  const discoverUndoNav = useDiscoverUndoNavState();
 
   const isDiscover = matchActiveDiscover(path);
   const isMessages = matchActiveMessages(path);
@@ -84,6 +93,7 @@ export function SPLoveBottomNav({
           icon={(c) => <DiscoverIcon color={c} />}
           onActivate={() => navigate("/discover")}
         />
+        <UndoBottomItem undo={discoverUndoNav} label={t("nav_tab_undo")} />
         <BottomItem
           label={t("nav_tab_likes")}
           ariaLabel={
@@ -143,6 +153,87 @@ type BottomItemProps = {
   indicator?: boolean;
   onActivate: () => void;
 };
+
+function UndoRewindIcon({ color }: { color: string }) {
+  return (
+    <svg aria-hidden width={ICON_PX} height={ICON_PX} viewBox="0 0 24 24" fill="none">
+      <path
+        d="M17.95 17.42A7.4 7.4 0 0 1 7.6 7.16 7.4 7.4 0 0 1 14.4 3.4"
+        stroke={color}
+        strokeWidth={STROKE}
+        strokeLinecap="round"
+      />
+      <path
+        d="M15.2 3.15h3.9v3.9"
+        stroke={color}
+        strokeWidth={STROKE}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function UndoBottomItem({
+  undo,
+  label,
+}: {
+  undo: DiscoverUndoNavState;
+  label: string;
+}) {
+  const enabled = undo.undoAvailable && !undo.undoBusy;
+  const stroke = enabled ? UNDO_ACCENT : INACTIVE;
+  const labelColor = enabled ? UNDO_ACCENT : INACTIVE;
+  const badge = undo.undoBadgeText?.trim();
+
+  const ariaBusy = undo.undoBusy;
+  let ariaLabel = label;
+  if (badge) ariaLabel = `${label}, ${badge}`;
+
+  return (
+    <button
+      type="button"
+      disabled={!undo.undoAvailable || undo.undoBusy}
+      style={{
+        WebkitTapHighlightColor: "transparent",
+        background: "transparent",
+        border: "none",
+        cursor: enabled && !undo.undoBusy ? "pointer" : "not-allowed",
+        opacity: undo.undoBusy ? 0.65 : undo.undoAvailable ? 1 : 0.45,
+        color: labelColor,
+      }}
+      aria-label={ariaLabel}
+      aria-busy={ariaBusy ? "true" : undefined}
+      className="flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 py-1 transition-[transform,opacity] duration-150 ease-out active:scale-[0.94] disabled:active:scale-100 [&:focus-visible]:outline [&:focus-visible]:outline-2 [&:focus-visible]:outline-offset-[-2px] [&:focus-visible]:outline-[#C77DFF]/35"
+      onClick={() => {
+        undo.triggerUndo();
+      }}
+    >
+      <span className="relative inline-flex shrink-0 items-center justify-center pb-1">
+        <UndoRewindIcon color={stroke} />
+        {badge ? (
+          <span
+            className="pointer-events-none absolute -right-1 -top-0.5 flex h-[16px] min-w-[16px] items-center justify-center rounded-full border px-1 text-[10px] font-semibold leading-none"
+            style={{
+              backgroundColor: UNDO_BADGE_BG,
+              borderColor: UNDO_BADGE_BORDER,
+              color: UNDO_BADGE_TEXT,
+            }}
+            aria-hidden
+          >
+            {badge}
+          </span>
+        ) : null}
+      </span>
+      <span
+        className="max-w-full truncate text-center text-[11px] font-medium tracking-tight transition-colors duration-150"
+        style={{ color: labelColor }}
+      >
+        {label}
+      </span>
+    </button>
+  );
+}
 
 function BottomItem({
   label,

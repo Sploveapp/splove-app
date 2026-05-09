@@ -3,6 +3,7 @@ import { Outlet, useLocation } from "react-router-dom";
 import { APP_BG } from "../constants/theme";
 import { GlobalHeader } from "./GlobalHeader";
 import { SPLoveBottomNav } from "./navigation/SPLoveBottomNav";
+import { DiscoverUndoNavProvider } from "../contexts/DiscoverUndoNavContext";
 import { useAuth } from "../contexts/AuthContext";
 import { fetchIncomingNonBlockedLikesCount } from "../services/likes.service";
 import { INBOX_REFRESH_EVENT } from "../constants";
@@ -170,28 +171,30 @@ export function AppLayout() {
   const shellBg = isMesRencontres ? "#F4F6F8" : APP_BG;
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        background: shellBg,
-      }}
-    >
-      {!isChat && !isMesRencontres ? <GlobalHeader inAppUnreadCount={inAppUnread} /> : null}
+    <DiscoverUndoNavProvider>
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          background: shellBg,
+        }}
+      >
+        {!isChat && !isMesRencontres ? <GlobalHeader inAppUnreadCount={inAppUnread} /> : null}
 
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <Outlet />
-      </div>
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <Outlet />
+        </div>
 
-      <div style={{ flexShrink: 0 }}>
-        <SPLoveBottomNav
-          activeRoute={location.pathname}
-          unreadMessagesCount={inboxCount}
-          likesCount={likesCount}
-          profileNeedsAction={!isProfileLoading && !isProfileComplete}
-        />
+        <div style={{ flexShrink: 0 }}>
+          <SPLoveBottomNav
+            activeRoute={location.pathname}
+            unreadMessagesCount={inboxCount}
+            likesCount={likesCount}
+            profileNeedsAction={!isProfileLoading && !isProfileComplete}
+          />
+        </div>
       </div>
-    </div>
+    </DiscoverUndoNavProvider>
   );
 }

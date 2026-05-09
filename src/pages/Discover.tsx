@@ -50,7 +50,8 @@ import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { DiscoverProfileCard } from "../components/discover/DiscoverProfileCard";
 import { EmptyDiscoverState } from "../components/discover/EmptyDiscoverState";
 import { ProfilePhotoViewerModal } from "../components/ProfilePhotoViewerModal";
-import { DiscoverRewindButton } from "../components/DiscoverRewindButton";
+import { useDiscoverUndoNavRegistration } from "../contexts/DiscoverUndoNavContext";
+import { IS_BETA_UNDO_FREE } from "../constants/discoverUndo";
 import { SecondChancePassCard } from "../components/SecondChancePassCard";
 import { SecondChanceMessageModal } from "../components/SecondChanceMessageModal";
 import { createSecondChanceRequest } from "../services/secondChance.service";
@@ -1004,6 +1005,11 @@ function isValidProfileId(id: string | null | undefined): id is string {
   return typeof id === "string" && PROFILE_ID_RE.test(id);
 }
 
+function isLastSwipeRewindable(last_action: string | null | undefined): boolean {
+  const a = String(last_action ?? "").toLowerCase();
+  return a === "pass" || a === "like";
+}
+
 function isFeedQueryColumnError(err: { message?: string; details?: string; code?: string } | null): boolean {
   if (!err) return false;
   if (err.code === "PGRST204" || err.code === "42703") return true;
@@ -1030,8 +1036,6 @@ type DiscoverSwipeCardProps = {
   onReport: (id: string) => void;
   onReportPhoto: (p: ProfileWithAffinity) => void;
   onBlock: (id: string) => void | Promise<void>;
-  handleUndo: () => void;
-  canUndo: boolean;
   restoredProfileId: string | null;
   /** Pile Discover — carte plein écran, focus émotionnel. */
   immersive?: boolean;
@@ -1049,8 +1053,6 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   onReport,
   onReportPhoto,
   onBlock,
-  handleUndo,
-  canUndo,
   restoredProfileId,
   immersive = false,
 }: DiscoverSwipeCardProps) {
@@ -1188,8 +1190,6 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
         onReportPhoto={() => onReportPhoto(profile)}
         onPass={(decisionTimeMs) => onPass(profile.id, decisionTimeMs)}
         onLike={(decisionTimeMs) => void onLike(profile, decisionTimeMs)}
-        onUndo={handleUndo}
-        canUndo={canUndo}
         onReport={() => onReport(profile.id)}
         immersive={immersive}
       />
@@ -1212,6 +1212,7 @@ export default function Discover() {
   };
   const navigate = useNavigate();
   const location = useLocation();
+  const setDiscoverUndoNav = useDiscoverUndoNavRegistration();
   const handledPreviewNavKeyRef = useRef<string | null>(null);
   const { user, session, isLoading: authLoading, profile, isProfileLoading, refetchProfile } = useAuth();
   const viewerMeetActive =
@@ -1262,6 +1263,8 @@ export default function Discover() {
   const [lastRestoredProfileId, setLastRestoredProfileId] = useState<string | null>(null);
   const [swipeHistory, setSwipeHistory] = useState<DiscoverSwipeHistoryEntry[]>([]);
   const swipeHistoryRef = useRef<DiscoverSwipeHistoryEntry[]>([]);
+  /** Dernière implémentation de handleUndoTap (hoisted) pour la nav basse sans dépendances instables. */
+  const undoTapLatestRef = useRef<() => Promise<void>>(async () => {});
   const [secondChanceTarget, setSecondChanceTarget] = useState<ProfileWithAffinity | null>(null);
   const [secondChanceModalOpen, setSecondChanceModalOpen] = useState(false);
   const [secondChanceToast, setSecondChanceToast] = useState<string | null>(null);
@@ -1269,12 +1272,12 @@ export default function Discover() {
     swipeHistoryRef.current = swipeHistory;
   }, [swipeHistory]);
 
-  /** Dernière interaction annulable côté serveur uniquement après un pass (pas un like). */
+  /** Dernière interaction annulable côté serveur : passe ou like, pas match. */
   const canUndo = useMemo(() => {
     if (!rewindStatus) return false;
     if (rewindStatus.last_is_match) return false;
     if (!rewindStatus.last_swipe_at) return false;
-    return String(rewindStatus.last_action ?? "").toLowerCase() === "pass";
+    return isLastSwipeRewindable(rewindStatus.last_action);
   }, [rewindStatus]);
   const [crossingsOpen, setCrossingsOpen] = useState(false);
   const [crossingsLoading, setCrossingsLoading] = useState(false);
@@ -2657,19 +2660,7 @@ export default function Discover() {
     setPreviewProfile(null);
   };
 
-  const rewindBarHint = useMemo(() => {
-    if (!rewindStatus) return null;
-    if (rewindStatus.suggest_paywall && !rewindStatus.can_rewind) {
-      return t("discover_rewind_paywall_hint");
-    }
-    const n = typeof rewindStatus.undo_credits === "number" ? rewindStatus.undo_credits : 0;
-    if (n > 0) {
-      return t("discover_rewind_credits", { n });
-    }
-    return null;
-  }, [rewindStatus, t]);
-
-  /** Retour (rewind) : si droit ou crédit → `handleRewind` ; sinon écran SPLove+ (fonction Retour). */
+  /** Retour (rewind) : gratuit tant que IS_BETA_UNDO_FREE ; sinon redirection SPLove+ sans crédit. */
   async function handleUndoTap() {
     if (!currentUserId || rewindBusy) return;
     const latest = await getDiscoverRewindStatus();
@@ -2678,12 +2669,13 @@ export default function Discover() {
     if (
       !latest?.last_swipe_at ||
       latest.last_is_match ||
-      String(latest.last_action ?? "").toLowerCase() !== "pass"
+      !isLastSwipeRewindable(latest.last_action)
     ) {
+      setRewindToast(t("nav_undo_none_soft"));
       return;
     }
 
-    if (!latest.can_rewind) {
+    if (!IS_BETA_UNDO_FREE && !latest.can_rewind) {
       navigate("/splove-plus", { state: { sploveHighlightFeature: "undo_swipe_return" } });
       return;
     }
@@ -2792,6 +2784,33 @@ export default function Discover() {
     }
     void runRewindFlow(last);
   }
+
+  undoTapLatestRef.current = handleUndoTap;
+
+  const onDiscoverShell = location.pathname === "/discover" || location.pathname === "/";
+
+  useEffect(() => {
+    if (!onDiscoverShell || !currentUserId) {
+      setDiscoverUndoNav(null);
+      return;
+    }
+    const discoverReady = Boolean(!errorMessage && !loading);
+    setDiscoverUndoNav({
+      undoAvailable: discoverReady && canUndo,
+      undoBadgeText: discoverReady && canUndo ? "1" : null,
+      undoBusy: rewindBusy,
+      triggerUndo: () => void undoTapLatestRef.current(),
+    });
+    return () => setDiscoverUndoNav(null);
+  }, [
+    onDiscoverShell,
+    currentUserId,
+    canUndo,
+    rewindBusy,
+    errorMessage,
+    loading,
+    setDiscoverUndoNav,
+  ]);
 
   if (!authLoading && user?.id && isProfileLoading) {
     return (
@@ -2918,6 +2937,7 @@ export default function Discover() {
                 <p className="mx-auto max-w-[22rem] text-[12px] text-amber-100/90">{rewindError}</p>
               ) : null}
               {rewindStatus &&
+              !IS_BETA_UNDO_FREE &&
               !rewindStatus.has_premium &&
               !rewindStatus.can_rewind &&
               (rewindStatus.reason === "time_window" || rewindStatus.reason === "rewind_rate") &&
@@ -3099,8 +3119,6 @@ export default function Discover() {
                   onReport={setReportProfileId}
                   onReportPhoto={openReportPhotoFromDiscover}
                   onBlock={handleBlock}
-                  handleUndo={() => void handleUndoTap()}
-                  canUndo={canUndo}
                   restoredProfileId={restoredProfileId}
                   immersive
                 />
@@ -3247,17 +3265,6 @@ export default function Discover() {
           void refetchProfile();
         }}
       />
-
-      {currentUserId && !errorMessage && !loading && canUndo ? (
-        <DiscoverRewindButton
-          onRewind={() => void handleUndoTap()}
-          disabled={rewindBusy}
-          busy={rewindBusy}
-          actionLabel={t("discover_undo_action")}
-          hint={rewindBarHint}
-          aria-label={t("discover_undo_action")}
-        />
-      ) : null}
 
       {rewindToast ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-24 z-[92] flex justify-center px-4">
