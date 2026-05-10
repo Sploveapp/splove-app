@@ -589,6 +589,7 @@ export default function Onboarding() {
   const [error, setError] = useState<string | null>(null);
   const [optionalProfileWarning, setOptionalProfileWarning] = useState<string | null>(null);
   const [hydratingDraft, setHydratingDraft] = useState(false);
+  const [photoStepDraftSaving, setPhotoStepDraftSaving] = useState(false);
   const hydratedDraftRef = useRef(false);
 
   useEffect(() => {
@@ -1242,7 +1243,11 @@ export default function Onboarding() {
   const onboardingBodySavedOk = bodySavedUrl.trim() !== "";
   const onboardingPhotosCanProceed =
     onboardingPortraitSavedOk && onboardingBodySavedOk && photoUploadingKind === null;
-  const onboardingPhotosNeitherSavedYet = !onboardingPortraitSavedOk && !onboardingBodySavedOk;
+  const onboardingShowPhotoSploveReminder =
+    photoUploadingKind === null &&
+    !photoStepDraftSaving &&
+    !photoStepError &&
+    !onboardingPhotosCanProceed;
 
   const canSubmit =
     firstName.trim() !== "" &&
@@ -1516,7 +1521,7 @@ export default function Onboarding() {
         return false;
       }
       if (!bodyFile && bodySavedUrl.trim() === "") {
-        setPhotoStepError(t("onboarding_photo_second_required"));
+        setPhotoStepError(t("onboarding_photo_add_at_least_one"));
         return false;
       }
       setPhotoStepError(null);
@@ -1545,6 +1550,7 @@ export default function Onboarding() {
   }
 
   async function goNext() {
+    if (photoStepDraftSaving) return;
     if (authLoading || !user?.id) {
       console.warn("[Onboarding] next step blocked", {
         reason: authLoading ? "authLoading" : "no user",
@@ -1639,9 +1645,15 @@ export default function Onboarding() {
     setOptionalProfileWarning(null);
     if (step !== 9) setPhotoStepError(null);
     setModerationSuccessNote(null);
-    await saveOnboardingDraft(step);
-    if (step === 1) setStep1SubStep(0);
-    setStep((s) => Math.min(TOTAL_STEPS, s + 1));
+    const stepBeforeSave = step;
+    if (stepBeforeSave === 9) setPhotoStepDraftSaving(true);
+    try {
+      await saveOnboardingDraft(stepBeforeSave);
+      if (stepBeforeSave === 1) setStep1SubStep(0);
+      setStep((s) => Math.min(TOTAL_STEPS, s + 1));
+    } finally {
+      if (stepBeforeSave === 9) setPhotoStepDraftSaving(false);
+    }
   }
 
   async function handleObUseDeviceLocation() {
@@ -1670,6 +1682,7 @@ export default function Onboarding() {
   function goBack() {
     setStepHint(null);
     setPhotoStepError(null);
+    setPhotoStepDraftSaving(false);
     setModerationSuccessNote(null);
     if (step === 1 && step1SubStep > 0) {
       setStep1SubStep((s) => s - 1);
@@ -1685,11 +1698,18 @@ export default function Onboarding() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (loading || onboardingSubmitInFlightRef.current) {
+      return;
+    }
     if (authLoading) {
       console.warn("[Onboarding] final submit blocked: authLoading");
       return;
     }
-    
+
+    let onboardingResolvedUserId: string | undefined;
+
+    onboardingSubmitInFlightRef.current = true;
+    try {
     const stillAuthenticated = await syncAuthSession();
     console.log("[Onboarding] syncAuthSession", stillAuthenticated);
     
@@ -1700,9 +1720,10 @@ export default function Onboarding() {
     
     console.log("[Onboarding] getUser", { freshUser, getUserError });
     
-    const authUser = freshUser ?? user;
-    
-    if (getUserError || !authUser?.id) {
+    onboardingResolvedUserId = (freshUser ?? user)?.id;
+
+    if (getUserError || !onboardingResolvedUserId) {
+      onboardingSubmitInFlightRef.current = false;
       console.warn("[Onboarding] final submit: no authenticated user after refresh", getUserError);
       alert(t("onboarding_err_session"));
       navigate("/auth", { replace: true });
@@ -1710,6 +1731,7 @@ export default function Onboarding() {
     }
     console.log("[Onboarding] final submit start");
     if (!canSubmit) {
+      onboardingSubmitInFlightRef.current = false;
       const hint = getCanSubmitBlockReason() ?? t("onboarding_err_submit_incomplete");
       setStepHint(hint);
       console.error("[Onboarding submit] blocked: canSubmit false", { reason: hint });
@@ -1717,34 +1739,43 @@ export default function Onboarding() {
     }
     for (let s = 1; s <= TOTAL_STEPS; s++) {
       if (!validateStep(s)) {
+        onboardingSubmitInFlightRef.current = false;
         setStep(s);
         if (s === 1) setStep1SubStep(0);
         return;
       }
     }
     if ((portraitSavedUrl.trim() === "" && !portraitFile) || (bodySavedUrl.trim() === "" && !bodyFile)) {
+      onboardingSubmitInFlightRef.current = false;
       setPhotoStepError(
         portraitSavedUrl.trim() === "" && !portraitFile ? t("onboarding_avatar_required") : t("onboarding_fullbody_required")
       );
       setStep(9);
       return;
     }
+    } catch (bootstrapErr) {
+      onboardingSubmitInFlightRef.current = false;
+      logDetailedError("handleSubmit bootstrap", bootstrapErr);
+      console.error("[Onboarding submit] bootstrap error", bootstrapErr);
+      setError(t("onboarding_error_profile_gate"));
+      return;
+    }
 
     setError(null);
     setStepHint(null);
     setPhotoStepError(null);
-    setLoading(true);
 
     if (!isAdultFromBirthIso(birthDate)) {
-      setLoading(false);
+      onboardingSubmitInFlightRef.current = false;
       setError(t("onboarding_error_age_gate"));
       console.error("[Onboarding submit] blocked: under minimum age");
       return;
     }
 
-    const authUserId = authUser.id;
+    setLoading(true);
 
-    onboardingSubmitInFlightRef.current = true;
+    const authUserId = onboardingResolvedUserId;
+
     try {
       console.log("[Onboarding submit] start", {
         userId: authUserId,
@@ -1995,7 +2026,7 @@ export default function Onboarding() {
         };
         let { error: bailErr } = await supabase
           .from("profiles")
-          .upsert({ ...failPayload, id: authUser.id }, { onConflict: "id" });
+          .upsert({ ...failPayload, id: authUserId }, { onConflict: "id" });
         if (bailErr) {
           const missingColumns = getMissingOptionalProfileColumns(bailErr);
           if (missingColumns.length > 0) {
@@ -2007,7 +2038,7 @@ export default function Onboarding() {
             const failPayloadFallback = stripOptionalProfileColumnsFromPayload(failPayload, missingColumns);
             ({ error: bailErr } = await supabase
               .from("profiles")
-              .upsert({ ...failPayloadFallback, id: authUser.id }, { onConflict: "id" }));
+              .upsert({ ...failPayloadFallback, id: authUserId }, { onConflict: "id" }));
           }
         }
         if (bailErr) {
@@ -2054,7 +2085,7 @@ export default function Onboarding() {
           .upsert(
             {
               ...payloadForUpsert,
-              id: authUser.id,
+              id: authUserId,
             },
             { onConflict: "id" }
           )
@@ -2087,7 +2118,7 @@ export default function Onboarding() {
           const upsertOnlyCheck = await supabase.from("profiles").upsert(
             {
               ...payloadForUpsert,
-              id: authUser.id,
+              id: authUserId,
             },
             { onConflict: "id" }
           );
@@ -2270,8 +2301,11 @@ export default function Onboarding() {
         upsertRow.profile_completed === true;
       if (!gateOk) {
         console.error("[Onboarding submit] verdict: upsert OK + select OK but gating KO");
-        console.error("[Onboarding submit] gating incomplet après upsert", {
+        console.error("[Onboarding submit] gating incomplet après upsert — détail diagnostic", {
           profile_completed: upsertRow.profile_completed,
+          reload_profile_completed:
+            (profileReloadRow as { profile_completed?: unknown } | null)?.profile_completed ?? null,
+          refreshed_profile_completed: refreshedProfile?.profile_completed ?? null,
           birth_date: upsertRow.birth_date,
         });
         setError(t("onboarding_error_profile_gate"));
@@ -2305,7 +2339,8 @@ export default function Onboarding() {
     } catch (err) {
       logDetailedError("handleSubmit catch", err);
       console.error("ONBOARDING_SAVE_ERROR", err);
-      setError(t("onboarding_error_generic"));
+      console.error("[Onboarding submit] erreur technique (catch)", err);
+      setError(t("onboarding_error_profile_gate"));
     } finally {
       onboardingSubmitInFlightRef.current = false;
       console.log("[Onboarding submit] end");
@@ -3068,7 +3103,11 @@ export default function Onboarding() {
 
               {step === 9 && (
                 <div className="space-y-4">
-                  {photoUploadingKind ? (
+                  {photoStepDraftSaving ? (
+                    <p className="rounded-lg border border-app-border bg-app-bg/70 px-3 py-2 text-sm font-medium text-app-text" aria-live="polite">
+                      {t("onboarding_photo_saving_persist")}
+                    </p>
+                  ) : photoUploadingKind ? (
                     <p className="rounded-lg border border-app-border bg-app-bg/70 px-3 py-2 text-sm font-medium text-app-text" aria-live="polite">
                       {t("onboarding_photo_upload_progress")}
                     </p>
@@ -3076,8 +3115,10 @@ export default function Onboarding() {
                     <p className="rounded-lg border border-red-100 bg-red-50/90 px-3 py-2 text-sm text-red-700" role="alert">
                       {photoStepError}
                     </p>
-                  ) : onboardingPhotosNeitherSavedYet ? (
-                    <p className="rounded-lg border border-app-border bg-app-card px-3 py-2 text-sm font-medium text-app-text">{t("onboarding_photo_add_at_least_one")}</p>
+                  ) : onboardingShowPhotoSploveReminder ? (
+                    <p className="px-1 text-sm font-semibold leading-snug" style={{ color: BRAND_BG }}>
+                      {t("onboarding_photo_add_at_least_one")}
+                    </p>
                   ) : null}
 
                   <div className="space-y-3">
@@ -3294,17 +3335,23 @@ export default function Onboarding() {
                   <button
                     type="button"
                     onClick={() => void goNext()}
-                    disabled={authLoading || (step === 9 && !onboardingPhotosCanProceed)}
+                    disabled={
+                      authLoading ||
+                      photoStepDraftSaving ||
+                      (step === 9 && !onboardingPhotosCanProceed)
+                    }
                     className="flex-1 rounded-2xl py-3.5 text-sm font-semibold text-white shadow-md transition-[transform,box-shadow] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"
                     style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
                   >
-                    {step === 4
-                      ? t("onboarding_cta_save_location")
-                      : step === 5
-                        ? t("continue")
-                        : step === 10
+                    {step === 9 && photoStepDraftSaving
+                      ? t("onboarding_next_please_wait")
+                      : step === 4
+                        ? t("onboarding_cta_save_location")
+                        : step === 5
                           ? t("continue")
-                          : t("next")}
+                          : step === 10
+                            ? t("continue")
+                            : t("next")}
                   </button>
                 ) : (
                   <button
@@ -3316,7 +3363,7 @@ export default function Onboarding() {
                       color: TEXT_ON_BRAND,
                     }}
                   >
-                    {loading ? t("loading") : t("onboarding_final_cta_go")}
+                    {loading ? t("onboarding_final_validating") : t("onboarding_final_cta_go")}
                   </button>
                 )}
               </div>

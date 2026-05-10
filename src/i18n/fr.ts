@@ -848,9 +848,11 @@ const fr = {
   onboarding_err_terms: "Accepte les conditions et la politique de confidentialité.",
   onboarding_err_photo_format: "Formats acceptés : JPG, PNG ou WebP.",
   onboarding_err_photo_size: "Chaque photo doit faire 5 Mo maximum.",
-  onboarding_photo_add_at_least_one: "Ajoute au moins une photo pour continuer",
-  onboarding_photo_second_required:
-    "Ajoute aussi ta photo en pied pour continuer — deux visuels nous aident à te présenter sérieusement.",
+  onboarding_photo_add_at_least_one: "Ajoute tes 2 photos pour continuer.",
+  onboarding_photo_second_required: "Ajoute tes 2 photos pour continuer.",
+  onboarding_photo_saving_persist: "Enregistrement des photos…",
+  onboarding_next_please_wait: "Patiente…",
+  onboarding_final_validating: "Validation…",
   onboarding_photo_upload_progress: "Téléchargement de la photo...",
   onboarding_photo_err_max_size_mb:
     "Photo trop volumineuse — maximum {{maxMb}} Mo",
@@ -867,7 +869,8 @@ const fr = {
   onboarding_error_profile_save: "Erreur lors de l'enregistrement du profil.",
   onboarding_error_profile_incomplete: "Réponse serveur incomplète après enregistrement. Réessaie.",
   onboarding_error_sports_save: "Impossible d'enregistrer vos sports pour le moment.",
-  onboarding_error_profile_gate: "Le profil n'a pas pu être validé. Réessaie ou rafraîchis la page.",
+  onboarding_error_profile_gate:
+    "Ton profil n'a pas pu être validé. Vérifie que toutes les étapes obligatoires sont complètes, puis réessaie.",
   onboarding_error_generic: "Une erreur est survenue. Réessaie.",
   onboarding_hydrating: "Restauration de ta progression...",
   onboarding_dev_veriff_note: "Vérification Veriff prête (non bloquante) — activable après onboarding.",
