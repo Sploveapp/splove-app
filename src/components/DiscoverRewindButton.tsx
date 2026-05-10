@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes } from "react";
+import { SploveUndoArrowIcon } from "./splovePlus/SplovePlusIcons";
 
 const REWIND_BG = "#1F1F24";
 const REWIND_ACCENT = "#D1003F";
@@ -8,7 +9,7 @@ export type DiscoverRewindButtonProps = {
   /** Seulement pendant chargement ; le parent gère le paywall vs rewind actif. */
   disabled: boolean;
   busy: boolean;
-  /** Libellé court à côté de ↩ (ex. Undo / Annuler). */
+  /** Libellé court à côté du picto Retour (ex. Undo / Annuler). */
   actionLabel?: string | null;
   /** Légende optionnelle (crédits, accès monétisé, etc.) */
   hint?: string | null;
@@ -52,11 +53,15 @@ export function DiscoverRewindButton({
           <span className="text-sm text-white/80">…</span>
         ) : actionLabel ? (
           <>
-            <span aria-hidden>↩️</span>
+            <span aria-hidden className="inline-flex" style={{ color: REWIND_ACCENT }}>
+              <SploveUndoArrowIcon size={18} />
+            </span>
             <span className="text-[13px] font-bold tracking-tight">{actionLabel}</span>
           </>
         ) : (
-          <span aria-hidden>↩</span>
+          <span aria-hidden className="inline-flex" style={{ color: REWIND_ACCENT }}>
+            <SploveUndoArrowIcon size={20} />
+          </span>
         )}
       </button>
     </div>

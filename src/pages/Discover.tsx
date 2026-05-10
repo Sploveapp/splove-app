@@ -49,6 +49,7 @@ import { useTranslation } from "../i18n/useTranslation";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { DiscoverProfileCard } from "../components/discover/DiscoverProfileCard";
 import { EmptyDiscoverState } from "../components/discover/EmptyDiscoverState";
+import { SplovePinIcon } from "../components/splovePlus/SplovePlusIcons";
 import { ProfilePhotoViewerModal } from "../components/ProfilePhotoViewerModal";
 import { useDiscoverUndoNavRegistration } from "../contexts/DiscoverUndoNavContext";
 import { IS_BETA_UNDO_FREE } from "../constants/discoverUndo";
@@ -339,8 +340,11 @@ function DiscoverProfileDetailPreview({
               </span>
             ) : null}
             {hasSharedPlace(profile) ? (
-              <span className="rounded-full bg-app-card px-2 py-0.5 text-[10px] font-semibold tracking-wide text-app-text ring-1 ring-amber-200/60">
-                📍 Lieu commun
+              <span className="inline-flex items-center gap-1 rounded-full bg-app-card px-2 py-0.5 text-[10px] font-semibold tracking-wide text-app-text ring-1 ring-amber-200/60">
+                <span aria-hidden className="inline-flex text-amber-200">
+                  <SplovePinIcon size={11} />
+                </span>
+                <span>Lieu commun</span>
               </span>
             ) : null}
           </div>

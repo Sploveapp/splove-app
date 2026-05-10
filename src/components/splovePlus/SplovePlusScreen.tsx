@@ -5,14 +5,21 @@ import { supabase } from "../../lib/supabase";
 import { useTranslation } from "../../i18n/useTranslation";
 import type { Language } from "../../i18n";
 import type { TranslationKey } from "../../i18n";
-import { BETA_MODE } from "../../constants/beta";
 import { IS_BETA_UNDO_FREE } from "../../constants/discoverUndo";
 import type { SploveCreditType, SploveTimedFeatureType } from "../../types/sploveCommerce.types";
+import { activateFeature } from "../../services/sploveCommerce.service";
 import {
-  activateFeature,
-  purchaseProduct,
-  productIdForCreditType,
-} from "../../services/sploveCommerce.service";
+  SploveActivatingSpinner,
+  SploveBoostIcon,
+  SploveChatBubbleIcon,
+  SploveDiscreetIcon,
+  SploveLightningIcon,
+  SploveOrbitPulseIcon,
+  SplovePinIcon,
+  SploveSparkIcon,
+  SploveUndoArrowIcon,
+  type SploveIconRenderer,
+} from "./SplovePlusIcons";
 
 export type SploveUiFeatureKey =
   | "visibility_boost"
@@ -27,7 +34,7 @@ type SploveFeaturePrice = string | { fr: string; en: string };
 
 type SploveFeature = {
   key: SploveUiFeatureKey;
-  icon: string;
+  icon: SploveIconRenderer;
   title: { fr: string; en: string };
   description: { fr: string; en: string };
   price: SploveFeaturePrice;
@@ -47,7 +54,7 @@ function formatFeaturePrice(price: SploveFeaturePrice, language: Language): stri
 
 const HERO_FEATURE: SploveFeature = {
   key: "visibility_boost",
-  icon: "🚀",
+  icon: SploveBoostIcon,
   title: { fr: "Boost de visibilité", en: "Visibility boost" },
   description: {
     fr: "Passe devant tout le monde pendant 30 min.",
@@ -64,7 +71,7 @@ const HERO_FEATURE: SploveFeature = {
 const SECONDARY_FEATURES: SploveFeature[] = [
   {
     key: "second_chance",
-    icon: "💬",
+    icon: SploveChatBubbleIcon,
     title: { fr: "Coup franc", en: "Free kick" },
     description: {
       fr: "Message direct sans match",
@@ -77,7 +84,7 @@ const SECONDARY_FEATURES: SploveFeature[] = [
   },
   {
     key: "undo_swipe_return",
-    icon: "↩️",
+    icon: SploveUndoArrowIcon,
     title: { fr: "Retour", en: "Undo" },
     description: {
       fr: "Revois un profil passé trop vite",
@@ -91,8 +98,8 @@ const SECONDARY_FEATURES: SploveFeature[] = [
   },
   {
     key: "ghost_mode",
-    icon: "👻",
-    title: { fr: "Mode fantôme", en: "Ghost mode" },
+    icon: SploveDiscreetIcon,
+    title: { fr: "Mode discret", en: "Discreet mode" },
     description: {
       fr: "Explore sans être vu(e).",
       en: "Browse without being seen.",
@@ -104,7 +111,7 @@ const SECONDARY_FEATURES: SploveFeature[] = [
   },
   {
     key: "priority_proposal",
-    icon: "⚡",
+    icon: SploveLightningIcon,
     title: { fr: "Priorité rencontre", en: "Meeting priority" },
     description: {
       fr: "Passe en haut des propositions.",
@@ -117,7 +124,7 @@ const SECONDARY_FEATURES: SploveFeature[] = [
   },
   {
     key: "common_places",
-    icon: "📍",
+    icon: SplovePinIcon,
     title: { fr: "Lieux communs", en: "Common places" },
     description: {
       fr: "Repère où vos trajets peuvent se croiser.",
@@ -130,7 +137,7 @@ const SECONDARY_FEATURES: SploveFeature[] = [
   },
   {
     key: "smart_reminder",
-    icon: "🔔",
+    icon: SploveOrbitPulseIcon,
     title: { fr: "Rappel intelligent", en: "Smart reminder" },
     description: {
       fr: "Une petite relance au bon moment.",
@@ -204,12 +211,6 @@ function maxExpiry(rows: Array<{ feature_type: string; expires_at: string }>): P
   return out;
 }
 
-function pickActivationSource(walletQty: number): "credit" | "beta" | "purchase" {
-  if (walletQty >= 1) return "credit";
-  if (BETA_MODE) return "beta";
-  return "purchase";
-}
-
 /**
  * Bêta : pour les options encore non branchées côté serveur (common_places,
  * smart_reminder), l'activation est purement locale. On stocke un flag par
@@ -217,6 +218,34 @@ function pickActivationSource(walletQty: number): "credit" | "beta" | "purchase"
  * toucher au backend.
  */
 const BETA_ACTIVE_LS_PREFIX = "splove_plus_beta_active:";
+
+/**
+ * Pack SPLove+ — l'« abonnement » bêta est purement front : on retient un
+ * flag local pour afficher l'état actif sans toucher à un quelconque flux
+ * de paiement (App Store / Stripe / etc.).
+ */
+const PACK_BETA_LS_KEY = "splove_plus_pack_beta_active";
+
+/**
+ * Bêta — l'utilisateur ne doit jamais voir d'erreur générique. Si Supabase
+ * répond mal ou que le compte n'a pas encore de crédit, on simule localement
+ * une activation propre (mise à jour de l'expiration ou bump du compteur),
+ * puis on affiche un succès dédié à la fonctionnalité.
+ */
+const ACTIVATION_MIN_LATENCY_MS = 700;
+
+function formatActivationDuration(minutes: number, isFr: boolean): string {
+  if (minutes <= 0) return isFr ? "la session" : "the session";
+  if (minutes >= 1440 && minutes % 1440 === 0) {
+    const days = minutes / 1440;
+    if (days === 1) return isFr ? "24 h" : "24h";
+    return isFr ? `${days} jours` : `${days} days`;
+  }
+  if (minutes >= 60 && minutes % 60 === 0) {
+    return `${minutes / 60} h`;
+  }
+  return `${minutes} min`;
+}
 
 function readBetaActive(key: SploveUiFeatureKey): boolean {
   if (typeof window === "undefined") return false;
@@ -231,6 +260,24 @@ function writeBetaActive(key: SploveUiFeatureKey): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(`${BETA_ACTIVE_LS_PREFIX}${key}`, "1");
+  } catch {
+    /* localStorage indisponible : on ignore, l'UX reste fonctionnelle. */
+  }
+}
+
+function readPackBetaActive(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(PACK_BETA_LS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writePackBetaActive(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PACK_BETA_LS_KEY, "1");
   } catch {
     /* localStorage indisponible : on ignore, l'UX reste fonctionnelle. */
   }
@@ -252,8 +299,6 @@ export default function SplovePlusScreen() {
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmFeatureKey, setConfirmFeatureKey] = useState<SploveUiFeatureKey | null>(null);
-  const [modalPhase, setModalPhase] = useState<"confirm" | "purchase">("confirm");
-  const [purchaseBusy, setPurchaseBusy] = useState(false);
   const [activating, setActivating] = useState(false);
   const [betaFeatureKey, setBetaFeatureKey] = useState<SploveUiFeatureKey | null>(null);
   const [betaActiveMap, setBetaActiveMap] = useState<Partial<Record<SploveUiFeatureKey, boolean>>>(
@@ -262,6 +307,8 @@ export default function SplovePlusScreen() {
       smart_reminder: readBetaActive("smart_reminder"),
     }),
   );
+  const [packModalOpen, setPackModalOpen] = useState(false);
+  const [packBetaActive, setPackBetaActive] = useState<boolean>(() => readPackBetaActive());
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const isFr = language === "fr";
@@ -414,13 +461,44 @@ export default function SplovePlusScreen() {
   }
 
   function openActivateConfirm(feature: SploveFeature) {
-    setModalPhase("confirm");
     setConfirmFeatureKey(feature.key);
   }
 
   function closeActivateConfirm() {
     setConfirmFeatureKey(null);
-    setModalPhase("confirm");
+  }
+
+  function simulateLocalActivation(feature: SploveFeature) {
+    if (!feature.creditType) return;
+    const tf = timedFeatureFromCredit(feature.creditType);
+    if (tf && feature.durationMinutesUi > 0) {
+      const expiresAtIso = new Date(Date.now() + feature.durationMinutesUi * 60_000).toISOString();
+      setTimedExpiry((prev) => ({ ...prev, [tf]: expiresAtIso }));
+      return;
+    }
+    if (feature.creditType === "undo_swipe") {
+      setProfileUndo((prev) => prev + 1);
+    } else if (feature.creditType === "second_chance") {
+      setProfileSecondChance((prev) => prev + 1);
+    }
+  }
+
+  function buildActivationToast(feature: SploveFeature): string {
+    const duration = formatActivationDuration(feature.durationMinutesUi, isFr);
+    switch (feature.key) {
+      case "visibility_boost":
+        return t("splove_plus_toast_boost_active", { duration });
+      case "ghost_mode":
+        return t("splove_plus_toast_ghost_active", { duration });
+      case "priority_proposal":
+        return t("splove_plus_toast_priority_active", { duration });
+      case "second_chance":
+        return t("splove_plus_toast_second_chance_ready");
+      case "undo_swipe_return":
+        return t("splove_plus_toast_undo_ready");
+      default:
+        return t("splove_plus_activated_toast");
+    }
   }
 
   function closeBetaModal() {
@@ -432,6 +510,21 @@ export default function SplovePlusScreen() {
     setBetaActiveMap((prev) => ({ ...prev, [key]: true }));
     setToastMessage(t("splove_plus_beta_activated_toast"));
     closeBetaModal();
+  }
+
+  function openPackModal() {
+    setPackModalOpen(true);
+  }
+
+  function closePackModal() {
+    setPackModalOpen(false);
+  }
+
+  function handlePackActivate() {
+    writePackBetaActive();
+    setPackBetaActive(true);
+    setToastMessage(t("splove_plus_pack_activated_toast"));
+    closePackModal();
   }
 
   const betaFeatureDef =
@@ -446,58 +539,60 @@ export default function SplovePlusScreen() {
         : secondaryFeatures.find((f) => f.key === confirmFeatureKey) ?? null
       : null;
 
+  /**
+   * Bêta — la confirmation d'activation est toujours présentée comme un succès :
+   * on tente l'activation serveur en best-effort, on retombe silencieusement sur
+   * une simulation locale en cas de souci, puis on affiche un toast dédié à la
+   * fonctionnalité. Aucun écran d'erreur générique, aucun appel à un faux paiement.
+   */
   async function handleConfirmActivation() {
-    if (!confirmFeatureDef?.creditType || !userId || activating) return;
+    if (!confirmFeatureDef || !userId || activating) return;
+    const feature = confirmFeatureDef;
+    const creditType = feature.creditType;
+    if (!creditType) return;
 
-    /** Undo / Retour gratuit en bêta : pas d’activation serveur ni pseudo-achat. */
-    if (IS_BETA_UNDO_FREE && confirmFeatureDef.key === "undo_swipe_return") {
-      setToastMessage(t("splove_plus_undo_beta_free_toast"));
-      closeActivateConfirm();
-      return;
-    }
-
-    const qty = creditsQty[confirmFeatureDef.creditType] ?? 0;
-    const flow = pickActivationSource(qty);
-    if (flow === "purchase") {
-      setModalPhase("purchase");
-      return;
-    }
-
-    const source = flow === "beta" ? "beta" : "credit";
     setActivating(true);
-    try {
-      const res = await activateFeature(userId, confirmFeatureDef.creditType, confirmFeatureDef.durationMinutesUi, source);
-      if (res.need_purchase) {
-        setModalPhase("purchase");
-        return;
-      }
-      if (!res.ok) {
-        setToastMessage(isFr ? t("splove_plus_error_generic") : t("splove_plus_error_generic"));
-        return;
-      }
-      await refreshWallet(userId);
-      setToastMessage(t("splove_plus_activated_toast"));
-      closeActivateConfirm();
-    } finally {
+    const startedAt = Date.now();
+
+    /** Retour gratuit en bêta : pas d'aller-retour serveur, succès local immédiat. */
+    if (IS_BETA_UNDO_FREE && feature.key === "undo_swipe_return") {
+      simulateLocalActivation(feature);
+      await waitMinLatency(startedAt);
+      setToastMessage(buildActivationToast(feature));
       setActivating(false);
+      closeActivateConfirm();
+      return;
     }
+
+    let serverOk = false;
+    try {
+      const qty = creditsQty[creditType] ?? 0;
+      const source: "credit" | "beta" = qty >= 1 ? "credit" : "beta";
+      const res = await activateFeature(userId, creditType, feature.durationMinutesUi, source);
+      serverOk = res.ok === true;
+    } catch (err) {
+      console.warn("[SplovePlusScreen] activateFeature soft-fail (beta fallback)", err);
+      serverOk = false;
+    }
+
+    if (serverOk) {
+      await refreshWallet(userId).catch((err) => {
+        console.warn("[SplovePlusScreen] refreshWallet soft-fail", err);
+      });
+    } else {
+      simulateLocalActivation(feature);
+    }
+
+    await waitMinLatency(startedAt);
+    setToastMessage(buildActivationToast(feature));
+    setActivating(false);
+    closeActivateConfirm();
   }
 
-  async function handleMockPurchase() {
-    if (!confirmFeatureDef?.creditType || !userId || purchaseBusy) return;
-    setPurchaseBusy(true);
-    try {
-      const pid = productIdForCreditType(confirmFeatureDef.creditType);
-      const r = await purchaseProduct(pid);
-      if (!r.ok) {
-        setToastMessage(isFr ? t("splove_plus_error_generic") : t("splove_plus_error_generic"));
-        return;
-      }
-      await refreshWallet(userId);
-      setModalPhase("confirm");
-    } finally {
-      setPurchaseBusy(false);
-    }
+  async function waitMinLatency(startedAt: number): Promise<void> {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed >= ACTIVATION_MIN_LATENCY_MS) return;
+    await new Promise((resolve) => setTimeout(resolve, ACTIVATION_MIN_LATENCY_MS - elapsed));
   }
 
   function walletSubtitle(feature: SploveFeature): string | null {
@@ -527,18 +622,32 @@ export default function SplovePlusScreen() {
   }
 
   useEffect(() => {
-    if (!confirmFeatureKey && !betaFeatureKey) return;
+    if (!confirmFeatureKey && !betaFeatureKey && !packModalOpen) return;
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
       if (confirmFeatureKey) closeActivateConfirm();
       if (betaFeatureKey) closeBetaModal();
+      if (packModalOpen) closePackModal();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirmFeatureKey, betaFeatureKey]);
+  }, [confirmFeatureKey, betaFeatureKey, packModalOpen]);
 
   return (
     <main className="min-h-screen bg-[#08080c] px-4 pb-16 pt-7 text-white">
+      <style>{`
+        @keyframes sploveOrbitCometPulse {
+          0%, 100% { transform: scale(1); opacity: 0.85; }
+          50% { transform: scale(1.25); opacity: 1; }
+        }
+        @keyframes sploveActivatingSpin {
+          to { transform: rotate(360deg); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          [style*="sploveOrbitCometPulse"],
+          [style*="sploveActivatingSpin"] { animation: none !important; }
+        }
+      `}</style>
       <motion.section
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -557,23 +666,37 @@ export default function SplovePlusScreen() {
           </p>
         </header>
 
-        <div className="rounded-3xl border border-white/14 bg-[#12121a] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#ffb3bc]">
-            {isFr ? "Pack inclus" : "Bundle highlights"}
-          </p>
-          <h2 className="mt-1.5 text-lg font-semibold text-white">
+        <section
+          aria-labelledby="splove-plus-pack-title"
+          className="rounded-3xl border border-[#ff2433]/55 bg-gradient-to-b from-[#221016] to-[#12121a] p-5 shadow-[0_18px_40px_rgba(255,36,51,0.18)]"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#ffb3bc]">
+              <SploveSparkIcon color="currentColor" size={12} />
+              {t("splove_plus_pack_label")}
+            </p>
+            {packBetaActive ? (
+              <span className="rounded-full border border-emerald-400/45 bg-emerald-500/15 px-2.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-200">
+                {t("splove_plus_pack_active_badge")}
+              </span>
+            ) : null}
+          </div>
+          <h2 id="splove-plus-pack-title" className="mt-2 text-xl font-semibold text-white">
             {isFr ? "Pack bêta fondateur" : "Beta founder pack"}
           </h2>
-          <p className="mt-2 text-[13px] leading-snug text-white/72">
+          <p className="mt-2 text-[13px] leading-snug text-white/75">
             {isFr
-              ? "Pendant la bêta, tu peux activer sans paiement lorsque tes crédits sont vides ; les lignes sont quand même tracées."
-              : "During beta you can activate without credits (ledger still records); with credits they always spend first."}
+              ? "Toutes les options SPLove+ réunies dans une seule activation. Pendant la bêta, l’abonnement est simulé."
+              : "All SPLove+ perks bundled in a single activation. During beta the subscription is simulated."}
           </p>
           <ul className="mt-4 grid gap-2 text-[13px] text-white/88">
             {[heroFeature, ...secondaryFeatures].map((f) => (
-              <li key={f.key} className="flex gap-2">
-                <span className="shrink-0" aria-hidden>
-                  {f.icon}
+              <li key={f.key} className="flex items-start gap-2">
+                <span
+                  className="mt-0.5 inline-flex shrink-0 text-[#ffb3bc]"
+                  aria-hidden
+                >
+                  {f.icon({ color: "currentColor", size: 16 })}
                 </span>
                 <span>
                   <span className="font-semibold">{f.title[language]}</span>
@@ -583,14 +706,43 @@ export default function SplovePlusScreen() {
               </li>
             ))}
           </ul>
+
+          <div className="mt-5 flex items-end justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#ffb3bc]">
+                {isFr ? "Tarif" : "Price"}
+              </p>
+              <p className="mt-1 text-2xl font-semibold leading-none text-white">
+                {t("splove_plus_pack_price")}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={openPackModal}
+            aria-label={t("splove_plus_pack_cta")}
+            className="mt-4 w-full rounded-2xl bg-[#ff2433] py-3.5 text-sm font-semibold tracking-tight text-white shadow-[0_12px_28px_rgba(255,36,51,0.32)] transition-transform duration-150 ease-out active:scale-[0.98]"
+          >
+            {packBetaActive ? t("splove_plus_pack_active_badge") : t("splove_plus_pack_cta")}
+          </button>
+          <p className="mt-2 text-center text-[11px] text-white/55">
+            {t("splove_plus_pack_pricing_note")}
+          </p>
+        </section>
+
+        <div className="flex items-center gap-3" role="separator" aria-orientation="horizontal">
+          <span aria-hidden className="h-px flex-1 bg-white/10" />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/45">
+            {t("splove_plus_section_individual")}
+          </span>
+          <span aria-hidden className="h-px flex-1 bg-white/10" />
         </div>
 
         <motion.button
           type="button"
           disabled={isTimedWindowBlocking(heroFeature)}
-          whileTap={isTimedWindowBlocking(heroFeature) ? undefined : { scale: 0.97 }}
-          animate={isTimedWindowBlocking(heroFeature) ? undefined : { scale: [1, 1.01, 1] }}
-          transition={{ duration: 2, repeat: Infinity, repeatType: "loop", ease: "easeInOut" }}
+          whileTap={isTimedWindowBlocking(heroFeature) ? undefined : { scale: 0.98 }}
           onClick={() => {
             if (!userId) {
               setToastMessage(t("splove_plus_need_sign_in"));
@@ -599,42 +751,49 @@ export default function SplovePlusScreen() {
             if (isTimedWindowBlocking(heroFeature)) return;
             openActivateConfirm(heroFeature);
           }}
-          className={`w-full rounded-3xl border border-[#ff2433]/60 bg-gradient-to-b from-[#231015] to-[#14141a] p-5 text-left shadow-[0_12px_30px_rgba(255,36,51,0.28)] ${
+          className={`w-full rounded-2xl border border-white/10 bg-[#111118] p-4 text-left ${
             isTimedWindowBlocking(heroFeature) ? "cursor-not-allowed opacity-65" : ""
           }`}
         >
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <span className="text-xs font-semibold uppercase tracking-[0.06em] text-[#ff9aa1]">
-              {heroFeature.icon} {heroFeature.title[language]}
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-white">
+              <span aria-hidden className="inline-flex text-[#ffb3bc]">
+                {heroFeature.icon({ color: "currentColor", size: 18 })}
+              </span>
+              {heroFeature.title[language]}
             </span>
             {heroFeature.recommended ? (
-              <span className="rounded-full border border-[#ff2433]/60 bg-[#ff2433]/20 px-2 py-0.5 text-[10px] font-semibold text-[#ffd0d3]">
-                🔥 {isFr ? "Recommandé" : "Recommended"}
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#ffb3bc]/45 bg-[#ff2433]/15 px-2 py-0.5 text-[10px] font-semibold text-[#ffd0d3]">
+                <span aria-hidden className="inline-flex">
+                  <SploveSparkIcon color="currentColor" size={10} />
+                </span>
+                {isFr ? "Populaire" : "Popular"}
               </span>
             ) : null}
           </div>
 
-          <p className="text-sm text-white/80">{heroFeature.description[language]}</p>
+          <p className="text-xs text-white/65">{heroFeature.description[language]}</p>
           {walletSubtitle(heroFeature) ? (
-            <p className="mt-2 text-[11px] text-white/55">{walletSubtitle(heroFeature)}</p>
+            <p className="mt-1.5 text-[10px] text-white/52">{walletSubtitle(heroFeature)}</p>
           ) : null}
 
-          <div className="mt-4 flex items-end justify-between">
-            <div>
-              <p className="text-2xl font-semibold text-white">{formatFeaturePrice(heroFeature.price, language)}</p>
-              {greenBadgeMinutes(heroFeature) != null ? (
-                <span className="mt-2 inline-flex rounded-full border border-emerald-400/45 bg-emerald-500/20 px-2.5 py-1 text-[11px] font-semibold leading-tight text-emerald-200">
-                  {greenBadgeLabel(greenBadgeMinutes(heroFeature))}
-                </span>
-              ) : null}
-            </div>
-            <span
-              className={`rounded-2xl px-3 py-2 text-xs font-semibold text-white ${
-                isTimedWindowBlocking(heroFeature) ? "bg-white/20 text-white/50" : "bg-[#ff2433]"
-              }`}
-            >
-              {isFr ? "Activer" : "Activate"}
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <span className="text-sm font-semibold text-[#ff9aa1]">
+              {formatFeaturePrice(heroFeature.price, language)}
             </span>
+            {greenBadgeMinutes(heroFeature) != null ? (
+              <span className="max-w-[min(160px,calc(100%-4rem))] rounded-full border border-emerald-400/45 bg-emerald-500/20 px-2 py-0.5 text-center text-[10px] font-semibold leading-snug text-emerald-200">
+                {greenBadgeLabel(greenBadgeMinutes(heroFeature))}
+              </span>
+            ) : (
+              <span
+                className={`shrink-0 rounded-xl px-3 py-1 text-[11px] font-semibold text-white ${
+                  isTimedWindowBlocking(heroFeature) ? "bg-white/15 text-white/55" : "bg-[#ff2433]"
+                }`}
+              >
+                {isFr ? "Activer" : "Activate"}
+              </span>
+            )}
           </div>
         </motion.button>
 
@@ -677,15 +836,18 @@ export default function SplovePlusScreen() {
                   : "border-white/10"
               } ${!feature.comingSoon && isTimedWindowBlocking(feature) ? "cursor-not-allowed opacity-65" : ""}`}
             >
-              <p className="text-sm font-semibold text-white">
-                {feature.icon} {feature.title[language]}
+              <p className="flex flex-wrap items-center gap-1.5 text-sm font-semibold text-white">
+                <span aria-hidden className="inline-flex text-[#ffb3bc]">
+                  {feature.icon({ color: "currentColor", size: 18 })}
+                </span>
+                <span>{feature.title[language]}</span>
                 {feature.comingSoon ? (
                   betaActive ? (
-                    <span className="ml-2 rounded-md border border-emerald-400/45 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-200">
+                    <span className="ml-1 rounded-md border border-emerald-400/45 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-200">
                       {t("splove_plus_beta_active_badge")}
                     </span>
                   ) : (
-                    <span className="ml-2 rounded-md border border-[#ffb3bc]/45 bg-[#ff2433]/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[#ffd0d3]">
+                    <span className="ml-1 rounded-md border border-[#ffb3bc]/45 bg-[#ff2433]/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[#ffd0d3]">
                       {t("splove_plus_beta_badge")}
                     </span>
                   )
@@ -720,7 +882,9 @@ export default function SplovePlusScreen() {
           className="fixed inset-0 z-[60] flex items-end justify-center bg-black/55 p-4 pb-8 sm:items-center"
           role="presentation"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) closeActivateConfirm();
+            if (e.target === e.currentTarget) {
+              if (!activating) closeActivateConfirm();
+            }
           }}
         >
           <div
@@ -730,101 +894,83 @@ export default function SplovePlusScreen() {
             className="w-full max-w-md rounded-3xl border border-white/14 bg-[#15151d] p-5 text-white shadow-xl"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            {modalPhase === "purchase" ? (
-              <>
-                <h2 id="splove-plus-confirm-title" className="text-lg font-semibold leading-snug">
-                  {t("splove_plus_purchase_title")}
-                </h2>
-                <p className="mt-2 text-[13px] leading-relaxed text-white/72">{t("splove_plus_purchase_body")}</p>
-                {import.meta.env.DEV ? (
-                  <p className="mt-2 font-mono text-[11px] text-white/45">
-                    {t("splove_plus_purchase_product_id_label", {
-                      id: productIdForCreditType(confirmFeatureDef.creditType),
-                    })}
-                  </p>
-                ) : null}
-                <div className="mt-5 flex flex-col gap-2">
-                  <button
-                    type="button"
-                    disabled={purchaseBusy}
-                    onClick={() => void handleMockPurchase()}
-                    className="w-full rounded-2xl bg-[#ff2433] py-3 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(255,36,51,0.35)] disabled:opacity-50"
-                  >
-                    {purchaseBusy ? "…" : t("splove_plus_purchase_simulate")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={purchaseBusy}
-                    onClick={() => setModalPhase("confirm")}
-                    className="w-full rounded-2xl border border-white/18 py-3 text-sm font-semibold text-white/90 hover:bg-white/5"
-                  >
-                    {t("splove_plus_purchase_back")}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h2 id="splove-plus-confirm-title" className="text-lg font-semibold leading-snug">
-                  {confirmFeatureDef.title[language]}
-                </h2>
-                <p className="mt-2 text-[13px] leading-relaxed text-white/76">{confirmFeatureDef.description[language]}</p>
+            <h2
+              id="splove-plus-confirm-title"
+              className="flex items-center gap-2 text-lg font-semibold leading-snug"
+            >
+              <span aria-hidden className="inline-flex text-[#ffb3bc]">
+                {confirmFeatureDef.icon({ color: "currentColor", size: 22 })}
+              </span>
+              <span>{confirmFeatureDef.title[language]}</span>
+            </h2>
+            <p className="mt-2 text-[13px] leading-relaxed text-white/76">
+              {confirmFeatureDef.description[language]}
+            </p>
 
-                {(() => {
-                  const ek = effectTranslationKey(confirmFeatureDef.key);
-                  return ek ? (
-                    <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 px-3 py-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#ffb3bc]">
-                        {t("splove_plus_modal_effect_label")}
-                      </p>
-                      <p className="mt-1 text-[13px] leading-relaxed text-white/78">{t(ek)}</p>
-                    </div>
-                  ) : null;
-                })()}
-
-                <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 px-3 py-3">
+            {(() => {
+              const ek = effectTranslationKey(confirmFeatureDef.key);
+              return ek ? (
+                <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 px-3 py-3">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#ffb3bc]">
-                    {t("splove_plus_confirm_duration_prefix")}
+                    {t("splove_plus_modal_effect_label")}
                   </p>
-                  {confirmFeatureDef.durationMinutesUi <= 0 ? (
-                    <p className="mt-1 text-sm font-medium text-white">{t("splove_plus_confirm_duration_single_use")}</p>
-                  ) : (
-                    <p className="mt-1 text-sm font-medium text-white">
-                      {describeDurationLine(confirmFeatureDef.durationMinutesUi, isFr)}
-                    </p>
-                  )}
+                  <p className="mt-1 text-[13px] leading-relaxed text-white/78">{t(ek)}</p>
                 </div>
+              ) : null;
+            })()}
 
-                <div className="mt-3 space-y-1.5 text-[12px] text-white/58">
-                  {confirmFeatureDef.creditType && (creditsQty[confirmFeatureDef.creditType] ?? 0) >= 1 ? (
-                    <p>{t("splove_plus_confirm_credit_hint")}</p>
-                  ) : BETA_MODE ? (
-                    <p>{t("splove_plus_confirm_beta_note")}</p>
-                  ) : (
-                    <p>{t("splove_plus_purchase_body")}</p>
-                  )}
-                  {confirmFeatureDef.durationMinutesUi <= 0 ? <p>{t("splove_plus_confirm_single_use_hint")}</p> : null}
-                </div>
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 px-3 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#ffb3bc]">
+                {t("splove_plus_confirm_duration_prefix")}
+              </p>
+              {confirmFeatureDef.durationMinutesUi <= 0 ? (
+                <p className="mt-1 text-sm font-medium text-white">
+                  {t("splove_plus_confirm_duration_single_use")}
+                </p>
+              ) : (
+                <p className="mt-1 text-sm font-medium text-white">
+                  {describeDurationLine(confirmFeatureDef.durationMinutesUi, isFr)}
+                </p>
+              )}
+            </div>
 
-                <div className="mt-5 flex gap-2">
-                  <button
-                    type="button"
-                    disabled={activating || purchaseBusy}
-                    onClick={closeActivateConfirm}
-                    className="flex-1 rounded-2xl border border-white/18 bg-transparent py-3 text-sm font-semibold text-white/90 hover:bg-white/5"
-                  >
-                    {t("splove_plus_confirm_cancel")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={activating || purchaseBusy}
-                    onClick={() => void handleConfirmActivation()}
-                    className="flex-1 rounded-2xl bg-[#ff2433] py-3 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(255,36,51,0.35)] disabled:opacity-50"
-                  >
-                    {activating ? "…" : t("splove_plus_confirm_cta")}
-                  </button>
-                </div>
-              </>
-            )}
+            <div className="mt-3 space-y-1.5 text-[12px] text-white/58">
+              {confirmFeatureDef.creditType && (creditsQty[confirmFeatureDef.creditType] ?? 0) >= 1 ? (
+                <p>{t("splove_plus_confirm_credit_hint")}</p>
+              ) : (
+                <p>{t("splove_plus_confirm_beta_note")}</p>
+              )}
+              {confirmFeatureDef.durationMinutesUi <= 0 ? (
+                <p>{t("splove_plus_confirm_single_use_hint")}</p>
+              ) : null}
+            </div>
+
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                disabled={activating}
+                onClick={closeActivateConfirm}
+                className="flex-1 rounded-2xl border border-white/18 bg-transparent py-3 text-sm font-semibold text-white/90 hover:bg-white/5 disabled:opacity-50"
+              >
+                {t("splove_plus_confirm_cancel")}
+              </button>
+              <button
+                type="button"
+                disabled={activating}
+                aria-busy={activating ? "true" : undefined}
+                onClick={() => void handleConfirmActivation()}
+                className="flex-1 rounded-2xl bg-[#ff2433] py-3 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(255,36,51,0.35)] disabled:opacity-90"
+              >
+                {activating ? (
+                  <span className="inline-flex items-center justify-center gap-2">
+                    <SploveActivatingSpinner />
+                    <span>{t("splove_plus_activating")}</span>
+                  </span>
+                ) : (
+                  t("splove_plus_confirm_cta")
+                )}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -844,8 +990,14 @@ export default function SplovePlusScreen() {
             className="w-full max-w-md rounded-3xl border border-white/14 bg-[#15151d] p-5 text-white shadow-xl"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <h2 id="splove-plus-beta-title" className="text-lg font-semibold leading-snug">
-              {betaFeatureDef.icon} {betaFeatureDef.title[language]}
+            <h2
+              id="splove-plus-beta-title"
+              className="flex items-center gap-2 text-lg font-semibold leading-snug"
+            >
+              <span aria-hidden className="inline-flex text-[#ffb3bc]">
+                {betaFeatureDef.icon({ color: "currentColor", size: 22 })}
+              </span>
+              <span>{betaFeatureDef.title[language]}</span>
             </h2>
             <p className="mt-2 text-[13px] leading-relaxed text-white/76">
               {betaFeatureDef.description[language]}
@@ -869,6 +1021,70 @@ export default function SplovePlusScreen() {
               <button
                 type="button"
                 onClick={() => handleBetaActivate(betaFeatureKey)}
+                className="flex-1 rounded-2xl bg-[#ff2433] py-3 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(255,36,51,0.35)]"
+              >
+                {t("splove_plus_beta_activate_cta")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {packModalOpen ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-end justify-center bg-black/55 p-4 pb-8 sm:items-center"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) closePackModal();
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="splove-plus-pack-modal-title"
+            className="w-full max-w-md rounded-3xl border border-[#ff2433]/55 bg-gradient-to-b from-[#1a0f14] to-[#15151d] p-5 text-white shadow-xl"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#ffb3bc]">
+              <SploveSparkIcon color="currentColor" size={12} />
+              {t("splove_plus_pack_label")}
+            </p>
+            <h2
+              id="splove-plus-pack-modal-title"
+              className="mt-1.5 text-lg font-semibold leading-snug"
+            >
+              {t("splove_plus_pack_modal_title")}
+            </h2>
+            <p className="mt-3 rounded-2xl border border-white/10 bg-black/25 px-3 py-3">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-[#ffb3bc]">
+                {isFr ? "Tarif" : "Price"}
+              </span>
+              <span className="mt-1 block text-2xl font-semibold text-white">
+                {t("splove_plus_pack_price")}
+              </span>
+              <span className="mt-1 block text-[11px] text-white/55">
+                {t("splove_plus_pack_pricing_note")}
+              </span>
+            </p>
+            <p className="mt-3 text-[13px] leading-relaxed text-white/76">
+              {t("splove_plus_pack_modal_body")}
+            </p>
+            {packBetaActive ? (
+              <p className="mt-3 text-[12px] font-medium text-emerald-200">
+                {t("splove_plus_pack_already_active")}
+              </p>
+            ) : null}
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={closePackModal}
+                className="flex-1 rounded-2xl border border-white/18 bg-transparent py-3 text-sm font-semibold text-white/90 hover:bg-white/5"
+              >
+                {t("splove_plus_beta_later")}
+              </button>
+              <button
+                type="button"
+                onClick={handlePackActivate}
                 className="flex-1 rounded-2xl bg-[#ff2433] py-3 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(255,36,51,0.35)]"
               >
                 {t("splove_plus_beta_activate_cta")}

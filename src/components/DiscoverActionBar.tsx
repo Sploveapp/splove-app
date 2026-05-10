@@ -4,6 +4,7 @@ import {
   IconHeartOutline,
   IconPass,
 } from "./ui/Icon";
+import { SploveUndoArrowIcon } from "./splovePlus/SplovePlusIcons";
 import { useTranslation } from "../i18n/useTranslation";
 
 export type DiscoverActionBarProps = {
@@ -85,9 +86,12 @@ export function DiscoverActionBar(props: DiscoverActionBarProps) {
             onClick={() => {
               void onUndo?.();
             }}
-            className="text-[11px] font-semibold underline decoration-app-border underline-offset-2 transition text-app-muted hover:text-app-text"
+            className="inline-flex items-center gap-1 text-[11px] font-semibold underline decoration-app-border underline-offset-2 transition text-app-muted hover:text-app-text"
           >
-            ↩️ {undoLabel}
+            <span aria-hidden className="inline-flex">
+              <SploveUndoArrowIcon size={12} />
+            </span>
+            <span>{undoLabel}</span>
           </button>
         </div>
       ) : null}

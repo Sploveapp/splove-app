@@ -1,3 +1,5 @@
+import { SploveUndoArrowIcon } from "./splovePlus/SplovePlusIcons";
+
 type DiscoverRewindPurchaseModalProps = {
   open: boolean;
   busy?: boolean;
@@ -38,7 +40,16 @@ export function DiscoverRewindPurchaseModal({
             onClick={onBuy}
             className="w-full rounded-2xl bg-[#D1003F] px-4 py-3 text-sm font-semibold text-white transition hover:opacity-95 disabled:opacity-60"
           >
-            {busy ? "…" : "↩ Revoir le profil - 1,99€"}
+            {busy ? (
+              "…"
+            ) : (
+              <span className="inline-flex items-center justify-center gap-2">
+                <span aria-hidden className="inline-flex text-white">
+                  <SploveUndoArrowIcon size={16} />
+                </span>
+                <span>Revoir le profil - 1,99€</span>
+              </span>
+            )}
           </button>
           <button
             type="button"
