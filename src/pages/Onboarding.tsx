@@ -2431,6 +2431,43 @@ export default function Onboarding() {
       <div className="flex flex-1 flex-col items-center px-5 pb-6 pt-2">
         <div className="splove-onboarding-shell flex w-full max-w-md flex-1 flex-col overflow-hidden rounded-[1.35rem] bg-app-card shadow-[0_12px_48px_rgba(0,0,0,0.45)] ring-1 ring-white/[0.06] sm:my-2 sm:max-h-[min(700px,calc(100vh-84px))]">
           <div className="shrink-0 border-b border-app-border px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
+            <div
+              className="mb-2 flex items-center justify-end"
+              role="group"
+              aria-label={t("onboarding_language_gate_title")}
+            >
+              <div className="inline-flex items-center gap-0.5 rounded-full border border-app-border/70 bg-app-bg/60 px-1 py-0.5 text-[11px] font-semibold tracking-wider">
+                <button
+                  type="button"
+                  onClick={() => setLanguage("fr")}
+                  aria-pressed={language === "fr"}
+                  aria-label="Français"
+                  className="rounded-full px-2 py-1 transition-colors active:scale-[0.97]"
+                  style={{
+                    background: language === "fr" ? BRAND_BG : "transparent",
+                    color: language === "fr" ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                  }}
+                >
+                  FR
+                </button>
+                <span aria-hidden className="text-app-muted/40">
+                  |
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setLanguage("en")}
+                  aria-pressed={language === "en"}
+                  aria-label="English"
+                  className="rounded-full px-2 py-1 transition-colors active:scale-[0.97]"
+                  style={{
+                    background: language === "en" ? BRAND_BG : "transparent",
+                    color: language === "en" ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                  }}
+                >
+                  EN
+                </button>
+              </div>
+            </div>
             <div className="flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-app-muted">
               <span>
                 {t("onboarding_step_word")} {step}/{TOTAL_STEPS}
