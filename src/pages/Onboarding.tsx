@@ -210,6 +210,7 @@ const OPTIONAL_PROFILE_COLUMNS = [
   "preferred_age_min",
   "preferred_age_max",
   "sport_match_preference",
+  "onboarding_done",
 ] as const;
 
 const SPORT_MATCH_PREF_OPTIONS: readonly {
@@ -1839,6 +1840,47 @@ export default function Onboarding() {
 
       const locSourceResolved: "manual" | "device" = obLocSource ?? "manual";
 
+      let submitCityFinal = obLocCity.trim() || null;
+      const pairOk =
+        typeof obLocLat === "number" &&
+        typeof obLocLng === "number" &&
+        Number.isFinite(obLocLat) &&
+        Number.isFinite(obLocLng);
+      let submitLatFinal = pairOk ? obLocLat : null;
+      let submitLngFinal = pairOk ? obLocLng : null;
+      if (submitCityFinal && submitCityFinal.length >= 2) {
+        if (submitLatFinal == null || submitLngFinal == null) {
+          const resolved = await forwardGeocodeFirst(submitCityFinal);
+          if (!resolved) {
+            setLoading(false);
+            setStepHint(t("location_city_pick_list_prompt"));
+            setStep(4);
+            onboardingSubmitInFlightRef.current = false;
+            return;
+          }
+          submitLatFinal = resolved.lat;
+          submitLngFinal = resolved.lng;
+          if (resolved.label?.trim()) submitCityFinal = resolved.label.trim();
+          setObLocLat(resolved.lat);
+          setObLocLng(resolved.lng);
+          setObLocCity(resolved.label);
+          setObLocSource("manual");
+        }
+      }
+
+      const submitCoordsOk =
+        typeof submitLatFinal === "number" &&
+        typeof submitLngFinal === "number" &&
+        Number.isFinite(submitLatFinal) &&
+        Number.isFinite(submitLngFinal);
+      if (typeof submitCityFinal === "string" && submitCityFinal.trim().length >= 2 && !submitCoordsOk) {
+        setLoading(false);
+        setStepHint(t("location_city_pick_list_prompt"));
+        setStep(4);
+        onboardingSubmitInFlightRef.current = false;
+        return;
+      }
+
       const moderationAllowsComplete = PHOTO_VERIFICATION_PLACEHOLDER || !moderationRejected;
 
       let moderationBanner: string | null = null;
@@ -1856,9 +1898,9 @@ export default function Onboarding() {
         gender,
         looking_for: serializeInterestedInValues(interestedIn),
         intent: dbIntentFromUiIntent(intent),
-        city: obLocCity.trim() || null,
-        latitude: obLocLat,
-        longitude: obLocLng,
+        city: submitCityFinal,
+        latitude: submitLatFinal,
+        longitude: submitLngFinal,
         discovery_radius_km: obLocRadiusKm,
         portrait_url: portraitUrl,
         fullbody_url: fullbodyUrl,
@@ -1916,9 +1958,9 @@ export default function Onboarding() {
         looking_for: serializeInterestedInValues(interestedIn),
         intent: intentDbValue,
         meet_pref: intentDbValue,
-        city: obLocCity.trim() || null,
-        latitude: obLocLat,
-        longitude: obLocLng,
+        city: submitCityFinal,
+        latitude: submitLatFinal,
+        longitude: submitLngFinal,
         discovery_radius_km: obLocRadiusKm,
         location_source: locSourceResolved,
         location_updated_at: nowIso,
@@ -1939,6 +1981,7 @@ export default function Onboarding() {
         main_photo_url: portraitUrl || fullbodyUrl,
         profile_completed: finalizedCompletionFlag,
         onboarding_completed: finalizedCompletionFlag,
+        onboarding_done: finalizedCompletionFlag,
         accepted_terms_at: acceptTerms ? nowIso : null,
         accepted_privacy_at: acceptTerms ? nowIso : null,
         updated_at: nowIso,
@@ -1961,6 +2004,7 @@ export default function Onboarding() {
           ...profilePayload,
           profile_completed: false,
           onboarding_completed: false,
+          onboarding_done: false,
         };
         let { error: bailErr } = await supabase
           .from("profiles")

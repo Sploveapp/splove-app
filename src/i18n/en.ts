@@ -89,8 +89,6 @@ const en = {
   manage_account: "Manage my account",
   use_current_location: "Use my current location",
   save_location: "Save location",
-  profile_location_geocode_failed:
-    "We couldn't place this city on the map. Refine the city or use your current location.",
   location: "Location",
   city: "City",
   search_radius_km: "Search radius (km)",
@@ -432,7 +430,7 @@ const en = {
   loading_error: "Loading error",
   messages_login_required: "Log in to view your messages.",
   nav_main_label: "Main navigation",
-  nav_tab_discover: "Pulse",
+  nav_tab_discover: "Move",
   nav_tab_undo: "Undo",
   nav_undo_none_soft: "No undo available",
   nav_tab_pulses: "Pulses",
@@ -817,7 +815,7 @@ const en = {
   onboarding_err_intent: "Pick an option.",
   onboarding_err_city: "Add your city or use your current location.",
   location_city_pick_list_prompt:
-    "Pick your city from the list or refine your search to enable nearby profiles on Discover.",
+    "Select your city from the list to activate profiles near you.",
   location_city_pick_list_helper:
     "Choose a suggestion or continue — we save an approximate position for Discover.",
   onboarding_err_radius: "Choose a search radius.",

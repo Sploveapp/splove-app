@@ -81,6 +81,7 @@ import {
   fetchGrowthProfileFields,
 } from "../services/referral.service";
 import { trackEvent, getAbVariant, SECOND_CHANCE_COPY_TEST } from "../lib/analytics";
+import { viewerHasDiscoverSearchCoords } from "../constants/discoverGeo";
 
 type Profile = {
   id: string;
@@ -1239,7 +1240,6 @@ export default function Discover() {
   const [myDiscoveryRadiusKm] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
-  const [betaRadiusFallbackActive, setBetaRadiusFallbackActive] = useState(false);
   const [reportProfileId, setReportProfileId] = useState<string | null>(null);
   const [reportPhotoTarget, setReportPhotoTarget] = useState<{
     profileId: string;
@@ -1526,6 +1526,12 @@ export default function Discover() {
                 ...meProfileOptional,
                 profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
               };
+
+        if (!viewerHasDiscoverSearchCoords(meProfile)) {
+          console.warn("[Discover] openProfileFromNavigation: viewer search center incomplet");
+          return;
+        }
+
         let p = candRes.data as Profile | null;
         if (!p || candRes.error) {
           let feedProbe = await supabase
@@ -1670,7 +1676,6 @@ export default function Discover() {
     }
     setLoading(true);
     setErrorMessage("");
-    setBetaRadiusFallbackActive(false);
     let resultCount = 0;
     try {
       console.log("[Discover feed] currentUserId:", currentUserId);
@@ -1790,6 +1795,15 @@ export default function Discover() {
           "[Discover] parseProfileIntent result =",
           parseProfileIntent(safeMeProfile?.intent),
         );
+      }
+
+      if (!viewerHasDiscoverSearchCoords(meProfile)) {
+        setSwipeHistory([]);
+        swipeHistoryRef.current = [];
+        setProfiles([]);
+        setErrorMessage(t("location_city_pick_list_prompt"));
+        discoverLogStageCount("viewer geo/radius incomplete — skip feed", 0);
+        return;
       }
       
       const { data, error } = await supabase.rpc("get_discover_feed_alive", { p_limit: 12 });
@@ -2338,41 +2352,7 @@ export default function Discover() {
 
       discoverFiltered.sort((a, b) => sortDiscoverProfileStack(a, b, hasPlus));
 
-      let discoverOrdered = discoverFiltered;
-      if (BETA_MODE) {
-        const viewerRadiusRaw =
-          typeof meProfile.discovery_radius_km === "number" && Number.isFinite(meProfile.discovery_radius_km)
-            ? meProfile.discovery_radius_km
-            : null;
-        const viewerRadius = viewerRadiusRaw != null && viewerRadiusRaw > 0 ? viewerRadiusRaw : null;
-        if (viewerRadius != null) {
-          const inside: ProfileWithAffinity[] = [];
-          const slightlyOutside: ProfileWithAffinity[] = [];
-          const farOutside: ProfileWithAffinity[] = [];
-          const noGps: ProfileWithAffinity[] = [];
-          for (const p of discoverFiltered) {
-            const d = p.distanceKm;
-            if (d == null || !Number.isFinite(d)) {
-              noGps.push(p);
-            } else if (d <= viewerRadius) {
-              inside.push(p);
-            } else if (d <= viewerRadius * 2) {
-              slightlyOutside.push(p);
-            } else {
-              farOutside.push(p);
-            }
-          }
-          const minInsideTarget = Math.min(DISCOVER_DISPLAY_LIMIT, 6);
-          if (inside.length < minInsideTarget) {
-            setBetaRadiusFallbackActive(
-              slightlyOutside.length > 0 || noGps.length > 0 || farOutside.length > 0,
-            );
-            discoverOrdered = [...inside, ...slightlyOutside, ...noGps, ...farOutside];
-          } else {
-            discoverOrdered = [...inside, ...slightlyOutside, ...noGps, ...farOutside];
-          }
-        }
-      }
+      const discoverOrdered = discoverFiltered;
 
       if (import.meta.env.DEV && discoverFiltered.length > 0) {
         for (const p of discoverFiltered.slice(0, 12)) {
@@ -2937,11 +2917,6 @@ export default function Discover() {
               {myCity ? (
                 <p className="mx-auto max-w-[21rem] text-[11px] text-app-muted">
                   {t("discover.yourCityLine", { city: myCity })}
-                </p>
-              ) : null}
-              {betaRadiusFallbackActive ? (
-                <p className="mx-auto max-w-[22rem] text-[12px] font-medium text-app-muted">
-                  On élargit un peu ta zone pour te proposer plus de profils.
                 </p>
               ) : null}
               {currentUserId ? (

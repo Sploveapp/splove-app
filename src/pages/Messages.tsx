@@ -4,6 +4,7 @@ import { CHAT_MESSAGES_TABLE, logSupabaseTableError, supabase } from "../lib/sup
 import { useAuth } from "../contexts/AuthContext";
 import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
 import { useTranslation } from "../i18n/useTranslation";
+import { ReferralEmptyState } from "../components/referral/ReferralEmptyState";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { INBOX_REFRESH_EVENT } from "../constants";
 import { countPendingSecondChancesForUser } from "../services/secondChance.service";
@@ -58,7 +59,7 @@ function MessageThreadRowItem(props: {
 }
 
 export default function Messages() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [rows, setRows] = useState<InboxRow[]>([]);
@@ -235,26 +236,7 @@ export default function Messages() {
           <p className="mt-4 rounded-xl border border-red-100 bg-red-50/90 px-3 py-2 text-sm text-red-700">{error}</p>
         )}
 
-        {!loading && !error && rows.length === 0 && (
-          <div className="mt-8 rounded-2xl border border-dashed border-app-border bg-app-card px-5 py-10 text-center shadow-sm">
-            <p className="text-sm leading-relaxed text-app-muted">
-              {t("messages_empty_state")}
-            </p>
-            <button
-              type="button"
-              onClick={() => navigate("/discover")}
-              className="mt-4 rounded-full bg-[#FF1E2D] px-4 py-2 text-sm font-semibold text-white"
-            >
-              {t("discover_profiles")}
-            </button>
-            <Link
-              to="/profile"
-              className="mt-3 block text-center text-sm font-semibold text-app-text underline underline-offset-2"
-            >
-              {t("messages_empty_secondary_cta")}
-            </Link>
-          </div>
-        )}
+        {!loading && !error && rows.length === 0 && <ReferralEmptyState language={language} />}
 
         {!loading && rows.length > 0 && (
           <ul className="mt-5 space-y-2">

@@ -91,8 +91,6 @@ const fr = {
   manage_account: "Gérer mon compte",
   use_current_location: "Utiliser ma position actuelle",
   save_location: "Enregistrer la localisation",
-  profile_location_geocode_failed:
-    "Impossible de placer cette ville sur la carte. Précise ta ville ou utilise ta position.",
   location: "Localisation",
   city: "Ville",
   search_radius_km: "Rayon de recherche (km)",
@@ -439,7 +437,7 @@ const fr = {
   loading_error: "Erreur de chargement",
   messages_login_required: "Connectez-vous pour voir vos messages.",
   nav_main_label: "Navigation principale",
-  nav_tab_discover: "Pulse",
+  nav_tab_discover: "Move",
   nav_tab_undo: "Retour",
   nav_undo_none_soft: "Aucun retour disponible",
   nav_tab_pulses: "Pulses",
@@ -828,7 +826,7 @@ const fr = {
   onboarding_err_intent: "Choisis une intention.",
   onboarding_err_city: "Indique ta ville ou utilise ta position actuelle.",
   location_city_pick_list_prompt:
-    "Sélectionne ta ville dans la liste ou précise-la pour activer les profils près de toi.",
+    "Sélectionne ta ville dans la liste pour activer les profils près de toi.",
   location_city_pick_list_helper:
     "Choisis une suggestion ou continue : nous enregistrons une position approximative pour Discover.",
   onboarding_err_radius: "Choisis un rayon de recherche.",

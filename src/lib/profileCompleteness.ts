@@ -1,3 +1,4 @@
+import { isValidDiscoveryRadiusKm } from "../constants/discoverGeo";
 import { isAdultFromBirthIso } from "./ageGate";
 
 /**
@@ -72,7 +73,7 @@ export function isOnboardingComplete(profile: ProfileCompletenessInput | null | 
   const hasCityText = Boolean(profile.city?.trim() && profile.city.trim().length >= 2);
   /** Discover nécessite ville + coordonnées exploitables (RPC distance + classement). */
   const hasLocation = hasCityText && hasCoords;
-  const hasRadius = [10, 25, 50, 100].includes(Number(profile.discovery_radius_km ?? 0));
+  const hasRadius = isValidDiscoveryRadiusKm(profile.discovery_radius_km);
   const isAdult = Boolean(profile.birth_date && isAdultFromBirthIso(profile.birth_date));
   const hasPhotos = Boolean(profile.portrait_url?.trim() && profile.fullbody_url?.trim());
 

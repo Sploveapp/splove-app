@@ -3,6 +3,7 @@ import { evaluateDiscoverV3, viewerOpenAdaptedResolved } from "../lib/discoverSc
 import { discoverCrossSportSecondaryAllowed } from "@/lib/sportMatchPreference";
 import { encodeDiscoverScoringReason } from "@/lib/discoverScoringReasons";
 import { BETA_MODE } from "../constants/beta";
+import { isValidDiscoveryRadiusKm } from "../constants/discoverGeo";
 import { asAgePreferenceScalar, isReciprocalAgeDiscoverMatch } from "../lib/profileAge";
 
 type DiscoverProfile = {
@@ -90,17 +91,17 @@ function normalizeToken(raw: string | null | undefined): string {
     .replace(/[^a-z0-9_, -]+/g, "");
 }
 
+function cityLabelMatchForDiag(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ca = normalizeToken(a);
+  const cb = normalizeToken(b);
+  return Boolean(ca && cb && ca === cb);
+}
+
 /** Onboarding-looking_for uses `women`/`men`; profile gender uses `female`/`male` — unify before compares. */
 function normalizeRelationshipComparableToken(t: string): string {
   if (t === "men") return "male";
   if (t === "women") return "female";
   return t;
-}
-
-function isSameCity(a: string | null | undefined, b: string | null | undefined): boolean {
-  const ca = normalizeToken(a);
-  const cb = normalizeToken(b);
-  return Boolean(ca && cb && ca === cb);
 }
 
 function canonicalGender(raw: string | null | undefined): string | null {
@@ -465,28 +466,23 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     diagExtra.exact_mismatch_reason = mismatchReasons;
 
     const distanceKm = ctx.distanceById.get(candidate.id) ?? null;
-    const viewerRadius =
-      typeof ctx.viewer.discovery_radius_km === "number" && Number.isFinite(ctx.viewer.discovery_radius_km)
-        ? ctx.viewer.discovery_radius_km
-        : null;
-    const sameCity = isSameCity(ctx.viewer.city, candidate.city);
-    const hasGpsDistance = distanceKm != null && Number.isFinite(distanceKm);
-    const insideRadius = hasGpsDistance && viewerRadius != null && viewerRadius > 0 ? distanceKm <= viewerRadius : false;
-    // Beta fallback: do not exclude solely because GPS is missing.
-    // If other hard constraints pass (shared sport + compatibility + safety checks), candidate may pass without distance.
-    const gpsMissingSharedSportFallback =
-      sharedCount >= 1 && !sameCity && !hasGpsDistance;
-    const locationAccepted = sameCity || insideRadius || gpsMissingSharedSportFallback;
-    const distanceSource: "gps" | "missing_gps_shared_sport_fallback" = hasGpsDistance
-      ? "gps"
-      : "missing_gps_shared_sport_fallback";
+    const viewerRadius = isValidDiscoveryRadiusKm(ctx.viewer.discovery_radius_km)
+      ? Math.round(ctx.viewer.discovery_radius_km as number)
+      : null;
+    const hasUsableDistance = distanceKm != null && Number.isFinite(distanceKm);
+    /** Filtrage géo strict avant scoring sport : distance Haversine renvoyée par RPC, ≤ rayon autorisé. */
+    const insideRadiusStrict =
+      viewerRadius != null && hasUsableDistance && (distanceKm as number) <= viewerRadius;
+    const locationAccepted = insideRadiusStrict;
+    const distanceSource: "gps" | "gps_unavailable_candidate" | "gps_unavailable_viewer_rpc" =
+      viewerRadius == null ? "gps_unavailable_viewer_rpc" : !hasUsableDistance ? "gps_unavailable_candidate" : "gps";
     if (!locationAccepted) {
       excludedReasons.push("outside discovery radius");
     }
 
     diagExtra.viewer_city = ctx.viewer.city ?? null;
     diagExtra.candidate_city = candidate.city ?? null;
-    diagExtra.same_city = sameCity;
+    diagExtra.same_city = cityLabelMatchForDiag(ctx.viewer.city, candidate.city);
     diagExtra.distance_km = distanceKm;
     diagExtra.distance_source = distanceSource;
     diagExtra.discovery_radius_km = viewerRadius;
@@ -519,7 +515,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
           exclusion_reason: [],
           viewer_city: ctx.viewer.city ?? null,
           candidate_city: candidate.city ?? null,
-          same_city: sameCity,
+          same_city: cityLabelMatchForDiag(ctx.viewer.city, candidate.city),
           distance_km: distanceKm,
           discovery_radius_km: viewerRadius,
           viewer_sport_ids: [...viewerSportIds],
@@ -566,7 +562,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       priorityMeetActive: priorityActive,
     });
 
-    if (v3.outside_radius && !sameCity) {
+    if (v3.outside_radius) {
       if (import.meta.env.DEV) {
         const hl = isDiscoverDiagHighlightName(candidate.first_name);
         const row = {
@@ -576,7 +572,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
           outside_radius: true,
           viewer_city: ctx.viewer.city ?? null,
           candidate_city: candidate.city ?? null,
-          same_city: sameCity,
+          same_city: cityLabelMatchForDiag(ctx.viewer.city, candidate.city),
           distance_km: distanceKm,
           discovery_radius_km: viewerRadius,
           viewer_sport_ids: [...viewerSportIds],
@@ -611,14 +607,13 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       (candidate as { sport_practice_type?: string | null }).sport_practice_type,
     );
 
-    const cityFallbackBoost = distanceKm == null && isSameCity(ctx.viewer.city, candidate.city) ? 12 : 0;
     const betaSharedSportsBoost = BETA_MODE ? sharedCount * 8 : 0;
     const crossSportSecondaryBonus =
       sharedCount === 0 &&
       discoverCrossSportSecondaryAllowed(ctx.viewer.sport_match_preference, candidate.sport_match_preference)
         ? CROSS_SPORT_SECONDARY_SCORE_BONUS
         : 0;
-    const totalScore = (v3?.total ?? 0) + cityFallbackBoost + betaSharedSportsBoost + crossSportSecondaryBonus;
+    const totalScore = (v3?.total ?? 0) + betaSharedSportsBoost + crossSportSecondaryBonus;
     const reasons: string[] = [];
     if (sharedCount >= 1) {
       reasons.push(
@@ -638,10 +633,6 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       reasons.push(
         encodeDiscoverScoringReason("discover_scoring_distance_km", { km: Math.round(distanceKm) }),
       );
-    }
-    if (cityFallbackBoost > 0) reasons.push(encodeDiscoverScoringReason("discover_scoring_same_city_fallback_beta"));
-    if (gpsMissingSharedSportFallback) {
-      reasons.push(encodeDiscoverScoringReason("discover_scoring_gps_beta_shared_sport"));
     }
     if (crossSportSecondaryBonus > 0) {
       reasons.push(

@@ -48,6 +48,7 @@ import { buildAuthReferralLink, fetchGrowthProfileFields, type GrowthProfileRow 
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
+import { normalizeDiscoveryRadiusKm } from "../constants/discoverGeo";
 import { normalizePreferredAgeRange } from "../lib/profileAge";
 export default function Profile() {
   const { t } = useTranslation();
@@ -96,12 +97,8 @@ export default function Profile() {
     if (!profile) return;
     const pr = profile as Record<string, unknown>;
     setLocCity(typeof pr.city === "string" ? pr.city : "");
-    const dr = pr.discovery_radius_km;
-    if (typeof dr === "number" && Number.isFinite(dr) && dr > 0) {
-      setLocRadius(String(Math.round(dr)));
-    } else {
-      setLocRadius("");
-    }
+    const normalizedR = normalizeDiscoveryRadiusKm(pr.discovery_radius_km);
+    setLocRadius(String(normalizedR ?? 25));
   }, [profile]);
 
   const preferredMeetingAgeBounds = useMemo(
@@ -189,11 +186,7 @@ export default function Profile() {
     setLocMessage(null);
     setLocSaving(true);
     try {
-      const radiusParsed = locRadius === "" ? null : Number(locRadius);
-      const radiusFinal =
-        radiusParsed != null && Number.isFinite(radiusParsed) && radiusParsed > 0
-          ? Math.round(radiusParsed)
-          : 25;
+      const radiusFinal = normalizeDiscoveryRadiusKm(Number(locRadius)) ?? 25;
       const pr = profile as Record<string, unknown>;
       let lat = typeof pr.latitude === "number" && Number.isFinite(pr.latitude) ? pr.latitude : null;
       let lng = typeof pr.longitude === "number" && Number.isFinite(pr.longitude) ? pr.longitude : null;
@@ -201,7 +194,7 @@ export default function Profile() {
       if (cityTrim.length >= 2 && (lat == null || lng == null)) {
         const resolved = await forwardGeocodeFirst(cityTrim);
         if (!resolved) {
-          setLocMessage(t("profile_location_geocode_failed"));
+          setLocMessage(t("location_city_pick_list_prompt"));
           return;
         }
         lat = resolved.lat;
@@ -234,11 +227,7 @@ export default function Profile() {
         setLocMessage("Position indisponible. Verifie les autorisations ou saisis ta ville.");
         return;
       }
-      const radiusParsed = locRadius === "" ? null : Number(locRadius);
-      const radiusFinal =
-        radiusParsed != null && Number.isFinite(radiusParsed) && radiusParsed > 0
-          ? Math.round(radiusParsed)
-          : 25;
+      const radiusFinal = normalizeDiscoveryRadiusKm(Number(locRadius)) ?? 25;
       const cityLabel = await reverseGeocodeCity(c.lat, c.lng);
       const { error } = await updateProfileLocation(supabase, user.id, {
         city: (cityLabel ?? locCity.trim()) || null,
@@ -952,7 +941,6 @@ export default function Profile() {
                 boxSizing: "border-box",
               }}
             >
-              <option value="">{t("no_distance_limit")}</option>
               <option value="10">{t("distance_10_km")}</option>
               <option value="25">{t("distance_25_km")}</option>
               <option value="50">{t("distance_50_km")}</option>
