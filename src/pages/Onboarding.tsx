@@ -197,6 +197,8 @@ const OPTIONAL_PROFILE_COLUMNS = [
   "preferred_age_max",
   "sport_match_preference",
   "language",
+  "accepted_terms_at",
+  "accepted_privacy_at",
   "onboarding_done",
 ] as const;
 
@@ -364,7 +366,7 @@ type SportOption = {
   is_featured?: boolean;
 };
 
-/** 11 étapes formulaire ; écran succès séparé (`postOnboarding`). */
+/** 11 étapes formulaire ; succès onboarding → redirection `/discover`. */
 const TOTAL_STEPS = 11;
 const ONBOARDING_SPORT_SLOT_MAX = 3;
 
@@ -571,7 +573,6 @@ export default function Onboarding() {
   const [heightCmInput, setHeightCmInput] = useState("");
   const [hasChildrenChoice, setHasChildrenChoice] = useState<HasChildrenChoice>("");
   const [sportPhraseOptional, setSportPhraseOptional] = useState("");
-  const [postOnboarding, setPostOnboarding] = useState(false);
   const [portraitFile, setPortraitFile] = useState<File | null>(null);
   const [bodyFile, setBodyFile] = useState<File | null>(null);
   const [portraitSavedUrl, setPortraitSavedUrl] = useState("");
@@ -1033,9 +1034,8 @@ export default function Onboarding() {
     navigate("/auth", { replace: true });
   }, [user?.id, authLoading, isAuthInitialized, navigate]);
 
-  /** Profil déjà complet (retour URL / session) → Discover. Pas pendant le submit final (évite course avec l’écran succès). */
+  /** Profil déjà complet (retour URL / session) → Discover. */
   useEffect(() => {
-    if (postOnboarding) return;
     if (!isAuthInitialized || authLoading) return;
     if (isProfileLoading) return;
     if (!user?.id) return;
@@ -1045,7 +1045,6 @@ export default function Onboarding() {
       navigate("/discover", { replace: true });
     }
   }, [
-    postOnboarding,
     isProfileComplete,
     authLoading,
     isAuthInitialized,
@@ -1119,7 +1118,7 @@ export default function Onboarding() {
     setStepHint(null);
   }, [step, confirm18, acceptTerms]);
 
-  /** Doit rester avant tout `return` — sinon hooks en moins si Splash / écran succès. */
+  /** Doit rester avant tout `return` — sinon hooks en moins si Splash. */
   useEffect(() => {
     setSportLevelsById((prev) => {
       const next = { ...prev };
@@ -1158,66 +1157,6 @@ export default function Onboarding() {
 
   if (authLoading) {
     return <SplashScreen />;
-  }
-
-  if (postOnboarding) {
-    return (
-      <div className="flex min-h-screen flex-col bg-app-bg font-sans">
-        <GlobalHeader variant="compact" />
-        <div className="flex flex-1 flex-col items-center justify-center px-6 pb-10 pt-6">
-          <div className="w-full max-w-md text-center">
-            <h1 className="text-2xl font-bold leading-snug text-app-text">{t("onboarding_post_title")}</h1>
-            <p className="mt-2 text-sm leading-snug text-app-muted">{t("onboarding_post_subtitle")}</p>
-            <div
-              className="mt-6 w-full rounded-2xl border border-app-border/90 bg-app-card/60 px-4 py-3 text-left"
-              role="region"
-              aria-label={t("onboarding_post_mobility_region_label")}
-            >
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-app-muted">
-                {t("onboarding_post_mobility_kicker")}
-              </p>
-              <p className="mt-1.5 text-sm leading-snug text-app-text">{t("onboarding_post_accessibility_intro")}</p>
-              <button
-                type="button"
-                onClick={() => navigate("/profile", { replace: true })}
-                className="mt-3 text-sm font-semibold text-app-accent underline underline-offset-2"
-              >
-                {t("onboarding_post_mobility_cta")}
-              </button>
-            </div>
-            <button
-              type="button"
-              onClick={() => navigate("/profile", { replace: true })}
-              className="mt-8 w-full rounded-2xl py-4 text-base font-semibold shadow-sm"
-              style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
-            >
-              {t("verify_profile")}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                try {
-                  sessionStorage.setItem("splove_verify_nudge_dismissed", "1");
-                } catch {
-                  /* ignore */
-                }
-                navigate("/discover", { replace: true });
-              }}
-              className="mt-3 w-full rounded-2xl border border-app-border py-3 text-sm font-semibold text-app-text"
-            >
-              {t("later")}
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate("/discover", { replace: true })}
-              className="mt-4 w-full text-center text-sm font-medium text-app-muted underline underline-offset-2"
-            >
-              {t("onboarding_find_session")}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
   }
 
   const onboardingPreferredAgeDraftOk = (() => {
@@ -1943,7 +1882,10 @@ export default function Onboarding() {
         }
       } else if (hasChildrenProbe.data && "has_children" in hasChildrenProbe.data) {
         const hasChildrenValue = (hasChildrenProbe.data as { has_children?: unknown }).has_children;
-        hasChildrenRequirementOk = typeof hasChildrenValue === "boolean";
+        const savesYesNoAnswer = typeof hasChildrenForDb(hasChildrenChoice) === "boolean";
+        const savesExplicitPreferNot = hasChildrenChoice === "prefer_not";
+        hasChildrenRequirementOk =
+          typeof hasChildrenValue === "boolean" || savesYesNoAnswer || savesExplicitPreferNot;
       }
       const hasAtLeastOneSport = selectedSportIds.length > 0;
       const hasAtLeastOnePhoto = Boolean(portraitUrl || fullbodyUrl);
@@ -2196,6 +2138,7 @@ export default function Onboarding() {
             payloadFinal: payloadForUpsert,
             fallbackTriggered: profileUpsertSelect !== PROFILE_UPSERT_ONBOARDING_SELECT,
           });
+          console.error("[Onboarding submit] Supabase profiles upsert error (exact)", profileError);
           console.error("[Onboarding submit] verdict: upsert/select KO", {
             outcome: "upsert KO OR select KO",
             select: profileUpsertSelect,
@@ -2204,10 +2147,10 @@ export default function Onboarding() {
           setError(
             /18 ans|réservé aux personnes|18 years|age/i.test(profileError.message || "")
               ? t("onboarding_error_age_gate")
-              : t("onboarding_error_profile_save")
+              : t("onboarding_error_profile_gate")
           );
         } else {
-          setError(t("onboarding_error_profile_incomplete"));
+          setError(t("onboarding_error_profile_gate"));
         }
         return;
       }
@@ -2236,8 +2179,9 @@ export default function Onboarding() {
           .delete()
           .eq("profile_id", authUserId);
         if (deleteSportsErr) {
+          console.error("[Onboarding submit] Supabase profile_sports delete error (exact)", deleteSportsErr);
           logDetailedError("profile_sports delete", deleteSportsErr, { profile_id: authUserId });
-          setError(t("onboarding_error_sports_save"));
+          setError(t("onboarding_error_profile_gate"));
           return;
         }
         console.log("[Onboarding submit] result:", { step: "delete profile_sports", ok: true });
@@ -2263,9 +2207,9 @@ export default function Onboarding() {
         });
 
         if (sportsError) {
+          console.error("[Onboarding submit] Supabase profile_sports insert error (exact)", sportsError);
           logDetailedError("profile_sports insert", sportsError, { rows });
-          console.error("ONBOARDING_SAVE_ERROR", sportsError);
-          setError(t("onboarding_error_sports_save"));
+          setError(t("onboarding_error_profile_gate"));
           return;
         }
         console.log("SPORTS_PERSIST_RESULT", {
@@ -2295,17 +2239,31 @@ export default function Onboarding() {
           (refreshedProfile as { onboarding_completed?: unknown } | null)?.onboarding_completed ?? null,
       });
 
+      function rowFlagsOnboardingDone(row: unknown): boolean {
+        if (!row || typeof row !== "object") return false;
+        const r = row as Record<string, unknown>;
+        return (
+          r.profile_completed === true ||
+          r.onboarding_completed === true ||
+          r.onboarding_done === true
+        );
+      }
+
       const gateOk =
-        Boolean((profileReloadRow as { profile_completed?: unknown } | null)?.profile_completed === true) ||
-        refreshedProfile?.profile_completed === true ||
-        upsertRow.profile_completed === true;
+        rowFlagsOnboardingDone(profileReloadRow) ||
+        rowFlagsOnboardingDone(refreshedProfile) ||
+        rowFlagsOnboardingDone(upsertRow);
       if (!gateOk) {
         console.error("[Onboarding submit] verdict: upsert OK + select OK but gating KO");
         console.error("[Onboarding submit] gating incomplet après upsert — détail diagnostic", {
           profile_completed: upsertRow.profile_completed,
+          upsert_onboarding_completed: (upsertRow as { onboarding_completed?: unknown }).onboarding_completed ?? null,
+          upsert_onboarding_done: (upsertRow as { onboarding_done?: unknown }).onboarding_done ?? null,
           reload_profile_completed:
             (profileReloadRow as { profile_completed?: unknown } | null)?.profile_completed ?? null,
           refreshed_profile_completed: refreshedProfile?.profile_completed ?? null,
+          refreshed_onboarding_completed:
+            (refreshedProfile as { onboarding_completed?: unknown } | null)?.onboarding_completed ?? null,
           birth_date: upsertRow.birth_date,
         });
         setError(t("onboarding_error_profile_gate"));
@@ -2334,8 +2292,8 @@ export default function Onboarding() {
       if (moderationBanner) {
         await new Promise((r) => window.setTimeout(r, 1400));
       }
-      console.log("[Onboarding submit] success → momentum screen");
-      setPostOnboarding(true);
+      console.log("[Onboarding submit] success → discover");
+      navigate("/discover", { replace: true });
     } catch (err) {
       logDetailedError("handleSubmit catch", err);
       console.error("ONBOARDING_SAVE_ERROR", err);
