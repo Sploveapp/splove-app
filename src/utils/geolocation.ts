@@ -2,6 +2,8 @@
  * Géoloc utile Discover — pas de carte, libellés approximatifs.
  */
 
+import { formatCityDisplay } from "../lib/formatCityDisplay";
+
 export function formatDiscoverDistanceLabel(km: number | null | undefined): string | null {
   if (km == null || !Number.isFinite(km) || km < 0) return null;
   if (km < 1) return "A moins de 1 km";
@@ -9,8 +11,8 @@ export function formatDiscoverDistanceLabel(km: number | null | undefined): stri
 }
 
 function sameCity(a: string | null | undefined, b: string | null | undefined): boolean {
-  const x = a?.trim().toLowerCase();
-  const y = b?.trim().toLowerCase();
+  const x = formatCityDisplay(a).toLowerCase();
+  const y = formatCityDisplay(b).toLowerCase();
   return Boolean(x && y && x === y);
 }
 
@@ -27,7 +29,8 @@ export function buildDiscoverLocationLines(opts: {
   };
 }): { line1: string | null; line2: string | null } {
   const dist = formatDiscoverDistanceLabel(opts.distanceKm);
-  const city = opts.profileCity?.trim() || null;
+  const city =
+    opts.profileCity != null ? formatCityDisplay(opts.profileCity) || null : null;
   if (dist) {
     return { line1: dist, line2: city ?? null };
   }

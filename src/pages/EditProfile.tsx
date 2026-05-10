@@ -18,6 +18,7 @@ import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/s
 import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import { parseHeightCmOptionalInput } from "../lib/profileHeightCm";
 
 type SportOption = { id: string | number; name: string; category?: string | null };
 type LookingForValue =
@@ -129,6 +130,7 @@ export default function EditProfile() {
   const [sportIntensity, setSportIntensity] = useState<"chill" | "intense" | "">("");
   const [planningStyle, setPlanningStyle] = useState<"spontaneous" | "planned" | "">("");
   const [sportMatchPreference, setSportMatchPreference] = useState<SportMatchPreferenceDb>("same_sports");
+  const [heightCmInput, setHeightCmInput] = useState("");
   const [bio, setBio] = useState("");
 
   const [portraitUrl, setPortraitUrl] = useState("");
@@ -190,6 +192,10 @@ export default function EditProfile() {
     setSportIntensity(si === "chill" || si === "intense" ? si : "");
     const ps = String((profile as Record<string, unknown>).planning_style ?? "");
     setPlanningStyle(ps === "spontaneous" || ps === "planned" ? ps : "");
+    const hRaw = (profile as Record<string, unknown>).height_cm;
+    setHeightCmInput(
+      typeof hRaw === "number" && Number.isFinite(hRaw) && hRaw > 0 ? String(Math.round(hRaw)) : "",
+    );
     setBio(String((profile as Record<string, unknown>).sport_phrase ?? ""));
     setPortraitUrl(String(profile.portrait_url ?? ""));
     setBodyUrl(String(profile.fullbody_url ?? ""));
@@ -327,6 +333,7 @@ export default function EditProfile() {
         fullbody_url: nextBody || null,
         main_photo_url: nextPortrait || nextBody || null,
         sport_match_preference: sportMatchPreference,
+        height_cm: parseHeightCmOptionalInput(heightCmInput),
         updated_at: new Date().toISOString(),
       };
 
@@ -536,6 +543,22 @@ export default function EditProfile() {
               ))}
             </div>
           </div>
+        </section>
+
+        <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 14 }}>
+          <label style={{ margin: "0 0 6px", display: "block", fontSize: 15, fontWeight: 600, color: APP_TEXT }} htmlFor="edit-profile-height">
+            {t("onboarding_height_label")}
+          </label>
+          <p style={{ margin: "0 0 10px", fontSize: 12, color: APP_TEXT_MUTED, lineHeight: 1.45 }}>{t("onboarding_step1_micro_height_hint")}</p>
+          <input
+            id="edit-profile-height"
+            type="text"
+            inputMode="numeric"
+            value={heightCmInput}
+            onChange={(e) => setHeightCmInput(e.target.value)}
+            placeholder={t("onboarding_height_placeholder")}
+            style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 12, border: `1px solid ${APP_BORDER}`, background: APP_BG, color: APP_TEXT }}
+          />
         </section>
 
         <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 14 }}>

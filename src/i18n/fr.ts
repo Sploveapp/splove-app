@@ -871,6 +871,8 @@ const fr = {
   onboarding_error_sports_save: "Impossible d'enregistrer vos sports pour le moment.",
   onboarding_error_profile_gate:
     "Ton profil n'a pas pu être validé. Vérifie que toutes les étapes obligatoires sont complètes, puis réessaie.",
+  onboarding_discover_readiness_blocked:
+    "Certaines informations de ton profil sont incomplètes. Vérifie les étapes précédentes.",
   onboarding_error_generic: "Une erreur est survenue. Réessaie.",
   onboarding_hydrating: "Restauration de ta progression...",
   onboarding_dev_veriff_note: "Vérification Veriff prête (non bloquante) — activable après onboarding.",

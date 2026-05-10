@@ -3,6 +3,7 @@
  */
 
 import { parseProfileIntent, PROFILE_INTENT_AMICAL } from "./profileIntent";
+import { formatCityDisplay } from "./formatCityDisplay";
 
 /** Phrase guidée unique (remplace la bio) — priorité au contenu saisi, puis ressenti court. */
 export function guidedProfileSentence(
@@ -49,9 +50,13 @@ export function softAreaHint(
   profileCity: string | null | undefined,
   labels?: { nearby?: string; twoSectors?: string },
 ): string | null {
-  const b = profileCity?.trim();
+  const b = profileCity?.trim()
+    ? formatCityDisplay(profileCity) || profileCity.trim()
+    : "";
   if (!b) return null;
-  const a = viewerCity?.trim();
+  const a = viewerCity?.trim()
+    ? formatCityDisplay(viewerCity) || viewerCity.trim()
+    : "";
   if (a && a.toLowerCase() === b.toLowerCase()) {
     return labels?.nearby ?? "Secteur voisin du vôtre (indication profil)";
   }

@@ -6,9 +6,10 @@ type Props = {
   children: React.ReactNode;
 };
 
-/** Session + `profiles.profile_completed === true` (chargement profil inclus). */
+/** Session + profil « terminé » (`isProfileComplete` depuis AuthContext, chargement inclus). */
 export function ProtectedRoute({ children }: Props) {
-  const { session, isLoading, isAuthInitialized, isProfileLoading, profile } = useAuth();
+  const { session, isLoading, isAuthInitialized, isProfileLoading, profile, isProfileComplete } =
+    useAuth();
   const location = useLocation();
   const pathname = location.pathname || "/";
   const isOnboardingPath = pathname === "/onboarding";
@@ -57,7 +58,7 @@ export function ProtectedRoute({ children }: Props) {
         redirect_decision: "navigate_auth",
       });
     }
-    return <Navigate to="/auth" replace />;
+    return <Navigate to="/auth?signup=1" replace />;
   }
 
   if (isProfileLoading) {
@@ -102,10 +103,11 @@ export function ProtectedRoute({ children }: Props) {
     );
   }
 
-  if (profile?.profile_completed !== true && !isOnboardingPath) {
+  if (!isProfileComplete && !isOnboardingPath) {
     console.log("[ONBOARDING_GUARD] profile_incomplete -> /onboarding", {
       pathname,
       profile_completed: profile?.profile_completed ?? null,
+      is_profile_complete: isProfileComplete,
       blocked_scope: isMainFeaturePath ? "main_features" : "protected_area",
     });
     if (import.meta.env.DEV) {
@@ -114,6 +116,7 @@ export function ProtectedRoute({ children }: Props) {
         auth_user_id: authUserId,
         profile_fetch_result: profileFetchResult,
         profile_completed: profile?.profile_completed ?? null,
+        is_profile_complete: isProfileComplete,
         redirect_decision: "navigate_onboarding",
       });
     }
@@ -124,6 +127,7 @@ export function ProtectedRoute({ children }: Props) {
     console.log("[ONBOARDING_GUARD] access_granted", {
       pathname,
       profile_completed: profile?.profile_completed === true,
+      is_profile_complete: isProfileComplete,
     });
   }
   if (import.meta.env.DEV) {

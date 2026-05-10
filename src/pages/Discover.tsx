@@ -42,6 +42,7 @@ import {
 import { buildDiscoverScore, computeReliabilityScore, getReliabilityUiHints } from "../lib/discoverScore";
 import { scoreAndFilterDiscoverCandidates } from "../services/discoverScoring.service";
 import { buildDiscoverLocationLines, formatViewerRadiusLabel } from "../utils/geolocation";
+import { formatCityDisplay } from "../lib/formatCityDisplay";
 import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
 import { usePremium } from "../hooks/usePremium";
 import { useSplovePlus } from "../hooks/useSplovePlus";
@@ -1243,7 +1244,12 @@ export default function Discover() {
   const { hasPlus } = usePremium(currentUserId || null);
   const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
   const [mySportMatchKeys, setMySportMatchKeys] = useState<Set<string>>(new Set());
-  const [myCity] = useState<string | null>(null);
+  const myCity = useMemo(() => {
+    const raw = profile && typeof profile === "object" ? (profile as { city?: string | null }).city : null;
+    if (typeof raw !== "string") return null;
+    const short = formatCityDisplay(raw);
+    return short !== "" ? short : null;
+  }, [profile]);
   const [myDiscoveryRadiusKm] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
@@ -1779,6 +1785,23 @@ export default function Discover() {
         swipeHistoryRef.current = [];
         setSwipeHistory([]);
         return;
+      }
+
+      {
+        const vLatOk =
+          typeof meProfile.latitude === "number" && Number.isFinite(meProfile.latitude);
+        const vLngOk =
+          typeof meProfile.longitude === "number" && Number.isFinite(meProfile.longitude);
+        if (!vLatOk || !vLngOk) {
+          console.warn("[Discover audit] missing viewer coordinates", {
+            profile_id: viewerAuthId,
+            latitude: meProfile.latitude ?? null,
+            longitude: meProfile.longitude ?? null,
+          });
+        }
+        if (!meSportsRes.error && meProfileSportRows.length === 0) {
+          console.warn("[Discover audit] no sports selected", { profile_id: viewerAuthId });
+        }
       }
 
       if (blockDetail.errors.length > 0) {

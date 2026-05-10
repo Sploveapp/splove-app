@@ -48,6 +48,7 @@ import {
   normalizePreferredAgeRange,
 } from "../lib/profileAge";
 import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/sportMatchPreference";
+import { auditOnboardingProfileForDiscover } from "../lib/onboardingDiscoverReadiness";
 import {
   type EnergyOptionKey,
   normalizeIntensityForOnboardingHydrate,
@@ -1044,23 +1045,64 @@ export default function Onboarding() {
     navigate("/auth", { replace: true });
   }, [user?.id, authLoading, isAuthInitialized, navigate]);
 
-  /** Profil déjà complet (retour URL / session) → Discover. */
+  /** Profil avec flags auth « complet » mais audit Discover KO → pas de redirection. */
   useEffect(() => {
     if (!isAuthInitialized || authLoading) return;
     if (isProfileLoading) return;
     if (!user?.id) return;
     if (loading) return;
     if (onboardingSubmitInFlightRef.current) return;
-    if (isProfileComplete) {
-      navigate("/discover", { replace: true });
-    }
+    if (!isProfileComplete) return;
+    if (!profile?.id || profile.id !== user.id) return;
+
+    let cancelled = false;
+    void (async () => {
+      const pid = user.id!;
+      const { count, error: sportCntErr } = await supabase
+        .from("profile_sports")
+        .select("sport_id", { count: "exact", head: true })
+        .eq("profile_id", pid);
+
+      if (cancelled) return;
+
+      if (sportCntErr) {
+        console.warn("[Onboarding audit] discover readiness: échec comptage profile_sports — redirection omit", {
+          profile_id: pid,
+          onboarding_ui_step_when_checked: TOTAL_STEPS,
+          error_message: sportCntErr.message,
+        });
+        return;
+      }
+
+      const row = profile as unknown as Record<string, unknown>;
+      const auditResult = auditOnboardingProfileForDiscover(row, count ?? 0);
+      if (auditResult.ok) {
+        navigate("/discover", { replace: true });
+        return;
+      }
+
+      console.warn("[Onboarding audit] discover readiness bloque la redirection auto vers Discover", {
+        profile_id: pid,
+        missing_fields: auditResult.missingFields,
+        suggested_step: auditResult.suggestedStep,
+        context: "session_flags_complete_audit_fail",
+      });
+      setStep(auditResult.suggestedStep);
+      setError(t("onboarding_discover_readiness_blocked"));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [
-    isProfileComplete,
     authLoading,
     isAuthInitialized,
+    isProfileComplete,
     isProfileLoading,
     loading,
     navigate,
+    profile,
+    t,
     user?.id,
   ]);
 
@@ -2295,6 +2337,37 @@ export default function Onboarding() {
       if (effectiveProfileReloadRow) commitProfileRow(effectiveProfileReloadRow);
       else if (refreshedProfile) commitProfileRow(refreshedProfile);
       else commitProfileRow(upsertRow);
+
+      const readinessRow = (effectiveProfileReloadRow ??
+        refreshedProfile ??
+        upsertRow) as unknown as Record<string, unknown>;
+      const { count: discoverSportRowCount, error: discoverSportCountErr } = await supabase
+        .from("profile_sports")
+        .select("sport_id", { count: "exact", head: true })
+        .eq("profile_id", authUserId);
+
+      if (discoverSportCountErr) {
+        console.warn("[Onboarding audit] discover readiness (submit_final): comptage profile_sports échoué", {
+          profile_id: authUserId,
+          onboarding_ui_step_when_checked: TOTAL_STEPS,
+          error_message: discoverSportCountErr.message,
+        });
+        setError(t("onboarding_discover_readiness_blocked"));
+        return;
+      }
+
+      const readiness = auditOnboardingProfileForDiscover(readinessRow, discoverSportRowCount ?? 0);
+      if (!readiness.ok) {
+        console.warn("[Onboarding audit] discover readiness bloque la redirection Discover après submit", {
+          profile_id: authUserId,
+          missing_fields: readiness.missingFields,
+          suggested_step: readiness.suggestedStep,
+          context: "submit_final",
+        });
+        setStep(readiness.suggestedStep);
+        setError(t("onboarding_discover_readiness_blocked"));
+        return;
+      }
 
       if (moderationBanner) {
         await new Promise((r) => window.setTimeout(r, 1400));

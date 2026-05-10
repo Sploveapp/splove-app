@@ -857,6 +857,8 @@ const en = {
   onboarding_error_sports_save: "We couldn't save your sports just now.",
   onboarding_error_profile_gate:
     "Your profile could not be validated. Check that all required steps are complete, then try again.",
+  onboarding_discover_readiness_blocked:
+    "Some profile information is incomplete. Please review the previous steps.",
   onboarding_error_generic: "Something went wrong. Please try again.",
   onboarding_hydrating: "Restoring your progress…",
   onboarding_dev_veriff_note: "Veriff check ready (non-blocking): can be enabled after onboarding.",

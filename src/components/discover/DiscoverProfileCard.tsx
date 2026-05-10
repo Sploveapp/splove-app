@@ -32,6 +32,8 @@ import {
 } from "../../lib/discoverProfileCardHelpers";
 import { parseSportPracticePace, sportPracticePaceI18nKey } from "../../lib/sportPracticePace";
 import { useTranslation } from "../../i18n/useTranslation";
+import { formatHeightCmForDisplay } from "../../lib/profileHeightCm";
+import { formatCityDisplay } from "../../lib/formatCityDisplay";
 import { BLOCK_PROFILE_LINK_LABEL, REPORT_LINK_LABEL } from "../../constants/copy";
 
 export type DiscoverProfileCardModel = {
@@ -41,6 +43,7 @@ export type DiscoverProfileCardModel = {
   birth_date?: string | null;
   intent?: string | null;
   sport_phrase?: string | null;
+  height_cm?: number | null;
   sport_feeling?: string | null;
   sport_time?: string | null;
   portrait_url?: string | null;
@@ -118,6 +121,8 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   const practicePaceKey = sportPracticePaceI18nKey(parseSportPracticePace(profile.sport_practice_type));
   const showReadyToMoveBadge = profile.is_active_mode === true;
   const phraseTrim = (profile.sport_phrase ?? "").trim();
+  const heightLine = formatHeightCmForDisplay(profile.height_cm ?? null);
+  const profileCityPretty = formatCityDisplay(profile.city);
   const irlLine = getIRLPrompt(profile, mySportMatchKeys, {
     realOutingIntent: t("discover.real_outing_intent"),
     genericFallback: t("discover.profileCard_irlFallback"),
@@ -394,6 +399,12 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
               <h2 className="text-[1.85rem] font-extrabold leading-[1.05] tracking-tight text-white drop-shadow-[0_2px_14px_rgba(0,0,0,0.65)] sm:text-[2.05rem]">
                 {profile.first_name ?? t("unnamed_profile")}
                 {age != null ? <span className="font-semibold text-white/88">, {age}</span> : null}
+                {heightLine ? (
+                  <span className="text-[0.92rem] font-semibold text-white/72 sm:text-[0.98rem]">
+                    {" "}
+                    · {heightLine}
+                  </span>
+                ) : null}
               </h2>
               {intentShort ? (
                 <span className="mb-0.5 rounded-full bg-white/12 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white/88 ring-1 ring-white/22">
@@ -417,9 +428,9 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
               </div>
             ) : areaHint ? (
               <p className="mt-2 text-[12px] font-medium text-white/75 drop-shadow-sm">{areaHint}</p>
-            ) : profile.city?.trim() ? (
+            ) : profileCityPretty ? (
               <p className="mt-2 text-[12px] font-medium text-white/65 drop-shadow-sm">
-                {t("discover.zone_hint")} · {profile.city.trim()}
+                {t("discover.zone_hint")} · {profileCityPretty}
               </p>
             ) : null}
             {phraseTrim ? (

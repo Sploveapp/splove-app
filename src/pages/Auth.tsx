@@ -10,6 +10,10 @@ import { IconEye, IconEyeOff } from "../components/ui/Icon";
 import { useTranslation } from "../i18n/useTranslation";
 import { stashPendingReferralCodeFromSearch } from "../services/referral.service";
 
+function signupModeFromSearchParams(sp: URLSearchParams): boolean {
+  return sp.get("signup") === "1" || sp.get("mode") === "signup";
+}
+
 function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
   const raw = err instanceof Error ? err.message : String(err);
   const m = raw.toLowerCase();
@@ -33,11 +37,10 @@ export default function Auth() {
   const { t, language, setLanguage } = useTranslation();
   const [searchParams] = useSearchParams();
   const { user, isProfileComplete, isLoading, isAuthInitialized, isProfileLoading } = useAuth();
-  const [introSplash, setIntroSplash] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(() => signupModeFromSearchParams(searchParams));
   const [loading, setLoading] = useState(false);
   const [oauthLoading, setOauthLoading] = useState<"google" | "apple" | null>(null);
   const [showEmailForm, setShowEmailForm] = useState(false);
@@ -52,10 +55,10 @@ export default function Auth() {
   }, [searchParams]);
 
   useEffect(() => {
-    if (isLoading || !isAuthInitialized) return;
-    const t = window.setTimeout(() => setIntroSplash(false), 1000);
-    return () => window.clearTimeout(t);
-  }, [isLoading, isAuthInitialized]);
+    if (signupModeFromSearchParams(searchParams)) {
+      setIsSignUp(true);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (!isAuthInitialized || isLoading) return;
@@ -64,11 +67,10 @@ export default function Auth() {
       hasUser: Boolean(user?.id),
       userId: user?.id ? user.id.slice(0, 8) + "…" : null,
       isProfileComplete,
-      introSplash,
     });
-  }, [isAuthInitialized, isLoading, user?.id, isProfileComplete, introSplash]);
+  }, [isAuthInitialized, isLoading, user?.id, isProfileComplete]);
 
-  if (!isAuthInitialized || isLoading || introSplash) {
+  if (!isAuthInitialized || isLoading) {
     return <SplashScreen />;
   }
 

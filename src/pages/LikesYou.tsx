@@ -22,6 +22,7 @@ import {
   rpcPayloadIndicatesLikeSuccess,
 } from "../services/likes.service";
 import type { LikeReceived, ProfileInLikesYou } from "../types/premium.types";
+import { formatHeightCmForDisplay } from "../lib/profileHeightCm";
 
 type LikesPreviewProfile = ProfileInLikesYou & {
   birth_date?: string | null;
@@ -387,6 +388,7 @@ function LikesYouProfilePreviewModal({
     firstCommonSport: sports[0] ?? null,
     genericFallback: t("likes.guided_fallback"),
   });
+  const previewHeight = formatHeightCmForDisplay(profile.height_cm ?? null);
 
   return (
     <div
@@ -428,6 +430,12 @@ function LikesYouProfilePreviewModal({
             <h2 className="text-lg font-bold leading-tight" style={{ color: APP_TEXT }}>
               {profile.first_name ?? t("likes.unnamed")}
               {age != null ? <span style={{ color: APP_TEXT_MUTED }}>, {age}</span> : null}
+              {previewHeight ? (
+                <span className="text-sm font-semibold" style={{ color: APP_TEXT_MUTED }}>
+                  {" "}
+                  · {previewHeight}
+                </span>
+              ) : null}
             </h2>
             {isIdentityVerified(profile) ? <VerifiedBadge /> : null}
           </div>

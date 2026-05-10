@@ -9,6 +9,7 @@ import {
   TEXT_ON_BRAND,
 } from "../constants/theme";
 import { IconProfileAvatarPlaceholder } from "./FunctionalIcons";
+import { formatCityDisplay } from "../lib/formatCityDisplay";
 
 function getSports(like: LikeReceived): string[] {
   const list = like.profile?.profile_sports ?? [];
@@ -25,6 +26,7 @@ type Props = {
 export function BlurredProfileCard({ like, onUnlock }: Props) {
   const profile = like.profile;
   const sports = getSports(like);
+  const cityUi = profile ? formatCityDisplay(profile.city) : "";
 
   return (
     <div
@@ -62,11 +64,11 @@ export function BlurredProfileCard({ like, onUnlock }: Props) {
         <p style={{ margin: "0 0 6px 0", fontSize: "20px", fontWeight: 600, color: APP_TEXT }}>
           {profile?.first_name ?? "Quelqu'un"}
         </p>
-        {profile?.city && (
+        {cityUi ? (
           <p style={{ margin: "0 0 10px 0", fontSize: "14px", color: APP_TEXT_MUTED }}>
-            {profile.city}
+            {cityUi}
           </p>
-        )}
+        ) : null}
         {sports.length > 0 && (
           <p style={{ margin: 0, fontSize: "13px", color: BRAND_BG, fontWeight: 600 }}>
             {sports.join(" · ")}

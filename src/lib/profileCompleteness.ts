@@ -77,12 +77,6 @@ export function isOnboardingComplete(profile: ProfileCompletenessInput | null | 
   const isAdult = Boolean(profile.birth_date && isAdultFromBirthIso(profile.birth_date));
   const hasPhotos = Boolean(profile.portrait_url?.trim() && profile.fullbody_url?.trim());
 
-  // Onboarding simplifié : seule la préférence d’organisation est exigée pour valider l’étape
-  // « Ton organisation » (anciens champs Matin/Soir + intensité retirés de l’UI).
-  const hasQuickPrefs =
-    profile.planning_style === "spontaneous" ||
-    profile.planning_style === "planned" ||
-    profile.planning_style === "both";
   const sportsCount = Number(profile.onboarding_sports_count ?? 0);
   const sportsWithIntensity = Number(profile.onboarding_sports_with_level_count ?? 0);
   const hasSportsWithIntensity = sportsCount > 0 && sportsWithIntensity === sportsCount;
@@ -92,7 +86,6 @@ export function isOnboardingComplete(profile: ProfileCompletenessInput | null | 
     hasLocation &&
     hasRadius &&
     hasPhotos &&
-    hasQuickPrefs &&
     hasSportsWithIntensity
   );
 }

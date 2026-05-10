@@ -82,6 +82,7 @@ export type ProfileInLikesYou = {
   looking_for?: string | null;
   sport_feeling: string | null;
   sport_phrase: string | null;
+  height_cm?: number | null;
   sport_time: string | null;
   is_photo_verified?: boolean | null;
   photo_status?: string | null;

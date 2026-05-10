@@ -17,7 +17,7 @@ export type CreateLikeRpcResult = {
 
 /** Colonnes stables pour liste Likes / preview (pas de `select *`). */
 export const LIKES_PROFILE_BATCH_SELECT =
-  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, is_photo_verified, photo_status, identity_verified, veriff_status, profile_completed, is_active, is_paused, is_banned, deleted_at, profile_sports(sports(label, slug))";
+  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, height_cm, is_photo_verified, photo_status, identity_verified, veriff_status, profile_completed, is_active, is_paused, is_banned, deleted_at, profile_sports(sports(label, slug))";
 
 const PROFILE_SELECT = LIKES_PROFILE_BATCH_SELECT;
 

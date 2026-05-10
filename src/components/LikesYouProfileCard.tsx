@@ -22,6 +22,8 @@ import { guidedProfileSentence } from "../lib/discoverCardCopy";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { uniqueProfilePhotoRefsOrdered } from "../lib/profilePhotoSignedUrl";
 import { ProfilePhotoViewerModal } from "./ProfilePhotoViewerModal";
+import { formatHeightCmForDisplay } from "../lib/profileHeightCm";
+import { formatCityDisplay } from "../lib/formatCityDisplay";
 
 function getSports(like: LikeReceived): string[] {
   const list = like.profile?.profile_sports ?? [];
@@ -68,6 +70,8 @@ export function LikesYouProfileCard({
     : null;
   const sports = getSports(like).slice(0, 2);
   const momentPreference = profileWithOptional.moment_preference ?? profile.sport_time ?? "evening";
+  const profileHeightCm = (profile as { height_cm?: number | null }).height_cm;
+  const heightPublic = formatHeightCmForDisplay(profileHeightCm ?? null);
   const guided = guidedProfileSentence({
     sport_phrase: profile.sport_phrase,
     sport_feeling: profile.sport_feeling,
@@ -140,6 +144,9 @@ export function LikesYouProfileCard({
           <p className="text-lg font-bold leading-tight drop-shadow-[0_2px_12px_rgba(0,0,0,0.65)]">
             {displayName}
             {age != null ? <span className="font-semibold opacity-90">, {age}</span> : null}
+            {heightPublic ? (
+              <span className="text-[15px] font-semibold text-white/70"> · {heightPublic}</span>
+            ) : null}
           </p>
           <p className="mt-1 line-clamp-2 truncate text-[13px] font-medium text-white/72">{sports.join(" • ")}</p>
           <p className="mt-0.5 text-[11px] font-medium text-white/55">
@@ -167,6 +174,9 @@ export function LikesYouProfileCard({
             }}
           >
             {displayName}
+            {heightPublic ? (
+              <span style={{ fontSize: "15px", fontWeight: 600, color: APP_TEXT_MUTED }}> · {heightPublic}</span>
+            ) : null}
           </p>
           {isIdentityVerified(profile) ? <VerifiedBadge /> : null}
           <span
@@ -185,7 +195,7 @@ export function LikesYouProfileCard({
             {reliabilityBadge.label}
           </span>
         </div>
-        {profile.city && (
+        {formatCityDisplay(profile.city) ? (
           <p
             style={{
               margin: "0 0 12px 0",
@@ -194,9 +204,9 @@ export function LikesYouProfileCard({
               opacity: 0.92,
             }}
           >
-            {profile.city}
+            {formatCityDisplay(profile.city)}
           </p>
-        )}
+        ) : null}
         {sports.length > 0 && (
           <p
             style={{
