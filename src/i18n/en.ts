@@ -818,10 +818,12 @@ const en = {
   onboarding_err_interested: "Indicate who you want to see.",
   onboarding_err_intent: "Pick an option.",
   onboarding_err_city: "Add your city or use your current location.",
+  onboarding_city_pick_list_or_geo:
+    "Pick a city from the list or use your current location.",
   location_city_pick_list_prompt:
     "Select your city from the list to activate profiles near you.",
   location_city_pick_list_helper:
-    "Choose a suggestion or continue — we save an approximate position for Discover.",
+    "Tap a city in the list (short label) or use your location to set the pin.",
   onboarding_err_radius: "Choose a search radius.",
   onboarding_err_sport_min: "Add at least one sport (sports step).",
   onboarding_err_sport_min_short: "Select at least one sport.",

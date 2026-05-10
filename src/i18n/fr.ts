@@ -830,10 +830,12 @@ const fr = {
   onboarding_err_interested: "Indiquez qui vous intéresse.",
   onboarding_err_intent: "Choisis une intention.",
   onboarding_err_city: "Indique ta ville ou utilise ta position actuelle.",
+  onboarding_city_pick_list_or_geo:
+    "Choisis une ville dans la liste ou utilise ta position actuelle.",
   location_city_pick_list_prompt:
     "Sélectionne ta ville dans la liste pour activer les profils près de toi.",
   location_city_pick_list_helper:
-    "Choisis une suggestion ou continue : nous enregistrons une position approximative pour Discover.",
+    "Touche une ville dans la liste (libellé court) ou utilise ta position pour définir le point sur la carte.",
   onboarding_err_radius: "Choisis un rayon de recherche.",
   onboarding_err_sport_min: "Sélectionne au moins 1 sport (étape sports).",
   onboarding_err_sport_min_short: "Sélectionnez au moins 1 sport.",

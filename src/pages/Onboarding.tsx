@@ -17,7 +17,13 @@ import {
   selectProfilesFirstMatch,
 } from "../lib/profileSelect";
 import { isProfileRecord } from "../lib/appProfile";
-import { forwardGeocodeFirst, reverseGeocodeCity, searchCitiesApprox } from "../lib/geocoding";
+import {
+  type CitySearchSuggestion,
+  formatCitySuggestionListLabel,
+  reverseGeocodeCity,
+  searchCitiesApprox,
+} from "../lib/geocoding";
+import { formatCityDisplay } from "../lib/formatCityDisplay";
 import { getCurrentPositionCoords } from "../utils/geolocation";
 import {
   APP_BORDER,
@@ -569,7 +575,7 @@ export default function Onboarding() {
   const [obLocLng, setObLocLng] = useState<number | null>(null);
   const [obLocSource, setObLocSource] = useState<"manual" | "device" | null>(null);
   const [obLocGeoLoading, setObLocGeoLoading] = useState(false);
-  const [obCitySuggestions, setObCitySuggestions] = useState<{ label: string; lat: number; lng: number }[]>([]);
+  const [obCitySuggestions, setObCitySuggestions] = useState<CitySearchSuggestion[]>([]);
   const [obCitySuggestLoading, setObCitySuggestLoading] = useState(false);
   const [sportsCatalog, setSportsCatalog] = useState<SportOption[]>([]);
   const [selectedSportIds, setSelectedSportIds] = useState<(string | number)[]>([]);
@@ -929,7 +935,10 @@ export default function Onboarding() {
         setGender(String(row.gender ?? ""));
         setInterestedIn(normalizeInterestedInValues(row.looking_for));
         setIntent(uiIntentFromDbIntent(row.intent));
-        setObLocCity(String(row.city ?? ""));
+        {
+          const rawHyd = typeof row.city === "string" ? row.city.trim() : "";
+          setObLocCity(formatCityDisplay(rawHyd) || rawHyd);
+        }
         setObLocLat(typeof row.latitude === "number" ? row.latitude : null);
         setObLocLng(typeof row.longitude === "number" ? row.longitude : null);
         setObLocRadiusKm(
@@ -1295,10 +1304,10 @@ export default function Onboarding() {
     if (gender === "") return t("onboarding_err_gender");
     if (interestedIn.length === 0) return t("onboarding_err_interested");
     if (intent === "") return t("onboarding_err_intent");
-    if (!locationReady) {
-      if (![10, 25, 50, 100].includes(obLocRadiusKm)) return t("onboarding_err_radius");
+      if (!locationReady) {
       if (obLocCity.trim().length < 2) return t("onboarding_err_city");
-      return t("location_city_pick_list_prompt");
+      if (![10, 25, 50, 100].includes(obLocRadiusKm)) return t("onboarding_err_radius");
+      return t("onboarding_city_pick_list_or_geo");
     }
     if (selectedSportIds.length < 1) return t("onboarding_err_sport_min");
     if (selectedSportIds.length > 3) return t("onboarding_err_sport_max");
@@ -1489,7 +1498,7 @@ export default function Onboarding() {
         return false;
       }
       if (!coordsOk) {
-        setStepHint(t("location_city_pick_list_prompt"));
+        setStepHint(t("onboarding_city_pick_list_or_geo"));
         return false;
       }
       if (![10, 25, 50, 100].includes(obLocRadiusKm)) {
@@ -1628,7 +1637,6 @@ export default function Onboarding() {
         return;
       }
     }
-    let step4LocOverride: { lat: number; lng: number } | undefined;
     if (step === 4) {
       const cityTrim = obLocCity.trim();
       if (cityTrim.length < 2) {
@@ -1640,19 +1648,11 @@ export default function Onboarding() {
         return;
       }
       if (obLocLat == null || obLocLng == null) {
-        const resolved = await forwardGeocodeFirst(cityTrim);
-        if (!resolved) {
-          setStepHint(t("location_city_pick_list_prompt"));
-          return;
-        }
-        step4LocOverride = { lat: resolved.lat, lng: resolved.lng };
-        setObLocLat(resolved.lat);
-        setObLocLng(resolved.lng);
-        setObLocCity(resolved.label);
-        setObLocSource("manual");
+        setStepHint(t("onboarding_city_pick_list_or_geo"));
+        return;
       }
     }
-    if (!validateStep(step, step4LocOverride)) return;
+    if (!validateStep(step, undefined)) return;
     if (step === 9 && photoUploadingKind !== null) {
       setPhotoStepError(t("onboarding_photo_upload_progress"));
       return;
@@ -1689,7 +1689,8 @@ export default function Onboarding() {
       setObLocLng(c.lng);
       setObLocSource("device");
       if (city) {
-        setObLocCity(city);
+        const nice = formatCityDisplay(city) || city.trim();
+        setObLocCity(nice);
       } else if (!obLocCity.trim()) {
         setObLocCity(t("onboarding_zone_fallback"));
       }
@@ -1876,7 +1877,11 @@ export default function Onboarding() {
 
       const locSourceResolved: "manual" | "device" = obLocSource ?? "manual";
 
-      let submitCityFinal = obLocCity.trim() || null;
+      const rawCityTrimmed = obLocCity.trim();
+      let submitCityFinal =
+        rawCityTrimmed.length > 0
+          ? formatCityDisplay(rawCityTrimmed) || rawCityTrimmed
+          : null;
       const pairOk =
         typeof obLocLat === "number" &&
         typeof obLocLng === "number" &&
@@ -1884,34 +1889,19 @@ export default function Onboarding() {
         Number.isFinite(obLocLng);
       let submitLatFinal = pairOk ? obLocLat : null;
       let submitLngFinal = pairOk ? obLocLng : null;
-      if (submitCityFinal && submitCityFinal.length >= 2) {
-        if (submitLatFinal == null || submitLngFinal == null) {
-          const resolved = await forwardGeocodeFirst(submitCityFinal);
-          if (!resolved) {
-            setLoading(false);
-            setStepHint(t("location_city_pick_list_prompt"));
-            setStep(4);
-            onboardingSubmitInFlightRef.current = false;
-            return;
-          }
-          submitLatFinal = resolved.lat;
-          submitLngFinal = resolved.lng;
-          if (resolved.label?.trim()) submitCityFinal = resolved.label.trim();
-          setObLocLat(resolved.lat);
-          setObLocLng(resolved.lng);
-          setObLocCity(resolved.label);
-          setObLocSource("manual");
-        }
-      }
-
       const submitCoordsOk =
         typeof submitLatFinal === "number" &&
         typeof submitLngFinal === "number" &&
         Number.isFinite(submitLatFinal) &&
         Number.isFinite(submitLngFinal);
-      if (typeof submitCityFinal === "string" && submitCityFinal.trim().length >= 2 && !submitCoordsOk) {
+      if (
+        typeof submitCityFinal === "string" &&
+        submitCityFinal.trim().length >= 2 &&
+        !submitCoordsOk
+      ) {
         setLoading(false);
-        setStepHint(t("location_city_pick_list_prompt"));
+        setError(null);
+        setStepHint(t("onboarding_city_pick_list_or_geo"));
         setStep(4);
         onboardingSubmitInFlightRef.current = false;
         return;
@@ -2795,13 +2785,19 @@ export default function Onboarding() {
                         role="listbox"
                         aria-label={t("city")}
                       >
-                        {obCitySuggestions.map((sug) => (
-                          <li key={`${sug.lat}-${sug.lng}-${sug.label.slice(0, 48)}`}>
+                        {obCitySuggestions.map((sug, sugIdx) => (
+                          <li
+                            key={`${sug.lat}-${sug.lng}-${String(sug.country ?? "")}-${sugIdx}`}
+                          >
                             <button
                               type="button"
                               className="w-full px-3 py-2.5 text-left font-medium text-app-text hover:bg-app-border/60"
                               onClick={() => {
-                                setObLocCity(sug.label);
+                                const shortLabel =
+                                  formatCityDisplay(sug.label) ||
+                                  sug.label.split(",")[0]?.trim() ||
+                                  sug.label.trim();
+                                setObLocCity(shortLabel);
                                 setObLocLat(sug.lat);
                                 setObLocLng(sug.lng);
                                 setObLocSource("manual");
@@ -2809,7 +2805,7 @@ export default function Onboarding() {
                                 setStepHint(null);
                               }}
                             >
-                              {sug.label}
+                              {formatCitySuggestionListLabel(obCitySuggestions, sugIdx)}
                             </button>
                           </li>
                         ))}
@@ -2842,6 +2838,15 @@ export default function Onboarding() {
                   >
                     {obLocGeoLoading ? t("loading") : t("use_current_location")}
                   </button>
+                  {!locationReady ? (
+                    <p className="text-xs font-semibold leading-snug text-amber-900/95" role="status">
+                      {obLocCity.trim().length < 2
+                        ? t("onboarding_err_city")
+                        : ![10, 25, 50, 100].includes(obLocRadiusKm)
+                          ? t("onboarding_err_radius")
+                          : t("onboarding_city_pick_list_or_geo")}
+                    </p>
+                  ) : null}
                 </div>
               )}
 
@@ -3376,7 +3381,8 @@ export default function Onboarding() {
                     disabled={
                       authLoading ||
                       photoStepDraftSaving ||
-                      (step === 9 && !onboardingPhotosCanProceed)
+                      (step === 9 && !onboardingPhotosCanProceed) ||
+                      (step === 4 && !locationReady)
                     }
                     className="flex-1 rounded-2xl py-3.5 text-sm font-semibold text-white shadow-md transition-[transform,box-shadow] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"
                     style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
