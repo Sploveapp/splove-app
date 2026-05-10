@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Accessibility } from "lucide-react";
@@ -34,9 +34,13 @@ import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { photoModerationHeadline, photoModerationRejectedDetail } from "../lib/photoModerationUi";
 import { invokeModeratePhoto } from "../services/photoModeration.service";
 import type { PhotoModerationStatus } from "../types/photoModeration.types";
-import type { Language } from "../i18n";
 import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
+import {
+  parseHeightCmOptionalInput,
+  PROFILE_HEIGHT_CM_MAX,
+  PROFILE_HEIGHT_CM_MIN,
+} from "../lib/profileHeightCm";
 import { stashPendingReferralCodeFromSearch, tryCompletePendingReferral } from "../services/referral.service";
 import {
   DEFAULT_PREFERRED_AGE_MAX,
@@ -107,14 +111,8 @@ function serializeInterestedInValues(values: InterestedInValue[]): string | null
   return values.join(",");
 }
 
-/** Aligné `profileCompleteness` + migration 068 (+ migration 098 ajoute 'both'). */
-const ORGANIZATION_OPTIONS = [
-  { value: "spontaneous", label: "style.spontaneous" },
-  { value: "planned", label: "style.planned" },
-  { value: "both", label: "style.both" },
-] as const;
-
-type PlanningStyleValue = (typeof ORGANIZATION_OPTIONS)[number]["value"];
+/** Valeurs `profiles.planning_style` — rétention BDD / brouillon ; plus d’étape dédiée en onboarding. */
+type PlanningStyleValue = "spontaneous" | "planned" | "both";
 
 /** Valeurs acceptées en BDD (`unsure` conservé pour rétro-compat — option masquée en UI). */
 const OPEN_TO_ADAPTED_VALUES = ["yes_totally", "yes_depends_sport", "unsure", "no"] as const;
@@ -135,19 +133,6 @@ function hasChildrenFromProfile(raw: unknown): HasChildrenChoice {
   return "";
 }
 
-const HEIGHT_CM_MIN = 100;
-const HEIGHT_CM_MAX = 250;
-
-/** Lit un nombre cm depuis l’input texte ; null si vide/invalide/hors borne. */
-function parseHeightCmInput(raw: string): number | null {
-  const trimmed = raw.replace(/[^0-9]/g, "");
-  if (!trimmed) return null;
-  const n = Number(trimmed);
-  if (!Number.isFinite(n)) return null;
-  const rounded = Math.round(n);
-  if (rounded < HEIGHT_CM_MIN || rounded > HEIGHT_CM_MAX) return null;
-  return rounded;
-}
 type AdaptedPracticeAmenagements = "" | "yes" | "no" | "prefer_not";
 
 function needsAdaptedActivitiesForDb(am: AdaptedPracticeAmenagements): boolean | null {
@@ -383,17 +368,6 @@ type SportOption = {
 const TOTAL_STEPS = 11;
 const ONBOARDING_SPORT_SLOT_MAX = 3;
 
-const ONBOARDING_LANG_GATE_SESSION_KEY = "splove_onboarding_language_gate_v1";
-
-function readSessionLangGatePassed(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return sessionStorage.getItem(ONBOARDING_LANG_GATE_SESSION_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function onboardingPulseKey(s: number): string {
   const step = Math.min(Math.max(Math.floor(s), 1), TOTAL_STEPS);
   return `onboarding_pulse_step_${step}`;
@@ -402,7 +376,22 @@ function onboardingPulseKey(s: number): string {
 const ONBOARDING_RADIUS_KM_OPTIONS = [10, 25, 50, 100] as const;
 const PHOTO_BUCKET = "profile-photos";
 const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
-const PHOTO_ACCEPT_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const PHOTO_ACCEPT_MIMES = new Set(["image/jpeg", "image/png"]);
+const ONBOARDING_PHOTO_MAX_MB = Math.round(PHOTO_MAX_BYTES / (1024 * 1024));
+
+const ONBOARDING_SPORT_MATCH_OPTIONS: readonly {
+  value: SportMatchPreferenceDb;
+  labelKey: string;
+  descKey: string;
+}[] = [
+  { value: "same_sports", labelKey: "sport_match_pref_same_label", descKey: "sport_match_pref_same_desc" },
+  {
+    value: "open_to_different_sports",
+    labelKey: "sport_match_pref_open_label",
+    descKey: "sport_match_pref_open_desc",
+  },
+  { value: "both", labelKey: "sport_match_pref_both_label", descKey: "sport_match_pref_both_desc" },
+];
 
 async function uploadOnboardingPhoto(
   userId: string,
@@ -425,9 +414,7 @@ async function uploadOnboardingPhoto(
         ? fileExtFromName
         : file.type === "image/png"
           ? "png"
-          : file.type === "image/webp"
-            ? "webp"
-            : "jpg";
+          : "jpg";
 
     const fileName = `${kind}_${Date.now()}.${fileExt}`;
     const filePath = `${userId}/${fileName}`;
@@ -537,36 +524,9 @@ export default function Onboarding() {
   } = useAuth();
 
   const [step, setStep] = useState(1);
-  const [languageGatePassed, setLanguageGatePassed] = useState(() => readSessionLangGatePassed());
-  const [languageGateHydrated, setLanguageGateHydrated] = useState(() => readSessionLangGatePassed());
   /** Sous-étapes de l’étape 1 — une question principale par micro-écran. */
   const [step1SubStep, setStep1SubStep] = useState(0);
 
-  const completeLanguageGate = useCallback(
-    async (next: Language) => {
-      setLanguage(next);
-      try {
-        sessionStorage.setItem(ONBOARDING_LANG_GATE_SESSION_KEY, "1");
-      } catch {
-        /* ignore */
-      }
-      setLanguageGatePassed(true);
-      if (!user?.id) return;
-      const nowIso = new Date().toISOString();
-      let { error } = await supabase
-        .from("profiles")
-        .upsert({ id: user.id, updated_at: nowIso, language: next }, { onConflict: "id" });
-      if (error && isUndefinedColumnError(error, "language")) {
-        ({ error } = await supabase
-          .from("profiles")
-          .upsert({ id: user.id, updated_at: nowIso }, { onConflict: "id" }));
-      }
-      if (error) {
-        console.warn("[Onboarding] profiles.language save failed", error);
-      }
-    },
-    [setLanguage, user?.id],
-  );
   const [sportSearch, setSportSearch] = useState("");
   const [stepHint, setStepHint] = useState<string | null>(null);
   const [photoStepError, setPhotoStepError] = useState<string | null>(null);
@@ -714,7 +674,7 @@ export default function Onboarding() {
         payload.birth_date = birthDate || null;
         payload.gender = gender || null;
         payload.looking_for = serializeInterestedInValues(interestedIn);
-        const heightCm = parseHeightCmInput(heightCmInput);
+        const heightCm = parseHeightCmOptionalInput(heightCmInput);
         payload.height_cm = heightCm;
         payload.has_children = hasChildrenForDb(hasChildrenChoice);
         const pa = preferredAgeFromDraftInputs(obPreferredAgeMinStr, obPreferredAgeMaxStr);
@@ -737,7 +697,7 @@ export default function Onboarding() {
           | null;
         payload.location_updated_at = nowIso;
       }
-      if (currentStep >= 7) {
+      if (currentStep >= 8) {
         payload.needs_adapted_activities = needsAdaptedActivitiesForDb(adaptedAmenagements);
         if (openToAdaptedPractice) {
           payload.open_to_adapted_activities = openToAdaptedPractice;
@@ -748,13 +708,13 @@ export default function Onboarding() {
         payload.meet_vibe = null;
         payload.planning_style = planningStyle || null;
       }
-      if (currentStep >= 8) {
+      if (currentStep >= 9) {
         payload.sport_phrase = sportPhraseOptional.trim() || null;
         payload.portrait_url = portraitSavedUrl.trim() || null;
         payload.fullbody_url = bodySavedUrl.trim() || null;
         payload.main_photo_url = portraitSavedUrl.trim() || bodySavedUrl.trim() || null;
       }
-      if (currentStep >= 9) payload.practice_preferences = practicePreferences;
+      if (currentStep >= 10) payload.practice_preferences = practicePreferences;
       if (currentStep >= 5) payload.sport_match_preference = sportMatchPreference;
       payload.onboarding_sports_count = selectedSportIds.length;
       payload.onboarding_sports_with_level_count = selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length;
@@ -942,12 +902,6 @@ export default function Onboarding() {
         const profLang = row.language;
         if (profLang === "fr" || profLang === "en") {
           setLanguage(profLang);
-          try {
-            sessionStorage.setItem(ONBOARDING_LANG_GATE_SESSION_KEY, "1");
-          } catch {
-            /* ignore */
-          }
-          setLanguageGatePassed(true);
         }
         setFirstName(String(row.first_name ?? ""));
         const isoBirth = typeof row.birth_date === "string" ? row.birth_date : "";
@@ -1055,7 +1009,6 @@ export default function Onboarding() {
       } finally {
         hydratedDraftRef.current = true;
         if (!cancelled) setHydratingDraft(false);
-        setLanguageGateHydrated(true);
       }
     }
     void hydrateDraft();
@@ -1063,11 +1016,6 @@ export default function Onboarding() {
       cancelled = true;
     };
   }, [user?.id, authLoading, isProfileComplete, setLanguage]);
-
-  useEffect(() => {
-    if (authLoading || !isAuthInitialized) return;
-    if (!user?.id) setLanguageGateHydrated(true);
-  }, [authLoading, isAuthInitialized, user?.id]);
 
   useEffect(() => {
     console.log("[Onboarding] authLoading / user", {
@@ -1271,54 +1219,6 @@ export default function Onboarding() {
     );
   }
 
-  if (!languageGatePassed) {
-    if (!languageGateHydrated) {
-      return (
-        <div className="flex min-h-screen flex-col bg-app-bg font-sans">
-          <GlobalHeader variant="compact" />
-          <div className="flex flex-1 flex-col items-center justify-center px-6">
-            <p className="text-sm text-app-muted">{t("loading")}</p>
-          </div>
-        </div>
-      );
-    }
-    return (
-      <div className="flex min-h-screen flex-col bg-app-bg font-sans">
-        <GlobalHeader variant="compact" />
-        <div className="flex flex-1 flex-col items-center justify-center px-5 pb-12 pt-4">
-          <div className="w-full max-w-md space-y-6 text-center">
-            <h1 className="text-2xl font-bold leading-snug text-app-text sm:text-[1.65rem]">
-              {t("onboarding_language_gate_title")}
-            </h1>
-            <p className="text-[15px] leading-relaxed text-app-muted">{t("onboarding_language_gate_subtitle")}</p>
-            <div className="flex w-full flex-col gap-3 sm:flex-row sm:justify-center">
-              <button
-                type="button"
-                onClick={() => void completeLanguageGate("fr")}
-                className="min-h-[52px] w-full rounded-2xl px-6 text-base font-semibold shadow-md transition-transform active:scale-[0.99] sm:flex-1"
-                style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
-              >
-                🇫🇷 Français
-              </button>
-              <button
-                type="button"
-                onClick={() => void completeLanguageGate("en")}
-                className="min-h-[52px] w-full rounded-2xl px-6 text-base font-semibold shadow-md transition-transform active:scale-[0.99] sm:flex-1"
-                style={{
-                  border: `2px solid ${BRAND_BG}`,
-                  background: APP_CARD,
-                  color: APP_TEXT_MUTED,
-                }}
-              >
-                🇬🇧 English
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const onboardingPreferredAgeDraftOk = (() => {
     const aminRaw = Number.parseInt(obPreferredAgeMinStr.trim(), 10);
     const amaxRaw = Number.parseInt(obPreferredAgeMaxStr.trim(), 10);
@@ -1337,10 +1237,13 @@ export default function Onboarding() {
     obLocLng != null &&
     [10, 25, 50, 100].includes(obLocRadiusKm);
 
-  const isPlanningStyleSelected = (value: typeof planningStyle): value is PlanningStyleValue =>
-    value === "spontaneous" || value === "planned" || value === "both";
+  /** Deux photos obligatoires : portrait (visage) + corps (silhouette / en pied). */
+  const onboardingPortraitSavedOk = portraitSavedUrl.trim() !== "";
+  const onboardingBodySavedOk = bodySavedUrl.trim() !== "";
+  const onboardingPhotosCanProceed =
+    onboardingPortraitSavedOk && onboardingBodySavedOk && photoUploadingKind === null;
+  const onboardingPhotosNeitherSavedYet = !onboardingPortraitSavedOk && !onboardingBodySavedOk;
 
-  /** Deux photos obligatoires : portrait (visage) + corps (silhouette / en pied), formats JPG/PNG/WebP. */
   const canSubmit =
     firstName.trim() !== "" &&
     birthDate !== "" &&
@@ -1353,7 +1256,6 @@ export default function Onboarding() {
     selectedSportIds.length >= 1 &&
     selectedSportIds.length <= 3 &&
     selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)])) &&
-    isPlanningStyleSelected(planningStyle) &&
     openToAdaptedPractice !== "" &&
     (portraitSavedUrl.trim() !== "" || portraitFile != null) &&
     (bodySavedUrl.trim() !== "" || bodyFile != null) &&
@@ -1378,9 +1280,6 @@ export default function Onboarding() {
     if (selectedSportIds.length > 3) return t("onboarding_err_sport_max");
     if (!selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)]))) {
       return t("onboarding_err_sport_level");
-    }
-    if (!isPlanningStyleSelected(planningStyle)) {
-      return t("onboarding_err_style_org");
     }
     if (openToAdaptedPractice === "") {
       return t("onboarding_err_adapted_openness");
@@ -1454,11 +1353,11 @@ export default function Onboarding() {
     setPhotoStepError(null);
     setError(null);
     if (!PHOTO_ACCEPT_MIMES.has(file.type)) {
-      setPhotoStepError(t("onboarding_err_photo_format"));
+      setPhotoStepError(t("onboarding_photo_err_format_png_jpg_only"));
       return;
     }
     if (file.size > PHOTO_MAX_BYTES) {
-      setPhotoStepError(t("onboarding_err_photo_size"));
+      setPhotoStepError(t("onboarding_photo_err_max_size_mb", { maxMb: ONBOARDING_PHOTO_MAX_MB }));
       return;
     }
     if (!user?.id) {
@@ -1591,40 +1490,36 @@ export default function Onboarding() {
       return true;
     }
     if (current === 6) {
+      return true;
+    }
+    if (current === 7) {
       if (!intent) {
         setStepHint(t("onboarding_err_intent"));
         return false;
       }
       return true;
     }
-    if (current === 7) {
+    if (current === 8) {
       if (!openToAdaptedPractice) {
         setStepHint(t("onboarding_err_adapted_openness"));
         return false;
       }
       return true;
     }
-    if (current === 8) {
+    if (current === 9) {
       if (photoUploadingKind !== null) {
-        setPhotoStepError(t("onboarding_photo_uploading"));
+        setPhotoStepError(t("onboarding_photo_upload_progress"));
         return false;
       }
       if (!portraitFile && portraitSavedUrl.trim() === "") {
-        setPhotoStepError(t("onboarding_avatar_required"));
+        setPhotoStepError(t("onboarding_photo_add_at_least_one"));
         return false;
       }
       if (!bodyFile && bodySavedUrl.trim() === "") {
-        setPhotoStepError(t("onboarding_fullbody_required"));
+        setPhotoStepError(t("onboarding_photo_second_required"));
         return false;
       }
       setPhotoStepError(null);
-      return true;
-    }
-    if (current === 9) {
-      if (!isPlanningStyleSelected(planningStyle)) {
-        setStepHint(t("onboarding_err_style_org"));
-        return false;
-      }
       return true;
     }
     if (current === 10) {
@@ -1733,8 +1628,8 @@ export default function Onboarding() {
       }
     }
     if (!validateStep(step, step4LocOverride)) return;
-    if (step === 8 && photoUploadingKind !== null) {
-      setPhotoStepError(t("onboarding_photo_uploading"));
+    if (step === 9 && photoUploadingKind !== null) {
+      setPhotoStepError(t("onboarding_photo_upload_progress"));
       return;
     }
     if (step === 4 && obLocSource === null && obLocCity.trim().length >= 2) {
@@ -1742,7 +1637,7 @@ export default function Onboarding() {
     }
     setError(null);
     setOptionalProfileWarning(null);
-    if (step !== 8) setPhotoStepError(null);
+    if (step !== 9) setPhotoStepError(null);
     setModerationSuccessNote(null);
     await saveOnboardingDraft(step);
     if (step === 1) setStep1SubStep(0);
@@ -1820,7 +1715,7 @@ export default function Onboarding() {
       console.error("[Onboarding submit] blocked: canSubmit false", { reason: hint });
       return;
     }
-    for (let s = 1; s <= 11; s++) {
+    for (let s = 1; s <= TOTAL_STEPS; s++) {
       if (!validateStep(s)) {
         setStep(s);
         if (s === 1) setStep1SubStep(0);
@@ -1831,7 +1726,7 @@ export default function Onboarding() {
       setPhotoStepError(
         portraitSavedUrl.trim() === "" && !portraitFile ? t("onboarding_avatar_required") : t("onboarding_fullbody_required")
       );
-      setStep(8);
+      setStep(9);
       return;
     }
 
@@ -2042,7 +1937,7 @@ export default function Onboarding() {
         first_name: firstName.trim(),
         birth_date: birthDate,
         gender,
-        height_cm: parseHeightCmInput(heightCmInput),
+        height_cm: parseHeightCmOptionalInput(heightCmInput),
         has_children: hasChildrenForDb(hasChildrenChoice),
         preferred_age_min: onboardingPreferredAge.min,
         preferred_age_max: onboardingPreferredAge.max,
@@ -2091,7 +1986,7 @@ export default function Onboarding() {
             ? `${photoModerationHeadline("rejected")} — ${detail}.`
             : photoModerationHeadline("rejected"),
         );
-        setStep(8);
+        setStep(9);
         const failPayload: Record<string, unknown> = {
           ...profilePayload,
           profile_completed: false,
@@ -2524,10 +2419,10 @@ export default function Onboarding() {
               {step === 3 && t("onboarding_step3_title")}
               {step === 4 && t("onboarding_step4_title")}
               {step === 5 && t("onboarding_sports_title")}
-              {step === 6 && t("onboarding_intention_title")}
-              {step === 7 && t("onboarding_adapted_title")}
-              {step === 8 && t("onboarding_photos_hero_title")}
-              {step === 9 && t("onboarding_style_hero_title")}
+              {step === 6 && t("sport_match_pref_section_title")}
+              {step === 7 && t("onboarding_intention_title")}
+              {step === 8 && t("onboarding_adapted_title")}
+              {step === 9 && t("onboarding_photos_hero_title")}
               {step === 10 && t("onboarding_bio_hero_title")}
               {step === 11 && t("onboarding_final_hero_title")}
             </h1>
@@ -2547,10 +2442,10 @@ export default function Onboarding() {
               {step === 3 && t("onboarding_step3_subtitle")}
               {step === 4 && t("onboarding_step4_subtitle")}
               {step === 5 && t("onboarding_sports_subtitle")}
-              {step === 6 && t("onboarding_intention_subtitle")}
-              {step === 7 && t("onboarding_adapted_subtitle")}
-              {step === 8 && t("onboarding_photos_hero_subtitle")}
-              {step === 9 && t("onboarding_style_hero_subtitle")}
+              {step === 6 && t("sport_match_pref_section_hint")}
+              {step === 7 && t("onboarding_intention_subtitle")}
+              {step === 8 && t("onboarding_adapted_subtitle")}
+              {step === 9 && t("onboarding_photos_hero_subtitle")}
               {step === 10 && t("onboarding_bio_hero_subtitle")}
               {step === 11 && t("onboarding_final_hero_subtitle")}
             </p>
@@ -2692,8 +2587,8 @@ export default function Onboarding() {
                         type="number"
                         inputMode="numeric"
                         placeholder={t("onboarding_height_placeholder")}
-                        min={HEIGHT_CM_MIN}
-                        max={HEIGHT_CM_MAX}
+                        min={PROFILE_HEIGHT_CM_MIN}
+                        max={PROFILE_HEIGHT_CM_MAX}
                         step={1}
                         value={heightCmInput}
                         onChange={(e) => setHeightCmInput(e.target.value)}
@@ -3026,6 +2921,42 @@ export default function Onboarding() {
               {step === 6 && (
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 gap-3">
+                    {ONBOARDING_SPORT_MATCH_OPTIONS.map((opt) => {
+                      const active = sportMatchPreference === opt.value;
+                      return (
+                        <motion.button
+                          key={opt.value}
+                          type="button"
+                          whileTap={{ scale: 0.985 }}
+                          onClick={() => setSportMatchPreference(opt.value)}
+                          className={`${intentChoiceClass(active)} min-h-[56px] w-full text-left`}
+                          style={
+                            active
+                              ? {
+                                  borderColor: BRAND_BG,
+                                  background: BRAND_BG,
+                                  color: TEXT_ON_BRAND,
+                                  ["--tw-ring-color" as string]: BRAND_BG,
+                                }
+                              : undefined
+                          }
+                        >
+                          <span className="block text-base font-semibold">{t(opt.labelKey)}</span>
+                          <span
+                            className={`mt-1 block text-[13px] font-medium leading-snug ${active ? "opacity-90" : "text-app-muted"}`}
+                          >
+                            {t(opt.descKey)}
+                          </span>
+                        </motion.button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {step === 7 && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-3">
                     {ONBOARDING_INTENT_CARDS.map((card) => {
                       const active = intent === card.uiValue;
                       return (
@@ -3059,7 +2990,7 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 7 && (
+              {step === 8 && (
                 <div className="space-y-6 pb-1">
                   <div>
                     <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -3135,13 +3066,19 @@ export default function Onboarding() {
                 </div>
               )}
 
-              {step === 8 && (
+              {step === 9 && (
                 <div className="space-y-4">
-                  {photoStepError && (
+                  {photoUploadingKind ? (
+                    <p className="rounded-lg border border-app-border bg-app-bg/70 px-3 py-2 text-sm font-medium text-app-text" aria-live="polite">
+                      {t("onboarding_photo_upload_progress")}
+                    </p>
+                  ) : photoStepError ? (
                     <p className="rounded-lg border border-red-100 bg-red-50/90 px-3 py-2 text-sm text-red-700" role="alert">
                       {photoStepError}
                     </p>
-                  )}
+                  ) : onboardingPhotosNeitherSavedYet ? (
+                    <p className="rounded-lg border border-app-border bg-app-card px-3 py-2 text-sm font-medium text-app-text">{t("onboarding_photo_add_at_least_one")}</p>
+                  ) : null}
 
                   <div className="space-y-3">
                     <div>
@@ -3151,7 +3088,7 @@ export default function Onboarding() {
                         ref={portraitInputRef}
                         id="ob-photo-portrait"
                         type="file"
-                        accept="image/jpeg,image/png,image/webp"
+                        accept="image/jpeg,image/png"
                         className="sr-only"
                         onChange={(e) => {
                           void assignPhotoFile(e.target.files?.[0], "portrait");
@@ -3171,7 +3108,9 @@ export default function Onboarding() {
                         ) : (
                           <span className="flex aspect-[3/4] w-full max-w-[280px] mx-auto flex-col items-center justify-center gap-1 px-2 py-6">
                             <span className="text-xs font-semibold text-app-text">{t("add_photo")}</span>
-                            <span className="text-[10px] text-app-muted">{t("photo_file_formats_hint")}</span>
+                            <span className="text-[10px] text-app-muted">
+                              {t("onboarding_photo_formats_hint_png_jpg_only", { maxMb: ONBOARDING_PHOTO_MAX_MB })}
+                            </span>
                           </span>
                         )}
                       </label>
@@ -3185,7 +3124,7 @@ export default function Onboarding() {
                         </button>
                       ) : null}
                       {photoUploadingKind === "portrait" ? (
-                        <p className="mt-1 text-center text-[11px] text-app-muted">{t("loading")}</p>
+                        <p className="mt-1 text-center text-[12px] font-medium text-app-muted">{t("onboarding_photo_upload_progress")}</p>
                       ) : null}
                     </div>
 
@@ -3196,7 +3135,7 @@ export default function Onboarding() {
                         ref={bodyInputRef}
                         id="ob-photo-body"
                         type="file"
-                        accept="image/jpeg,image/png,image/webp"
+                        accept="image/jpeg,image/png"
                         className="sr-only"
                         onChange={(e) => {
                           void assignPhotoFile(e.target.files?.[0], "body");
@@ -3216,7 +3155,9 @@ export default function Onboarding() {
                         ) : (
                           <span className="flex aspect-[3/4] w-full max-w-[280px] mx-auto flex-col items-center justify-center gap-1 px-2 py-6">
                             <span className="text-xs font-semibold text-app-text">{t("add_photo")}</span>
-                            <span className="text-[10px] text-app-muted">{t("photo_file_formats_hint")}</span>
+                            <span className="text-[10px] text-app-muted">
+                              {t("onboarding_photo_formats_hint_png_jpg_only", { maxMb: ONBOARDING_PHOTO_MAX_MB })}
+                            </span>
                           </span>
                         )}
                       </label>
@@ -3230,43 +3171,9 @@ export default function Onboarding() {
                         </button>
                       ) : null}
                       {photoUploadingKind === "body" ? (
-                        <p className="mt-1 text-center text-[11px] text-app-muted">{t("loading")}</p>
+                        <p className="mt-1 text-center text-[12px] font-medium text-app-muted">{t("onboarding_photo_upload_progress")}</p>
                       ) : null}
                     </div>
-                  </div>
-                </div>
-              )}
-
-              {step === 9 && (
-                <div className="space-y-3">
-                  <span className={labelClassName}>{t("style_organization")}</span>
-                  <p className="text-xs leading-snug text-app-muted">
-                    {t("style_organization_subtitle")}
-                  </p>
-                  <div className="mt-2 flex flex-col gap-2">
-                    {ORGANIZATION_OPTIONS.map((o) => {
-                      const active = planningStyle === o.value;
-                      return (
-                        <button
-                          key={o.value}
-                          type="button"
-                          onClick={() => setPlanningStyle(o.value)}
-                          className={`${intentChoiceClass(active)} min-h-[48px] w-full text-center`}
-                          style={
-                            active
-                              ? {
-                                  borderColor: BRAND_BG,
-                                  background: BRAND_BG,
-                                  color: TEXT_ON_BRAND,
-                                  ["--tw-ring-color" as string]: BRAND_BG,
-                                }
-                              : undefined
-                          }
-                        >
-                          {t(o.label)}
-                        </button>
-                      );
-                    })}
                   </div>
                 </div>
               )}
@@ -3350,7 +3257,7 @@ export default function Onboarding() {
                 </motion.div>
               </AnimatePresence>
 
-              {stepHint && step !== 8 && (
+              {stepHint && step !== 9 && (
                 <p className="mt-3 text-sm text-red-600">{stepHint}</p>
               )}
               {finalStepBlockReason && (
@@ -3387,7 +3294,7 @@ export default function Onboarding() {
                   <button
                     type="button"
                     onClick={() => void goNext()}
-                    disabled={authLoading}
+                    disabled={authLoading || (step === 9 && !onboardingPhotosCanProceed)}
                     className="flex-1 rounded-2xl py-3.5 text-sm font-semibold text-white shadow-md transition-[transform,box-shadow] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"
                     style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
                   >

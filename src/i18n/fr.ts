@@ -706,10 +706,11 @@ const fr = {
   onboarding_pulse_step_3: "Dis-nous qui t’attire.",
   onboarding_pulse_step_4: "Des profils proches—jamais ton adresse.",
   onboarding_pulse_step_5: "Trouve quelqu’un qui vibre comme toi.",
-  onboarding_pulse_step_6: "L’intention guide les belles rencontres.",
-  onboarding_pulse_step_7: "L’accueil avant la performance.",
-  onboarding_pulse_step_8: "Les visages disent plus que les bios.",
-  onboarding_pulse_step_9: "Spontané ou planifié : à ton rythme.",
+  onboarding_pulse_step_6:
+    "Le sport au centre — tu choisis si on ouvre aussi d’autres univers.",
+  onboarding_pulse_step_7: "L’intention guide les belles rencontres.",
+  onboarding_pulse_step_8: "L’accueil avant la performance.",
+  onboarding_pulse_step_9: "Les visages disent plus que les bios.",
   onboarding_pulse_step_10: "Une phrase sincère suffit souvent.",
   onboarding_pulse_step_11: "Prêt·e pour le réel ?",
   onboarding_pulse_step_12: "Prêt·e pour le réel ?",
@@ -847,6 +848,15 @@ const fr = {
   onboarding_err_terms: "Accepte les conditions et la politique de confidentialité.",
   onboarding_err_photo_format: "Formats acceptés : JPG, PNG ou WebP.",
   onboarding_err_photo_size: "Chaque photo doit faire 5 Mo maximum.",
+  onboarding_photo_add_at_least_one: "Ajoute au moins une photo pour continuer",
+  onboarding_photo_second_required:
+    "Ajoute aussi ta photo en pied pour continuer — deux visuels nous aident à te présenter sérieusement.",
+  onboarding_photo_upload_progress: "Téléchargement de la photo...",
+  onboarding_photo_err_max_size_mb:
+    "Photo trop volumineuse — maximum {{maxMb}} Mo",
+  onboarding_photo_err_format_png_jpg_only:
+    "Format non pris en charge — JPG ou PNG uniquement",
+  onboarding_photo_formats_hint_png_jpg_only: "JPG ou PNG — max {{maxMb}} Mo",
   onboarding_err_geo_unavailable: "Position indisponible. Tu peux saisir ta ville manuellement.",
   onboarding_error_age_gate: "SPLove est réservé aux personnes de 18 ans ou plus.",
   onboarding_error_photo_moderation_prep: "Impossible de préparer la vérification des photos. Réessaie.",
