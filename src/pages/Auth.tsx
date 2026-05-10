@@ -30,7 +30,7 @@ function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
 }
 
 export default function Auth() {
-  const { t, language } = useTranslation();
+  const { t, language, setLanguage } = useTranslation();
   const [searchParams] = useSearchParams();
   const { user, isProfileComplete, isLoading, isAuthInitialized, isProfileLoading } = useAuth();
   const [introSplash, setIntroSplash] = useState(true);
@@ -174,9 +174,23 @@ export default function Auth() {
     gap: 10,
   };
 
+  const langPillBtn = (lang: "fr" | "en"): React.CSSProperties => ({
+    padding: "5px 10px",
+    borderRadius: "999px",
+    border: "none",
+    background: language === lang ? BRAND_BG : "transparent",
+    color: language === lang ? TEXT_ON_BRAND : "rgba(255,255,255,0.55)",
+    fontSize: "11px",
+    fontWeight: 700,
+    letterSpacing: "0.06em",
+    cursor: "pointer",
+    transition: "background-color 150ms ease, color 150ms ease",
+  });
+
   return (
     <div
       style={{
+        position: "relative",
         minHeight: "100vh",
         background: APP_BG,
         display: "flex",
@@ -186,6 +200,47 @@ export default function Auth() {
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
       }}
     >
+      <div
+        role="group"
+        aria-label="Language"
+        style={{
+          position: "absolute",
+          top: "max(env(safe-area-inset-top, 0px), 14px)",
+          right: 14,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 2,
+          padding: "3px",
+          borderRadius: "999px",
+          background: "rgba(255,255,255,0.04)",
+          border: `1px solid ${APP_BORDER}`,
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
+          zIndex: 10,
+        }}
+      >
+        <button
+          type="button"
+          aria-label="Français"
+          aria-pressed={language === "fr"}
+          onClick={() => setLanguage("fr")}
+          style={langPillBtn("fr")}
+        >
+          FR
+        </button>
+        <span aria-hidden style={{ color: "rgba(255,255,255,0.18)", fontSize: 11 }}>
+          |
+        </span>
+        <button
+          type="button"
+          aria-label="English"
+          aria-pressed={language === "en"}
+          onClick={() => setLanguage("en")}
+          style={langPillBtn("en")}
+        >
+          EN
+        </button>
+      </div>
       <div style={{ width: "100%", maxWidth: "420px", margin: "0 auto" }}>
         <div style={{ textAlign: "center", marginBottom: "28px" }}>
           <img
