@@ -210,11 +210,39 @@ function pickActivationSource(walletQty: number): "credit" | "beta" | "purchase"
   return "purchase";
 }
 
+/**
+ * Bêta : pour les options encore non branchées côté serveur (common_places,
+ * smart_reminder), l'activation est purement locale. On stocke un flag par
+ * appareil pour que la pastille passe de « Bêta » à « Actif (bêta) » sans
+ * toucher au backend.
+ */
+const BETA_ACTIVE_LS_PREFIX = "splove_plus_beta_active:";
+
+function readBetaActive(key: SploveUiFeatureKey): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(`${BETA_ACTIVE_LS_PREFIX}${key}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeBetaActive(key: SploveUiFeatureKey): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(`${BETA_ACTIVE_LS_PREFIX}${key}`, "1");
+  } catch {
+    /* localStorage indisponible : on ignore, l'UX reste fonctionnelle. */
+  }
+}
+
 export default function SplovePlusScreen() {
   const { language, t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const undoReturnCardRef = useRef<HTMLButtonElement | null>(null);
+  const commonPlacesCardRef = useRef<HTMLButtonElement | null>(null);
+  const smartReminderCardRef = useRef<HTMLButtonElement | null>(null);
 
   const [userId, setUserId] = useState<string | null>(null);
   const [creditsQty, setCreditsQty] = useState<Partial<Record<SploveCreditType, number>>>({});
@@ -227,7 +255,13 @@ export default function SplovePlusScreen() {
   const [modalPhase, setModalPhase] = useState<"confirm" | "purchase">("confirm");
   const [purchaseBusy, setPurchaseBusy] = useState(false);
   const [activating, setActivating] = useState(false);
-  const [comingSoonFeature, setComingSoonFeature] = useState<SploveUiFeatureKey | null>(null);
+  const [betaFeatureKey, setBetaFeatureKey] = useState<SploveUiFeatureKey | null>(null);
+  const [betaActiveMap, setBetaActiveMap] = useState<Partial<Record<SploveUiFeatureKey, boolean>>>(
+    () => ({
+      common_places: readBetaActive("common_places"),
+      smart_reminder: readBetaActive("smart_reminder"),
+    }),
+  );
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const isFr = language === "fr";
@@ -310,9 +344,22 @@ export default function SplovePlusScreen() {
 
   useEffect(() => {
     const st = location.state as { sploveHighlightFeature?: string } | null | undefined;
-    if (st?.sploveHighlightFeature !== "undo_swipe_return") return;
+    const target = st?.sploveHighlightFeature;
+    if (target !== "undo_swipe_return" && target !== "common_places" && target !== "smart_reminder") {
+      return;
+    }
     const id = window.setTimeout(() => {
-      undoReturnCardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const ref =
+        target === "undo_swipe_return"
+          ? undoReturnCardRef
+          : target === "common_places"
+            ? commonPlacesCardRef
+            : smartReminderCardRef;
+      ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      /** Pour les options bêta on ouvre directement la modale d’activation. */
+      if (target === "common_places" || target === "smart_reminder") {
+        setBetaFeatureKey(target);
+      }
       navigate(location.pathname, { replace: true, state: {} });
     }, 80);
     return () => window.clearTimeout(id);
@@ -375,6 +422,22 @@ export default function SplovePlusScreen() {
     setConfirmFeatureKey(null);
     setModalPhase("confirm");
   }
+
+  function closeBetaModal() {
+    setBetaFeatureKey(null);
+  }
+
+  function handleBetaActivate(key: SploveUiFeatureKey) {
+    writeBetaActive(key);
+    setBetaActiveMap((prev) => ({ ...prev, [key]: true }));
+    setToastMessage(t("splove_plus_beta_activated_toast"));
+    closeBetaModal();
+  }
+
+  const betaFeatureDef =
+    betaFeatureKey != null
+      ? secondaryFeatures.find((f) => f.key === betaFeatureKey) ?? null
+      : null;
 
   const confirmFeatureDef =
     confirmFeatureKey != null
@@ -464,13 +527,15 @@ export default function SplovePlusScreen() {
   }
 
   useEffect(() => {
-    if (!confirmFeatureKey) return;
+    if (!confirmFeatureKey && !betaFeatureKey) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") closeActivateConfirm();
+      if (e.key !== "Escape") return;
+      if (confirmFeatureKey) closeActivateConfirm();
+      if (betaFeatureKey) closeBetaModal();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirmFeatureKey]);
+  }, [confirmFeatureKey, betaFeatureKey]);
 
   return (
     <main className="min-h-screen bg-[#08080c] px-4 pb-16 pt-7 text-white">
@@ -574,10 +639,20 @@ export default function SplovePlusScreen() {
         </motion.button>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {secondaryFeatures.map((feature, index) => (
+          {secondaryFeatures.map((feature, index) => {
+            const betaActive = feature.comingSoon ? Boolean(betaActiveMap[feature.key]) : false;
+            const cardRef =
+              feature.key === "undo_swipe_return"
+                ? undoReturnCardRef
+                : feature.key === "common_places"
+                  ? commonPlacesCardRef
+                  : feature.key === "smart_reminder"
+                    ? smartReminderCardRef
+                    : undefined;
+            return (
             <motion.button
               key={feature.key}
-              ref={feature.key === "undo_swipe_return" ? undoReturnCardRef : undefined}
+              ref={cardRef}
               type="button"
               disabled={!feature.comingSoon && isTimedWindowBlocking(feature)}
               whileTap={!feature.comingSoon && isTimedWindowBlocking(feature) ? undefined : { scale: 0.97 }}
@@ -586,7 +661,7 @@ export default function SplovePlusScreen() {
               transition={{ delay: 0.06 * index, duration: 0.35 }}
               onClick={() => {
                 if (feature.comingSoon) {
-                  setComingSoonFeature(feature.key);
+                  setBetaFeatureKey(feature.key);
                   return;
                 }
                 if (!userId) {
@@ -600,14 +675,20 @@ export default function SplovePlusScreen() {
                 feature.key === "undo_swipe_return"
                   ? "border-[#ffb3bc]/55 ring-1 ring-[#ff2433]/20"
                   : "border-white/10"
-              } ${feature.comingSoon ? "opacity-90" : ""} ${!feature.comingSoon && isTimedWindowBlocking(feature) ? "cursor-not-allowed opacity-65" : ""}`}
+              } ${!feature.comingSoon && isTimedWindowBlocking(feature) ? "cursor-not-allowed opacity-65" : ""}`}
             >
               <p className="text-sm font-semibold text-white">
                 {feature.icon} {feature.title[language]}
                 {feature.comingSoon ? (
-                  <span className="ml-2 rounded-md border border-white/15 bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-white/50">
-                    Soon
-                  </span>
+                  betaActive ? (
+                    <span className="ml-2 rounded-md border border-emerald-400/45 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-200">
+                      {t("splove_plus_beta_active_badge")}
+                    </span>
+                  ) : (
+                    <span className="ml-2 rounded-md border border-[#ffb3bc]/45 bg-[#ff2433]/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[#ffd0d3]">
+                      {t("splove_plus_beta_badge")}
+                    </span>
+                  )
                 ) : null}
               </p>
               <p className="mt-2 text-xs text-white/65">{feature.description[language]}</p>
@@ -629,7 +710,8 @@ export default function SplovePlusScreen() {
                 ) : null}
               </div>
             </motion.button>
-          ))}
+            );
+          })}
         </div>
       </motion.section>
 
@@ -747,29 +829,51 @@ export default function SplovePlusScreen() {
         </div>
       ) : null}
 
-      {comingSoonFeature ? (
+      {betaFeatureKey && betaFeatureDef ? (
         <div
           className="fixed inset-0 z-[60] flex items-end justify-center bg-black/55 p-4 pb-8 sm:items-center"
           role="presentation"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setComingSoonFeature(null);
+            if (e.target === e.currentTarget) closeBetaModal();
           }}
         >
           <div
             role="dialog"
             aria-modal="true"
+            aria-labelledby="splove-plus-beta-title"
             className="w-full max-w-md rounded-3xl border border-white/14 bg-[#15151d] p-5 text-white shadow-xl"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <h2 className="text-lg font-semibold">{t("splove_plus_coming_title")}</h2>
-            <p className="mt-2 text-[13px] text-white/72">{t("splove_plus_coming_detail")}</p>
-            <button
-              type="button"
-              onClick={() => setComingSoonFeature(null)}
-              className="mt-5 w-full rounded-2xl bg-[#ff2433] py-3 text-sm font-semibold text-white"
-            >
-              {t("splove_plus_got_it")}
-            </button>
+            <h2 id="splove-plus-beta-title" className="text-lg font-semibold leading-snug">
+              {betaFeatureDef.icon} {betaFeatureDef.title[language]}
+            </h2>
+            <p className="mt-2 text-[13px] leading-relaxed text-white/76">
+              {betaFeatureDef.description[language]}
+            </p>
+            <p className="mt-3 rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-[12px] leading-relaxed text-white/65">
+              {t("splove_plus_beta_available_note")}
+            </p>
+            {betaActiveMap[betaFeatureKey] ? (
+              <p className="mt-3 text-[12px] font-medium text-emerald-200">
+                {t("splove_plus_beta_already_active")}
+              </p>
+            ) : null}
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={closeBetaModal}
+                className="flex-1 rounded-2xl border border-white/18 bg-transparent py-3 text-sm font-semibold text-white/90 hover:bg-white/5"
+              >
+                {t("splove_plus_beta_later")}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleBetaActivate(betaFeatureKey)}
+                className="flex-1 rounded-2xl bg-[#ff2433] py-3 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(255,36,51,0.35)]"
+              >
+                {t("splove_plus_beta_activate_cta")}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

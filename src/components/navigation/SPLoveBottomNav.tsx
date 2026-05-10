@@ -45,10 +45,6 @@ function matchActiveProfile(pathname: string): boolean {
   return pathname === "/profile" || pathname.startsWith("/profile/");
 }
 
-function matchActiveEncounters(pathname: string): boolean {
-  return pathname === "/mes-rencontres" || pathname.startsWith("/match/");
-}
-
 export function SPLoveBottomNav({
   activeRoute,
   unreadMessagesCount,
@@ -64,7 +60,6 @@ export function SPLoveBottomNav({
   const isMessages = matchActiveMessages(path);
   const isLikes = matchActiveLikes(path);
   const isProfile = matchActiveProfile(path);
-  const isEncounters = matchActiveEncounters(path);
 
   const msgBadgeShown = unreadMessagesCount > 0;
   const likesBadgeShown = likesCount > 0;
@@ -107,13 +102,6 @@ export function SPLoveBottomNav({
           badge={likesBadgeShown ? formatBadge(likesCount) : null}
           icon={(c) => <PulsesIcon color={c} />}
           onActivate={() => navigate("/likes-you")}
-        />
-        <BottomItem
-          label={t("nav_tab_encounters")}
-          ariaLabel={t("nav_tab_encounters")}
-          active={isEncounters}
-          icon={(c) => <EncountersIcon color={c} />}
-          onActivate={() => navigate("/mes-rencontres")}
         />
         <BottomItem
           label={t("messages_title")}
@@ -332,16 +320,6 @@ function PulsesIcon({ color }: { color: string }) {
     <IconFrame color={color}>
       <path d="M12 20.2c-3-2.25-5.6-4.45-5.6-7.2A3.1 3.1 0 0 1 9.6 9.8c1 0 1.8.45 2.4 1.15.6-.7 1.4-1.15 2.4-1.15A3.1 3.1 0 0 1 17.6 13c0 2.75-2.6 4.95-5.6 7.2Z" />
       <path d="M5 12h2.3l1.4-2.3 2.1 4.8 1.7-3.1H15l1.1-1.7L19 12h0" />
-    </IconFrame>
-  );
-}
-
-function EncountersIcon({ color }: { color: string }) {
-  return (
-    <IconFrame color={color}>
-      <rect x="4.5" y="6.5" width="15" height="13" rx="2.5" />
-      <path d="M8 4.8v3.2M16 4.8v3.2M4.5 10h15" />
-      <path d="M15.5 15.8 17.2 14l-1.15-.05.55-1.2-1.65 1.8 1.1.05Z" />
     </IconFrame>
   );
 }
