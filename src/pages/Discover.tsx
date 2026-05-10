@@ -82,6 +82,7 @@ import {
 } from "../services/referral.service";
 import { trackEvent, getAbVariant, SECOND_CHANCE_COPY_TEST } from "../lib/analytics";
 import { viewerHasDiscoverSearchCoords } from "../constants/discoverGeo";
+import { formatHeightCmForDisplay } from "../lib/profileHeightCm";
 
 type Profile = {
   id: string;
@@ -107,6 +108,8 @@ type Profile = {
   pref_open_to_adapted_activity?: boolean | null;
   sport_match_preference?: string | null;
   sport_phrase?: string | null;
+  /** Taille affichée discrètement si renseignée (cm). */
+  height_cm?: number | null;
   sport_time?: string | null;
   /** Voir `profiles.is_photo_verified` (Veriff). */
   is_photo_verified?: boolean | null;
@@ -232,6 +235,7 @@ function DiscoverProfileDetailPreview({
   const phraseTrimPreview = (profile.sport_phrase ?? "").trim();
   const sportChipsPreview = getDiscoverSportChips(profile, mySportMatchKeys);
   const intentPreview = intentLabelShort(profile.intent);
+  const heightPreview = formatHeightCmForDisplay(profile.height_cm ?? null);
   function openPhotoViewerFromRaw(raw: string | null) {
     if (raw == null) return;
     const i = galleryRawRefs.indexOf(raw);
@@ -334,6 +338,9 @@ function DiscoverProfileDetailPreview({
             <h2 id="discover-preview-title" className="text-lg font-bold leading-tight text-app-text">
               {profile.first_name ?? t("unnamed_profile")}
               {age != null ? <span className="font-semibold text-app-muted">, {age}</span> : null}
+              {heightPreview ? (
+                <span className="ml-1 text-sm font-medium text-app-muted">· {heightPreview}</span>
+              ) : null}
             </h2>
             {intentPreview ? (
               <span className="rounded-full bg-app-border/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-app-text ring-1 ring-app-border">
@@ -794,7 +801,7 @@ const DISCOVER_DISPLAY_LIMIT = 10;
 /** Source Supabase du fil Discover (classement serveur) — repli côté client si colonne absente. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
 const DISCOVER_FALLBACK_SELECT =
-  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, sport_phrase, is_photo_verified, photo_status, identity_verified, veriff_status, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, sport_match_preference, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, sport_phrase, height_cm, is_photo_verified, photo_status, identity_verified, veriff_status, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, sport_match_preference, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Message utilisateur sûr (aucun détail technique backend). */
 function discoverFetchFailedMsg(language: "fr" | "en"): string {
@@ -900,11 +907,11 @@ function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremiu
 
 /** Colonnes Discover depuis `public.profiles` uniquement — pas de colonnes optionnelles absentes en prod. */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, identity_verified, veriff_status, is_active_mode, sport_practice_type, sport_match_preference, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, height_cm, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, identity_verified, veriff_status, is_active_mode, sport_practice_type, sport_match_preference, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Profil viewer Discover : uniquement colonnes plates sur `profiles` (sports chargés séparément sur `profile_sports`). */
 const DISCOVER_VIEWER_ME_SELECT =
-  "id, first_name, city, latitude, longitude, discovery_radius_km, birth_date, preferred_age_min, preferred_age_max, gender, looking_for, intent, profile_completed, photo_status, portrait_url, fullbody_url, main_photo_url";
+  "id, first_name, city, latitude, longitude, discovery_radius_km, birth_date, preferred_age_min, preferred_age_max, gender, looking_for, intent, profile_completed, photo_status, portrait_url, fullbody_url, main_photo_url, sport_match_preference";
 
 /** Reconstruit une carte Discover après rewind (hors re-score filtre feed). */
 async function buildAffinityProfileForRewind(input: {
@@ -1528,7 +1535,14 @@ export default function Discover() {
               };
 
         if (!viewerHasDiscoverSearchCoords(meProfile)) {
-          console.warn("[Discover] openProfileFromNavigation: viewer search center incomplet");
+          console.warn(
+            "[Discover audit] VIEWER_SEARCH_GEO_BLOCKED (navigation) — lat/lng/radius invalide.",
+            {
+              latitude: meProfile.latitude ?? null,
+              longitude: meProfile.longitude ?? null,
+              discovery_radius_km: meProfile.discovery_radius_km ?? null,
+            },
+          );
           return;
         }
 
@@ -1798,12 +1812,26 @@ export default function Discover() {
       }
 
       if (!viewerHasDiscoverSearchCoords(meProfile)) {
+        console.warn(
+          "[Discover audit] VIEWER_SEARCH_GEO_BLOCKED — Latitude, longitude ou discovery_radius_km (10 / 25 / 50 / 100) manquant ou invalide. Discover ne charge pas le feed.",
+          {
+            latitude: meProfile.latitude ?? null,
+            longitude: meProfile.longitude ?? null,
+            discovery_radius_km: meProfile.discovery_radius_km ?? null,
+            city: meProfile.city ?? null,
+          },
+        );
         setSwipeHistory([]);
         swipeHistoryRef.current = [];
         setProfiles([]);
         setErrorMessage(t("location_city_pick_list_prompt"));
         discoverLogStageCount("viewer geo/radius incomplete — skip feed", 0);
         return;
+      }
+      if (typeof meProfile.city !== "string" || !meProfile.city.trim()) {
+        console.warn(
+          "[Discover audit] VIEWER_CITY_EMPTY — Coordonnées OK mais city vide (données profil incomplet pour l’affichage lieu).",
+        );
       }
       
       const { data, error } = await supabase.rpc("get_discover_feed_alive", { p_limit: 12 });
@@ -2127,7 +2155,7 @@ export default function Discover() {
         const { data: hydrationRows, error: hydrationErr } = await supabase
           .from("profiles")
           .select(
-            "id, birth_date, preferred_age_min, preferred_age_max, gender, looking_for, intent, sport_match_preference, profile_sports(sport_id, sports(id, slug, label))",
+            "id, birth_date, preferred_age_min, preferred_age_max, gender, looking_for, intent, sport_match_preference, height_cm, profile_sports(sport_id, sports(id, slug, label))",
           )
           .in("id", hydrationIds);
         if (hydrationErr) {
@@ -2144,6 +2172,7 @@ export default function Discover() {
               intent?: string | null;
               profile_sports?: Profile["profile_sports"];
               sport_match_preference?: string | null;
+              height_cm?: number | null;
             }
           >();
           for (const row of ((hydrationRows ?? []) as unknown[]) as Array<{
@@ -2155,12 +2184,16 @@ export default function Discover() {
             looking_for?: string | null;
             intent?: string | null;
             profile_sports?: unknown;
+            height_cm?: unknown;
           }>) {
             const pid = typeof row.id === "string" ? row.id : "";
             if (!pid) continue;
             const normalizedProfileSports = Array.isArray(row.profile_sports)
               ? (row.profile_sports as Profile["profile_sports"])
               : [];
+            const hm = row.height_cm;
+            const heightCmHydr =
+              typeof hm === "number" && Number.isFinite(hm) ? Math.round(hm) : null;
             hydrationById.set(pid, {
               birth_date: typeof row.birth_date === "string" ? row.birth_date : null,
               preferred_age_min:
@@ -2179,6 +2212,7 @@ export default function Discover() {
                 typeof (row as { sport_match_preference?: unknown }).sport_match_preference === "string"
                   ? String((row as { sport_match_preference?: string }).sport_match_preference)
                   : null,
+              height_cm: heightCmHydr,
             });
           }
           stage = stage.map((p) => {
@@ -2194,6 +2228,7 @@ export default function Discover() {
               intent: h.intent ?? p.intent ?? null,
               profile_sports: h.profile_sports ?? p.profile_sports ?? [],
               sport_match_preference: h.sport_match_preference ?? p.sport_match_preference ?? null,
+              height_cm: h.height_cm ?? p.height_cm ?? null,
             };
           });
 
@@ -2370,6 +2405,14 @@ export default function Discover() {
       const safe = discoverOrdered.filter((p) => p?.id && isValidProfileId(p.id));
       const slice = safe.slice(0, DISCOVER_DISPLAY_LIMIT);
       resultCount = slice.length;
+      console.log("[Discover audit] pipeline_counts", {
+        raw_merged_profiles: profilesFromRpc.length,
+        after_client_pipeline: stage.length,
+        after_scoring: discoverFiltered.length,
+        final_ui_slice: slice.length,
+        viewer_sport_match_preference: meProfile.sport_match_preference ?? null,
+        viewer_discover_radius_km: meProfile.discovery_radius_km ?? null,
+      });
       console.log("[Discover feed] final profiles count:", resultCount);
       discoverLogStageCount("final rendered count", resultCount);
       if (import.meta.env.DEV) {

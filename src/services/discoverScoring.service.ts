@@ -1,6 +1,9 @@
 import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
 import { evaluateDiscoverV3, viewerOpenAdaptedResolved } from "../lib/discoverScoreV3";
-import { discoverCrossSportSecondaryAllowed } from "@/lib/sportMatchPreference";
+import {
+  discoverCrossSportSecondaryAllowed,
+  parseSportMatchPreference,
+} from "@/lib/sportMatchPreference";
 import { encodeDiscoverScoringReason } from "@/lib/discoverScoringReasons";
 import { BETA_MODE } from "../constants/beta";
 import { isValidDiscoveryRadiusKm } from "../constants/discoverGeo";
@@ -316,6 +319,13 @@ function isDiscoverDiagHighlightName(firstName: string | null | undefined): bool
   return typeof firstName === "string" && DISCOVER_DIAG_NAME_RE.test(firstName.trim());
 }
 
+/** Profils à tracer explicitement lors des audits Discover (Jacob / Lena / Linda test, etc.). */
+function isDiscoverAuditSpotlightName(firstName: string | null | undefined): boolean {
+  const n = typeof firstName === "string" ? firstName.trim().toLowerCase() : "";
+  if (!n) return false;
+  return /\b(lena|linda|jacob)\b/.test(n);
+}
+
 function exclusionDetailForNoMainPhoto(candidate: DiscoverProfile): {
   reason: "rejected photo" | "pending photo" | "missing required field";
   photo_status: string | null;
@@ -470,10 +480,14 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       ? Math.round(ctx.viewer.discovery_radius_km as number)
       : null;
     const hasUsableDistance = distanceKm != null && Number.isFinite(distanceKm);
-    /** Filtrage géo strict avant scoring sport : distance Haversine renvoyée par RPC, ≤ rayon autorisé. */
-    const insideRadiusStrict =
-      viewerRadius != null && hasUsableDistance && (distanceKm as number) <= viewerRadius;
-    const locationAccepted = insideRadiusStrict;
+    /**
+     * Hors rayon uniquement si distance connue ET > rayon viewer.
+     * Si lat/lng manquent côté candidat, `profile_distances_from_viewer` renvoie NULL : on n'exclut pas
+     * (aligné sur `distancePointsV3`, qui ne met pas `outside_radius` dans ce cas).
+     */
+    const outsideKnownRadius =
+      viewerRadius != null && hasUsableDistance && (distanceKm as number) > viewerRadius;
+    const locationAccepted = !outsideKnownRadius;
     const distanceSource: "gps" | "gps_unavailable_candidate" | "gps_unavailable_viewer_rpc" =
       viewerRadius == null ? "gps_unavailable_viewer_rpc" : !hasUsableDistance ? "gps_unavailable_candidate" : "gps";
     if (!locationAccepted) {
@@ -488,6 +502,23 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     diagExtra.discovery_radius_km = viewerRadius;
 
     if (excludedReasons.length > 0) {
+      if (isDiscoverAuditSpotlightName(candidate.first_name)) {
+        console.log("[Discover audit] scoring_excluded", {
+          first_name: candidate.first_name,
+          id: candidate.id,
+          exclusion_reasons: excludedReasons,
+          shared_sport_ids: commonSportIds,
+          viewer_sport_match_preference: parseSportMatchPreference(ctx.viewer.sport_match_preference),
+          candidate_sport_match_preference: parseSportMatchPreference(candidate.sport_match_preference),
+          cross_sport_pairing_allowed: discoverCrossSportSecondaryAllowed(
+            ctx.viewer.sport_match_preference,
+            candidate.sport_match_preference,
+          ),
+          distance_km: distanceKm,
+          distance_source: distanceSource,
+          discovery_radius_km: viewerRadius,
+        });
+      }
       if (import.meta.env.DEV) {
         const hl = isDiscoverDiagHighlightName(candidate.first_name);
         const row = {
@@ -659,6 +690,19 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
         distance_km: distanceKm,
         shared_sport_ids: commonSportIds,
         practice_score,
+        discoverScore: totalScore,
+      });
+    }
+
+    if (isDiscoverAuditSpotlightName(candidate.first_name)) {
+      console.log("[Discover audit] scoring_included", {
+        first_name: candidate.first_name,
+        id: candidate.id,
+        shared_sport_ids: commonSportIds,
+        sharedSportsCount: sharedCount,
+        distance_km: distanceKm,
+        viewer_sport_match_preference: parseSportMatchPreference(ctx.viewer.sport_match_preference),
+        candidate_sport_match_preference: parseSportMatchPreference(candidate.sport_match_preference),
         discoverScore: totalScore,
       });
     }
