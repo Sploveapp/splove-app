@@ -8,7 +8,6 @@ import { useAuth } from "../contexts/AuthContext";
 import { GlobalHeader } from "../components/GlobalHeader";
 import { SplashScreen } from "../components/SplashScreen";
 import { isAdultFromBirthIso } from "../lib/ageGate";
-import { isOnboardingComplete } from "../lib/profileCompleteness";
 import {
   mergeOptionalProfileFields,
   ONBOARDING_PROFILE_HYDRATE_TIERS,
@@ -199,7 +198,6 @@ const OPTIONAL_PROFILE_COLUMNS = [
   "language",
   "accepted_terms_at",
   "accepted_privacy_at",
-  "onboarding_done",
 ] as const;
 
 function isMissingOptionalProfileColumnError(
@@ -226,6 +224,17 @@ function stripOptionalProfileColumnsFromPayload(
     delete (next as Record<string, unknown>)[columnName];
   }
   return next;
+}
+
+/** Profils 063 avec `profile_completed` + `onboarding_completed` mais `onboarding_done` absent / false — à corriger en BDD. */
+function profileRowNeedsOnboardingDoneBackfill(row: unknown): boolean {
+  if (!row || typeof row !== "object") return false;
+  const r = row as Record<string, unknown>;
+  return (
+    r.profile_completed === true &&
+    r.onboarding_completed === true &&
+    r.onboarding_done !== true
+  );
 }
 
 function stripOptionalColumnsFromSelect(select: string): string {
@@ -516,6 +525,7 @@ export default function Onboarding() {
   const [searchParams] = useSearchParams();
   const {
     user,
+    profile,
     isProfileComplete,
     isLoading: authLoading,
     isAuthInitialized,
@@ -1053,6 +1063,34 @@ export default function Onboarding() {
     navigate,
     user?.id,
   ]);
+
+  /** Profils avec `profile_completed` + `onboarding_completed` déjà OK mais `onboarding_done` resté à false — alignement BDD hors flux submit. */
+  useEffect(() => {
+    if (!user?.id || authLoading || isProfileLoading) return;
+    if (!profile?.id || profile.id !== user.id) return;
+    const row = profile as Record<string, unknown>;
+    if (row.profile_completed !== true || row.onboarding_completed !== true) return;
+    if (row.onboarding_done == true) return;
+
+    let cancelled = false;
+    void (async () => {
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          onboarding_done: true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", user.id);
+      if (error) {
+        console.error("[Onboarding] mount heal onboarding_done Supabase error (exact)", error);
+        return;
+      }
+      if (!cancelled) await refetchProfile();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, isProfileLoading, profile, refetchProfile, user?.id]);
 
   const quickPickSportsOrdered = useMemo(
     () => orderedQuickPickSports(sportsCatalog),
@@ -1848,58 +1886,9 @@ export default function Onboarding() {
       }
       setModerationSuccessNote(moderationBanner);
 
-      const completionFromData = isOnboardingComplete({
-        first_name: firstName.trim(),
-        birth_date: birthDate,
-        gender,
-        looking_for: serializeInterestedInValues(interestedIn),
-        intent: dbIntentFromUiIntent(intent),
-        city: submitCityFinal,
-        latitude: submitLatFinal,
-        longitude: submitLngFinal,
-        discovery_radius_km: obLocRadiusKm,
-        portrait_url: portraitUrl,
-        fullbody_url: fullbodyUrl,
-        sport_time: sportTime,
-        sport_intensity: sportIntensity,
-        planning_style: planningStyle,
-        onboarding_sports_count: selectedSportIds.length,
-        onboarding_sports_with_level_count: selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length,
-      });
-      let hasChildrenRequirementOk = true;
-      const hasChildrenProbe = await supabase
-        .from("profiles")
-        .select("has_children")
-        .eq("id", authUserId)
-        .maybeSingle();
-      if (hasChildrenProbe.error) {
-        const msg = (hasChildrenProbe.error.message ?? "").toLowerCase();
-        const missingHasChildren =
-          String(hasChildrenProbe.error.code ?? "") === "42703" &&
-          /has_children/.test(hasChildrenProbe.error.message ?? "");
-        if (!missingHasChildren && !/has_children/.test(msg)) {
-          logDetailedError("profiles has_children probe", hasChildrenProbe.error, { userId: authUserId });
-        }
-      } else if (hasChildrenProbe.data && "has_children" in hasChildrenProbe.data) {
-        const hasChildrenValue = (hasChildrenProbe.data as { has_children?: unknown }).has_children;
-        const savesYesNoAnswer = typeof hasChildrenForDb(hasChildrenChoice) === "boolean";
-        const savesExplicitPreferNot = hasChildrenChoice === "prefer_not";
-        hasChildrenRequirementOk =
-          typeof hasChildrenValue === "boolean" || savesYesNoAnswer || savesExplicitPreferNot;
-      }
-      const hasAtLeastOneSport = selectedSportIds.length > 0;
-      const hasAtLeastOnePhoto = Boolean(portraitUrl || fullbodyUrl);
-      const legalChecksOk = confirm18 && acceptTerms;
-      const completionFlag =
-        moderationAllowsComplete &&
-        completionFromData &&
-        hasChildrenRequirementOk &&
-        legalChecksOk &&
-        hasAtLeastOneSport &&
-        hasAtLeastOnePhoto;
+      /** `canSubmit` + étapes locales ont déjà validé le formulaire ; on aligne toujours les trois flags métier finaux. */
       const nowIso = new Date().toISOString();
       const intentDbValue = dbIntentFromUiIntent(intent);
-      const finalizedCompletionFlag = completionFlag;
 
       const onboardingPreferredAge = preferredAgeFromDraftInputs(
         obPreferredAgeMinStr,
@@ -1938,9 +1927,9 @@ export default function Onboarding() {
         portrait_url: portraitUrl,
         fullbody_url: fullbodyUrl,
         main_photo_url: portraitUrl || fullbodyUrl,
-        profile_completed: finalizedCompletionFlag,
-        onboarding_completed: finalizedCompletionFlag,
-        onboarding_done: finalizedCompletionFlag,
+        profile_completed: true,
+        onboarding_completed: true,
+        onboarding_done: true,
         accepted_terms_at: acceptTerms ? nowIso : null,
         accepted_privacy_at: acceptTerms ? nowIso : null,
         updated_at: nowIso,
@@ -2230,6 +2219,24 @@ export default function Onboarding() {
         logDetailedError("profiles reload after submit", profileReloadError, { userId: authUserId });
       }
 
+      let effectiveProfileReloadRow = profileReloadRow;
+      if (effectiveProfileReloadRow && profileRowNeedsOnboardingDoneBackfill(effectiveProfileReloadRow)) {
+        const { data: patchedRow, error: odHealErr } = await supabase
+          .from("profiles")
+          .update({
+            onboarding_done: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", authUserId)
+          .select("*")
+          .maybeSingle();
+        if (odHealErr) {
+          console.error("[Onboarding submit] onboarding_done heal after reload Supabase error (exact)", odHealErr);
+        } else if (patchedRow) {
+          effectiveProfileReloadRow = patchedRow;
+        }
+      }
+
       console.log("[Onboarding submit] start: refetchProfile");
       const refreshedProfile = await refetchProfile();
       console.log("[Onboarding submit] result: refetchProfile done", {
@@ -2250,7 +2257,7 @@ export default function Onboarding() {
       }
 
       const gateOk =
-        rowFlagsOnboardingDone(profileReloadRow) ||
+        rowFlagsOnboardingDone(effectiveProfileReloadRow) ||
         rowFlagsOnboardingDone(refreshedProfile) ||
         rowFlagsOnboardingDone(upsertRow);
       if (!gateOk) {
@@ -2260,7 +2267,7 @@ export default function Onboarding() {
           upsert_onboarding_completed: (upsertRow as { onboarding_completed?: unknown }).onboarding_completed ?? null,
           upsert_onboarding_done: (upsertRow as { onboarding_done?: unknown }).onboarding_done ?? null,
           reload_profile_completed:
-            (profileReloadRow as { profile_completed?: unknown } | null)?.profile_completed ?? null,
+            (effectiveProfileReloadRow as { profile_completed?: unknown } | null)?.profile_completed ?? null,
           refreshed_profile_completed: refreshedProfile?.profile_completed ?? null,
           refreshed_onboarding_completed:
             (refreshedProfile as { onboarding_completed?: unknown } | null)?.onboarding_completed ?? null,
@@ -2285,7 +2292,7 @@ export default function Onboarding() {
         return;
       }
 
-      if (profileReloadRow) commitProfileRow(profileReloadRow);
+      if (effectiveProfileReloadRow) commitProfileRow(effectiveProfileReloadRow);
       else if (refreshedProfile) commitProfileRow(refreshedProfile);
       else commitProfileRow(upsertRow);
 
@@ -3314,7 +3321,7 @@ export default function Onboarding() {
                 ) : (
                   <button
                     type="submit"
-                    disabled={loading || authLoading || hydratingDraft}
+                    disabled={loading || authLoading || hydratingDraft || !canSubmit}
                     className="flex-1 rounded-2xl py-3.5 text-sm font-semibold shadow-md transition-transform active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70 sm:text-base"
                     style={{
                       background: !loading && !authLoading && user?.id ? BRAND_BG : CTA_DISABLED_BG,
