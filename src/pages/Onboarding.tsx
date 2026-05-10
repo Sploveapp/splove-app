@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Accessibility } from "lucide-react";
@@ -34,6 +34,7 @@ import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { photoModerationHeadline, photoModerationRejectedDetail } from "../lib/photoModerationUi";
 import { invokeModeratePhoto } from "../services/photoModeration.service";
 import type { PhotoModerationStatus } from "../types/photoModeration.types";
+import type { Language } from "../i18n";
 import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
 import { stashPendingReferralCodeFromSearch, tryCompletePendingReferral } from "../services/referral.service";
@@ -210,22 +211,9 @@ const OPTIONAL_PROFILE_COLUMNS = [
   "preferred_age_min",
   "preferred_age_max",
   "sport_match_preference",
+  "language",
   "onboarding_done",
 ] as const;
-
-const SPORT_MATCH_PREF_OPTIONS: readonly {
-  value: SportMatchPreferenceDb;
-  labelKey: string;
-  descKey: string;
-}[] = [
-  { value: "same_sports", labelKey: "sport_match_pref_same_label", descKey: "sport_match_pref_same_desc" },
-  {
-    value: "open_to_different_sports",
-    labelKey: "sport_match_pref_open_label",
-    descKey: "sport_match_pref_open_desc",
-  },
-  { value: "both", labelKey: "sport_match_pref_both_label", descKey: "sport_match_pref_both_desc" },
-];
 
 function isMissingOptionalProfileColumnError(
   error: { code?: string | number; message?: string } | null | undefined,
@@ -395,6 +383,17 @@ type SportOption = {
 const TOTAL_STEPS = 11;
 const ONBOARDING_SPORT_SLOT_MAX = 3;
 
+const ONBOARDING_LANG_GATE_SESSION_KEY = "splove_onboarding_language_gate_v1";
+
+function readSessionLangGatePassed(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return sessionStorage.getItem(ONBOARDING_LANG_GATE_SESSION_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function onboardingPulseKey(s: number): string {
   const step = Math.min(Math.max(Math.floor(s), 1), TOTAL_STEPS);
   return `onboarding_pulse_step_${step}`;
@@ -523,7 +522,7 @@ const inputClassName =
 const labelClassName = "mb-2 block text-sm font-semibold text-app-text tracking-tight";
 
 export default function Onboarding() {
-  const { t } = useTranslation();
+  const { t, language, setLanguage } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const {
@@ -538,8 +537,36 @@ export default function Onboarding() {
   } = useAuth();
 
   const [step, setStep] = useState(1);
+  const [languageGatePassed, setLanguageGatePassed] = useState(() => readSessionLangGatePassed());
+  const [languageGateHydrated, setLanguageGateHydrated] = useState(() => readSessionLangGatePassed());
   /** Sous-étapes de l’étape 1 — une question principale par micro-écran. */
   const [step1SubStep, setStep1SubStep] = useState(0);
+
+  const completeLanguageGate = useCallback(
+    async (next: Language) => {
+      setLanguage(next);
+      try {
+        sessionStorage.setItem(ONBOARDING_LANG_GATE_SESSION_KEY, "1");
+      } catch {
+        /* ignore */
+      }
+      setLanguageGatePassed(true);
+      if (!user?.id) return;
+      const nowIso = new Date().toISOString();
+      let { error } = await supabase
+        .from("profiles")
+        .upsert({ id: user.id, updated_at: nowIso, language: next }, { onConflict: "id" });
+      if (error && isUndefinedColumnError(error, "language")) {
+        ({ error } = await supabase
+          .from("profiles")
+          .upsert({ id: user.id, updated_at: nowIso }, { onConflict: "id" }));
+      }
+      if (error) {
+        console.warn("[Onboarding] profiles.language save failed", error);
+      }
+    },
+    [setLanguage, user?.id],
+  );
   const [sportSearch, setSportSearch] = useState("");
   const [stepHint, setStepHint] = useState<string | null>(null);
   const [photoStepError, setPhotoStepError] = useState<string | null>(null);
@@ -878,12 +905,12 @@ export default function Onboarding() {
   }, [t]);
 
   useEffect(() => {
-    if (step !== 3) return;
+    if (step !== 5) return;
     console.log("[Onboarding sports] mount");
   }, [step]);
 
   useEffect(() => {
-    if (step !== 3) return;
+    if (step !== 5) return;
     console.log("[Onboarding sports] loading:", loadingSports);
     console.log("[Onboarding sports] sports count:", sportsCatalog.length);
     console.log("[Onboarding sports] input disabled:", false);
@@ -912,6 +939,16 @@ export default function Onboarding() {
         if (cancelled || !p || typeof p !== "object") return;
         const row = p as Record<string, unknown>;
         Object.assign(row, await mergeOptionalProfileFields(supabase, userId));
+        const profLang = row.language;
+        if (profLang === "fr" || profLang === "en") {
+          setLanguage(profLang);
+          try {
+            sessionStorage.setItem(ONBOARDING_LANG_GATE_SESSION_KEY, "1");
+          } catch {
+            /* ignore */
+          }
+          setLanguageGatePassed(true);
+        }
         setFirstName(String(row.first_name ?? ""));
         const isoBirth = typeof row.birth_date === "string" ? row.birth_date : "";
         setBirthDate(isoBirth);
@@ -1018,13 +1055,19 @@ export default function Onboarding() {
       } finally {
         hydratedDraftRef.current = true;
         if (!cancelled) setHydratingDraft(false);
+        setLanguageGateHydrated(true);
       }
     }
     void hydrateDraft();
     return () => {
       cancelled = true;
     };
-  }, [user?.id, authLoading, isProfileComplete]);
+  }, [user?.id, authLoading, isProfileComplete, setLanguage]);
+
+  useEffect(() => {
+    if (authLoading || !isAuthInitialized) return;
+    if (!user?.id) setLanguageGateHydrated(true);
+  }, [authLoading, isAuthInitialized, user?.id]);
 
   useEffect(() => {
     console.log("[Onboarding] authLoading / user", {
@@ -1222,6 +1265,54 @@ export default function Onboarding() {
             >
               {t("onboarding_find_session")}
             </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!languageGatePassed) {
+    if (!languageGateHydrated) {
+      return (
+        <div className="flex min-h-screen flex-col bg-app-bg font-sans">
+          <GlobalHeader variant="compact" />
+          <div className="flex flex-1 flex-col items-center justify-center px-6">
+            <p className="text-sm text-app-muted">{t("loading")}</p>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="flex min-h-screen flex-col bg-app-bg font-sans">
+        <GlobalHeader variant="compact" />
+        <div className="flex flex-1 flex-col items-center justify-center px-5 pb-12 pt-4">
+          <div className="w-full max-w-md space-y-6 text-center">
+            <h1 className="text-2xl font-bold leading-snug text-app-text sm:text-[1.65rem]">
+              {t("onboarding_language_gate_title")}
+            </h1>
+            <p className="text-[15px] leading-relaxed text-app-muted">{t("onboarding_language_gate_subtitle")}</p>
+            <div className="flex w-full flex-col gap-3 sm:flex-row sm:justify-center">
+              <button
+                type="button"
+                onClick={() => void completeLanguageGate("fr")}
+                className="min-h-[52px] w-full rounded-2xl px-6 text-base font-semibold shadow-md transition-transform active:scale-[0.99] sm:flex-1"
+                style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
+              >
+                🇫🇷 Français
+              </button>
+              <button
+                type="button"
+                onClick={() => void completeLanguageGate("en")}
+                className="min-h-[52px] w-full rounded-2xl px-6 text-base font-semibold shadow-md transition-transform active:scale-[0.99] sm:flex-1"
+                style={{
+                  border: `2px solid ${BRAND_BG}`,
+                  background: APP_CARD,
+                  color: APP_TEXT_MUTED,
+                }}
+              >
+                🇬🇧 English
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1985,6 +2076,7 @@ export default function Onboarding() {
         accepted_terms_at: acceptTerms ? nowIso : null,
         accepted_privacy_at: acceptTerms ? nowIso : null,
         updated_at: nowIso,
+        language,
       };
 
       if (PHOTO_VERIFICATION_PLACEHOLDER) {
@@ -2886,46 +2978,6 @@ export default function Onboarding() {
                         ))}
                       </ul>
                     )}
-                  </div>
-
-                  <div className="space-y-3 rounded-2xl border border-app-border/80 bg-app-card/70 p-4">
-                    <div>
-                      <span className={labelClassName}>{t("sport_match_pref_section_title")}</span>
-                      <p className="text-[11px] leading-relaxed text-app-muted">{t("sport_match_pref_section_hint")}</p>
-                    </div>
-                    <div className="grid grid-cols-1 gap-2.5">
-                      {SPORT_MATCH_PREF_OPTIONS.map((opt) => {
-                        const active = sportMatchPreference === opt.value;
-                        return (
-                          <motion.button
-                            key={opt.value}
-                            type="button"
-                            whileTap={{ scale: 0.985 }}
-                            onClick={() => setSportMatchPreference(opt.value)}
-                            className={`${intentChoiceClass(active)} min-h-[56px] w-full text-left`}
-                            style={
-                              active
-                                ? {
-                                    borderColor: BRAND_BG,
-                                    background: BRAND_BG,
-                                    color: TEXT_ON_BRAND,
-                                  }
-                                : undefined
-                            }
-                            aria-pressed={active}
-                          >
-                            <span className="block text-sm font-semibold leading-snug">{t(opt.labelKey)}</span>
-                            <span
-                              className={`mt-1 block text-[11px] font-normal leading-snug ${
-                                active ? "opacity-90" : "text-app-muted"
-                              }`}
-                            >
-                              {t(opt.descKey)}
-                            </span>
-                          </motion.button>
-                        );
-                      })}
-                    </div>
                   </div>
 
                   {loadingSports ? (

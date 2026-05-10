@@ -180,6 +180,8 @@ export const OPTIONAL_PROFILE_FIELDS = [
   /** Identité (Veriff ou équivalent) — badge « Profil vérifié » uniquement avec ces flags. */
   "identity_verified",
   "veriff_status",
+  /** Préférence de langue d’interface (sync onboarding / localStorage `splove_language`). */
+  "language",
 ] as const;
 
 /**
