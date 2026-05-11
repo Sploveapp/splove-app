@@ -18,7 +18,7 @@ import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/s
 import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
-import { parseHeightCmOptionalInput } from "../lib/profileHeightCm";
+import { coerceProfileHeightCm, parseHeightCmOptionalInput } from "../lib/profileHeightCm";
 
 type SportOption = { id: string | number; name: string; category?: string | null };
 type LookingForValue =
@@ -57,16 +57,6 @@ const EDIT_SPORT_MATCH_OPTIONS: readonly {
   },
   { value: "both", labelKey: "sport_match_pref_both_label", descKey: "sport_match_pref_both_desc" },
 ];
-
-const TIME_OPTIONS = ["Matin", "Soir"] as const;
-const INTENSITY_OPTIONS = [
-  { value: "chill", label: "Chill" },
-  { value: "intense", label: "Intense" },
-] as const;
-const PLANNING_OPTIONS = [
-  { value: "spontaneous", label: "style.spontaneous" },
-  { value: "planned", label: "style.planned" },
-] as const;
 
 const PHOTO_BUCKET = "profile-photos";
 const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
@@ -126,9 +116,6 @@ export default function EditProfile() {
 
   const [intent, setIntent] = useState<(typeof INTENT_OPTIONS)[number]["value"]>("dating_feeling");
   const [lookingFor, setLookingFor] = useState<LookingForValue[]>([]);
-  const [sportTime, setSportTime] = useState<(typeof TIME_OPTIONS)[number] | "">("");
-  const [sportIntensity, setSportIntensity] = useState<"chill" | "intense" | "">("");
-  const [planningStyle, setPlanningStyle] = useState<"spontaneous" | "planned" | "">("");
   const [sportMatchPreference, setSportMatchPreference] = useState<SportMatchPreferenceDb>("same_sports");
   const [heightCmInput, setHeightCmInput] = useState("");
   const [bio, setBio] = useState("");
@@ -186,16 +173,8 @@ export default function EditProfile() {
     if (!profile) return;
     setIntent(mapDbIntentToUi(profile.intent));
     setLookingFor(parseLookingFor(profile.looking_for));
-    const st = String((profile as Record<string, unknown>).sport_time ?? "");
-    setSportTime(st === "Matin" || st === "Soir" ? st : "");
-    const si = String((profile as Record<string, unknown>).sport_intensity ?? "");
-    setSportIntensity(si === "chill" || si === "intense" ? si : "");
-    const ps = String((profile as Record<string, unknown>).planning_style ?? "");
-    setPlanningStyle(ps === "spontaneous" || ps === "planned" ? ps : "");
-    const hRaw = (profile as Record<string, unknown>).height_cm;
-    setHeightCmInput(
-      typeof hRaw === "number" && Number.isFinite(hRaw) && hRaw > 0 ? String(Math.round(hRaw)) : "",
-    );
+    const hCoerced = coerceProfileHeightCm((profile as Record<string, unknown>).height_cm);
+    setHeightCmInput(hCoerced != null ? String(hCoerced) : "");
     setBio(String((profile as Record<string, unknown>).sport_phrase ?? ""));
     const portraitFromDb =
       (typeof profile.portrait_url === "string" && profile.portrait_url.trim()) ||
@@ -524,33 +503,6 @@ export default function EditProfile() {
                 </button>
               );
             })}
-          </div>
-        </section>
-
-        <section style={{ background: APP_CARD, borderRadius: 16, border: `1px solid ${APP_BORDER}`, padding: 16, marginBottom: 14 }}>
-          <h2 style={{ margin: "0 0 10px", fontSize: 15, color: APP_TEXT }}>{t("style.title")}</h2>
-          <div style={{ display: "grid", gap: 8, marginBottom: 8 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
-              {TIME_OPTIONS.map((v) => (
-                <button key={v} type="button" onClick={() => setSportTime(v)} style={{ border: `1px solid ${sportTime === v ? BRAND_BG : APP_BORDER}`, background: sportTime === v ? BRAND_BG : APP_BG, color: sportTime === v ? TEXT_ON_BRAND : APP_TEXT, borderRadius: 12, padding: "10px 8px", fontSize: 13, fontWeight: 600 }}>
-                  {v === "Matin" ? t("style.morning") : t("style.evening")}
-                </button>
-              ))}
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
-              {INTENSITY_OPTIONS.map((v) => (
-                <button key={v.value} type="button" onClick={() => setSportIntensity(v.value)} style={{ border: `1px solid ${sportIntensity === v.value ? BRAND_BG : APP_BORDER}`, background: sportIntensity === v.value ? BRAND_BG : APP_BG, color: sportIntensity === v.value ? TEXT_ON_BRAND : APP_TEXT, borderRadius: 12, padding: "10px 8px", fontSize: 13, fontWeight: 600 }}>
-                  {v.label}
-                </button>
-              ))}
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
-              {PLANNING_OPTIONS.map((v) => (
-                <button key={v.value} type="button" onClick={() => setPlanningStyle(v.value)} style={{ border: `1px solid ${planningStyle === v.value ? BRAND_BG : APP_BORDER}`, background: planningStyle === v.value ? BRAND_BG : APP_BG, color: planningStyle === v.value ? TEXT_ON_BRAND : APP_TEXT, borderRadius: 12, padding: "10px 8px", fontSize: 13, fontWeight: 600 }}>
-                  {t(v.label)}
-                </button>
-              ))}
-            </div>
           </div>
         </section>
 

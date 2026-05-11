@@ -1,6 +1,7 @@
 import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
 import { evaluateDiscoverV3, viewerOpenAdaptedResolved } from "../lib/discoverScoreV3";
 import {
+  discoverAllowsZeroSharedSports,
   discoverCrossSportSecondaryAllowed,
   parseSportMatchPreference,
 } from "@/lib/sportMatchPreference";
@@ -393,7 +394,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       const sharedN = intersectSportIds(probeViewerSports, extractCandidateSportIds(c)).length;
       if (
         sharedN >= 1 ||
-        discoverCrossSportSecondaryAllowed(ctx.viewer.sport_match_preference, c.sport_match_preference)
+        discoverAllowsZeroSharedSports(ctx.viewer.sport_match_preference, c.sport_match_preference)
       ) {
         sportCompatPass += 1;
       }
@@ -435,7 +436,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const sharedCount = commonSportIds.length;
     const allowZeroSharedSports =
       sharedCount >= 1 ||
-      discoverCrossSportSecondaryAllowed(ctx.viewer.sport_match_preference, candidate.sport_match_preference);
+      discoverAllowsZeroSharedSports(ctx.viewer.sport_match_preference, candidate.sport_match_preference);
     if (!allowZeroSharedSports) excludedReasons.push("no common sport");
 
     const candidateGender = canonicalGender(candidate.gender);
@@ -648,7 +649,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const betaSharedSportsBoost = BETA_MODE ? sharedCount * 8 : 0;
     const crossSportSecondaryBonus =
       sharedCount === 0 &&
-      discoverCrossSportSecondaryAllowed(ctx.viewer.sport_match_preference, candidate.sport_match_preference)
+      discoverAllowsZeroSharedSports(ctx.viewer.sport_match_preference, candidate.sport_match_preference)
         ? CROSS_SPORT_SECONDARY_SCORE_BONUS
         : 0;
     const totalScore = (v3?.total ?? 0) + betaSharedSportsBoost + crossSportSecondaryBonus;

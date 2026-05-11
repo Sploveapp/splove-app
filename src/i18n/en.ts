@@ -746,9 +746,9 @@ const en = {
   sport_match_pref_open_label: "Open discovery",
   sport_match_pref_open_desc:
     "I’m also open to meeting people with other sports.",
-  sport_match_pref_both_label: "Balanced",
+  sport_match_pref_both_label: "Sport mix",
   sport_match_pref_both_desc:
-    "Priority to shared sports, but still room for discovery.",
+    "Priority on shared sports, with room for discovery too.",
   discover_scoring_v3_primary_shared: "V3 {{total}} · {{shared}} sport(s) in common",
   discover_scoring_v3_primary_cross_secondary: "V3 {{total}} · secondary cross-sport match (no shared sport)",
   discover_scoring_distance_km: "{{km}} km",

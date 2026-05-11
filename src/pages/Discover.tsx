@@ -87,7 +87,7 @@ import {
   takeDiscoverProfilesWithValidGps,
   viewerHasDiscoverSearchCoords,
 } from "../constants/discoverGeo";
-import { formatHeightCmForDisplay } from "../lib/profileHeightCm";
+import { coerceProfileHeightCm, formatHeightCmForDisplay } from "../lib/profileHeightCm";
 
 type Profile = {
   id: string;
@@ -2201,9 +2201,7 @@ export default function Discover() {
             const normalizedProfileSports = Array.isArray(row.profile_sports)
               ? (row.profile_sports as Profile["profile_sports"])
               : [];
-            const hm = row.height_cm;
-            const heightCmHydr =
-              typeof hm === "number" && Number.isFinite(hm) ? Math.round(hm) : null;
+            const heightCmHydr = coerceProfileHeightCm(row.height_cm);
             hydrationById.set(pid, {
               birth_date: typeof row.birth_date === "string" ? row.birth_date : null,
               preferred_age_min:
@@ -2227,7 +2225,12 @@ export default function Discover() {
           }
           stage = stage.map((p) => {
             const h = hydrationById.get(p.id);
-            if (!h) return p;
+            if (!h) {
+              return {
+                ...p,
+                height_cm: coerceProfileHeightCm((p as { height_cm?: unknown }).height_cm),
+              };
+            }
             return {
               ...p,
               birth_date: h.birth_date ?? p.birth_date ?? null,
@@ -2238,7 +2241,7 @@ export default function Discover() {
               intent: h.intent ?? p.intent ?? null,
               profile_sports: h.profile_sports ?? p.profile_sports ?? [],
               sport_match_preference: h.sport_match_preference ?? p.sport_match_preference ?? null,
-              height_cm: h.height_cm ?? p.height_cm ?? null,
+              height_cm: h.height_cm,
             };
           });
 

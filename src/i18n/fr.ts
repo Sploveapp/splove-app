@@ -756,9 +756,9 @@ const fr = {
   sport_match_pref_open_label: "Découverte ouverte",
   sport_match_pref_open_desc:
     "Je suis aussi ouvert(e) à rencontrer des personnes avec d’autres sports.",
-  sport_match_pref_both_label: "Équilibré",
+  sport_match_pref_both_label: "Mix sportif",
   sport_match_pref_both_desc:
-    "Priorité aux sports communs, mais avec de la place pour la découverte.",
+    "Priorité aux sports communs, avec aussi de la découverte.",
   discover_scoring_v3_primary_shared: "V3 {{total}} · {{shared}} sport(s) en commun",
   discover_scoring_v3_primary_cross_secondary: "V3 {{total}} · ouverture secondaire sans sport commun",
   discover_scoring_distance_km: "{{km}} km",

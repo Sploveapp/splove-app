@@ -59,6 +59,7 @@ export default function LikesYou() {
     profile?.birth_date ?? null,
     pam,
     pamx,
+    (profile as { sport_match_preference?: string | null } | null)?.sport_match_preference ?? null,
   );
 
   /** Seule source pour le map : le state du hook (déjà filtré côté service). */

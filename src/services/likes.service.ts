@@ -4,6 +4,9 @@ import {
   logPreferenceCompatibilityPipeline,
 } from "../lib/matchingPreferences";
 import { asAgePreferenceScalar, isReciprocalAgeDiscoverMatch } from "../lib/profileAge";
+import { getSharedSportsCount, type DiscoverScoreProfileInput } from "../lib/discoverScore";
+import { collectSportMatchKeysFromProfile } from "../lib/sportMatchGroups";
+import { parseSportMatchPreference } from "../lib/sportMatchPreference";
 import type { LikeReceived, ProfileInLikesYou } from "../types/premium.types";
 import { fetchBlockedRelatedUserIds } from "./blocks.service";
 
@@ -48,6 +51,7 @@ export type ViewerPreferenceFields = {
   birth_date?: string | null | undefined;
   preferred_age_min?: number | null | undefined;
   preferred_age_max?: number | null | undefined;
+  sport_match_preference?: string | null | undefined;
 };
 
 /** Même source que Discover (`loadProfiles` lit `profiles` pour le viewer) ; repli Auth si ligne absente. */
@@ -241,13 +245,26 @@ export async function getLikesReceived(
 
   const { data: meRow, error: meErr } = await supabase
     .from("profiles")
-    .select("gender, looking_for, birth_date, preferred_age_min, preferred_age_max")
+    .select("gender, looking_for, birth_date, preferred_age_min, preferred_age_max, sport_match_preference")
     .eq("id", currentUserId)
     .maybeSingle();
 
   if (meErr) {
     console.warn("[likesYou] viewer row from profiles:", meErr.message);
   }
+
+  const { data: viewerSportsRows } = await supabase
+    .from("profile_sports")
+    .select("sport_id, sports(id, slug, label)")
+    .eq("profile_id", currentUserId);
+  const viewerSportKeys = collectSportMatchKeysFromProfile({
+    profile_sports: (viewerSportsRows ?? []) as {
+      sports?: { slug?: string | null; label?: string | null } | null;
+    }[],
+  });
+  const mergedSportMatchPref =
+    trimmedOrNull((meRow as { sport_match_preference?: unknown } | null)?.sport_match_preference) ??
+    trimmedOrNull(viewerFromAuth?.sport_match_preference ?? null);
 
   const meForCompat = mergeViewerPreferences(
     meRow as { gender?: string | null; looking_for?: string | null } | null,
@@ -370,6 +387,16 @@ export async function getLikesReceived(
     meAgePrefs.preferred_age_max,
     afterGenderCompat,
   );
+
+  const afterSportStrict =
+    parseSportMatchPreference(mergedSportMatchPref) === "same_sports"
+      ? filtered.filter((row) => {
+          const p = row.profile;
+          if (!p) return false;
+          return getSharedSportsCount(viewerSportKeys, p as DiscoverScoreProfileInput) >= 1;
+        })
+      : filtered;
+
   logPreferenceCompatibilityPipeline(
     "LikesYou",
     meForCompat,
@@ -381,17 +408,18 @@ export async function getLikesReceived(
   if (import.meta.env.DEV) {
     console.log("[likesYou] after reciprocal age filter", {
       before_reciprocal_age: afterGenderCompat.length,
-      final: filtered.length,
+      after_sport_strict_same_sports: afterSportStrict.length,
+      final: afterSportStrict.length,
     });
   }
   console.log("[VISIBLE_LIKES_COUNT] list_consistency", {
     incoming_raw: likesData.length,
     after_block_filter: visible.length,
     with_profile_visibility_rules: withVisibleProfilesOnly.length,
-    final_visible: filtered.length,
+    final_visible: afterSportStrict.length,
   });
 
-  return filtered;
+  return afterSportStrict;
 }
 
 /** Badge strictement aligné avec la liste réellement visible (mêmes filtres). */

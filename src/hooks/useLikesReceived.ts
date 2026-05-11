@@ -13,6 +13,7 @@ export function useLikesReceived(
   viewerBirthDate?: string | null,
   viewerPreferredAgeMin?: number | null,
   viewerPreferredAgeMax?: number | null,
+  viewerSportMatchPreference?: string | null,
 ) {
   const [list, setList] = useState<LikeReceived[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,6 +43,7 @@ export function useLikesReceived(
         viewerPreferredAgeMin !== undefined ? viewerPreferredAgeMin : undefined,
       preferred_age_max:
         viewerPreferredAgeMax !== undefined ? viewerPreferredAgeMax : undefined,
+      sport_match_preference: viewerSportMatchPreference ?? undefined,
     })
       .then((data) => {
         if (seq !== fetchGenerationRef.current) return;
@@ -62,6 +64,7 @@ export function useLikesReceived(
     viewerBirthDate,
     viewerPreferredAgeMin,
     viewerPreferredAgeMax,
+    viewerSportMatchPreference,
   ]);
 
   return { list, setList, loading, error };

@@ -45,7 +45,6 @@ export type DiscoverProfileCardModel = {
   sport_phrase?: string | null;
   height_cm?: number | null;
   sport_feeling?: string | null;
-  sport_time?: string | null;
   portrait_url?: string | null;
   fullbody_url?: string | null;
   avatar_url?: string | null;

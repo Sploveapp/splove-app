@@ -26,3 +26,13 @@ export function discoverCrossSportSecondaryAllowed(viewerPref: unknown, candidat
     discoverAllowsDifferentSports(parseSportMatchPreference(candidatePref))
   );
 }
+
+/**
+ * Peut-on montrer un candidat avec 0 sport en commun ?
+ * Règle stricte : si le viewer a `same_sports`, au moins 1 sport commun est obligatoire
+ * (la préférence du candidat ne contourne pas cela).
+ */
+export function discoverAllowsZeroSharedSports(viewerPref: unknown, candidatePref: unknown): boolean {
+  if (parseSportMatchPreference(viewerPref) === "same_sports") return false;
+  return discoverCrossSportSecondaryAllowed(viewerPref, candidatePref);
+}
