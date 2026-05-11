@@ -6,7 +6,7 @@ import {
 } from "@/lib/sportMatchPreference";
 import { encodeDiscoverScoringReason } from "@/lib/discoverScoringReasons";
 import { BETA_MODE } from "../constants/beta";
-import { isValidDiscoveryRadiusKm } from "../constants/discoverGeo";
+import { hasFiniteDiscoverCoordinates, isValidDiscoveryRadiusKm } from "../constants/discoverGeo";
 import { asAgePreferenceScalar, isReciprocalAgeDiscoverMatch } from "../lib/profileAge";
 import { normalizePrimaryLocalityLabel } from "../lib/formatCityDisplay";
 
@@ -36,6 +36,8 @@ type DiscoverProfile = {
   needs_adapted_activities?: boolean | null;
   is_photo_verified?: boolean | null;
   sport_match_preference?: string | null;
+  latitude?: unknown;
+  longitude?: unknown;
   [key: string]: unknown;
 };
 
@@ -417,6 +419,11 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     if (ctx.likedIds.has(candidate.id)) excludedReasons.push("already liked");
     if (ctx.matchedIds.has(candidate.id)) excludedReasons.push("already matched");
     if (ctx.blockedIds?.has(candidate.id)) excludedReasons.push("blocked");
+    if (!hasFiniteDiscoverCoordinates(candidate)) {
+      excludedReasons.push("missing_candidate_gps");
+      diagExtra.candidate_latitude = (candidate as { latitude?: unknown }).latitude ?? null;
+      diagExtra.candidate_longitude = (candidate as { longitude?: unknown }).longitude ?? null;
+    }
     if (!hasMainPhoto(candidate)) {
       const d = exclusionDetailForNoMainPhoto(candidate);
       excludedReasons.push(d.reason);
@@ -483,8 +490,7 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const hasUsableDistance = distanceKm != null && Number.isFinite(distanceKm);
     /**
      * Hors rayon uniquement si distance connue ET > rayon viewer.
-     * Si lat/lng manquent côté candidat, `profile_distances_from_viewer` renvoie NULL : on n'exclut pas
-     * (aligné sur `distancePointsV3`, qui ne met pas `outside_radius` dans ce cas).
+     * Sans GPS candidat, la distance RPC est NULL : exclusion portée par `missing_candidate_gps` plus haut.
      */
     const outsideKnownRadius =
       viewerRadius != null && hasUsableDistance && (distanceKm as number) > viewerRadius;

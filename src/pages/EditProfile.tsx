@@ -197,7 +197,11 @@ export default function EditProfile() {
       typeof hRaw === "number" && Number.isFinite(hRaw) && hRaw > 0 ? String(Math.round(hRaw)) : "",
     );
     setBio(String((profile as Record<string, unknown>).sport_phrase ?? ""));
-    setPortraitUrl(String(profile.portrait_url ?? ""));
+    const portraitFromDb =
+      (typeof profile.portrait_url === "string" && profile.portrait_url.trim()) ||
+      (typeof profile.main_photo_url === "string" && profile.main_photo_url.trim()) ||
+      "";
+    setPortraitUrl(portraitFromDb);
     setBodyUrl(String(profile.fullbody_url ?? ""));
     setSportMatchPreference(parseSportMatchPreference((profile as Record<string, unknown>).sport_match_preference));
   }, [profile]);
@@ -319,23 +323,28 @@ export default function EditProfile() {
         return;
       }
 
-      let nextPortrait = portraitUrl;
-      let nextBody = bodyUrl;
-      if (portraitFile) nextPortrait = await uploadPhoto(user.id, portraitFile, "portrait");
-      if (bodyFile) nextBody = await uploadPhoto(user.id, bodyFile, "full");
+      let nextPortraitUrl: string | null = null;
+      let nextBodyUrl: string | null = null;
+      if (portraitFile) nextPortraitUrl = await uploadPhoto(user.id, portraitFile, "portrait");
+      if (bodyFile) nextBodyUrl = await uploadPhoto(user.id, bodyFile, "full");
 
       // Keep PATCH payload minimal and schema-safe to avoid PostgREST 400 on unknown columns.
+      // Never send portrait_url / fullbody_url / main_photo_url as null or "" unless we are
+      // replacing that slot via upload — DB trigger derives main_photo_url from portrait_url.
       const payload: Record<string, unknown> = {
         intent: mapUiIntentToDb(intent),
         looking_for: lookingFor.length ? lookingFor.join(",") : null,
         sport_phrase: bio.trim() || null,
-        portrait_url: nextPortrait || null,
-        fullbody_url: nextBody || null,
-        main_photo_url: nextPortrait || nextBody || null,
         sport_match_preference: sportMatchPreference,
         height_cm: parseHeightCmOptionalInput(heightCmInput),
         updated_at: new Date().toISOString(),
       };
+      if (nextPortraitUrl) payload.portrait_url = nextPortraitUrl;
+      if (nextBodyUrl) payload.fullbody_url = nextBodyUrl;
+
+      if (import.meta.env.DEV) {
+        console.log("[EditProfile] profiles.update payload → Supabase", { ...payload });
+      }
 
       const { error: profileError } = await supabase
         .from("profiles")

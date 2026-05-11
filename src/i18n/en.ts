@@ -740,15 +740,15 @@ const en = {
   sport_match_pref_section_title: "Your matching preferences",
   sport_match_pref_section_hint:
     "Sport remains at the heart of the connections suggested on SPLove. We always respect your matching, age and distance preferences.",
-  sport_match_pref_same_label: "People with shared sports",
+  sport_match_pref_same_label: "Priority on shared sports",
   sport_match_pref_same_desc:
-    "You’ll mainly see people who share at least one activity with you.",
-  sport_match_pref_open_label: "Open to different sports",
+    "I mainly want to see profiles that share at least one sport with me.",
+  sport_match_pref_open_label: "Open discovery",
   sport_match_pref_open_desc:
-    "You can also discover people with different sports and lifestyles.",
-  sport_match_pref_both_label: "Both",
+    "I’m also open to meeting people with other sports.",
+  sport_match_pref_both_label: "Balanced",
   sport_match_pref_both_desc:
-    "Priority to shared passions, with room for discovery too.",
+    "Priority to shared sports, but still room for discovery.",
   discover_scoring_v3_primary_shared: "V3 {{total}} · {{shared}} sport(s) in common",
   discover_scoring_v3_primary_cross_secondary: "V3 {{total}} · secondary cross-sport match (no shared sport)",
   discover_scoring_distance_km: "{{km}} km",

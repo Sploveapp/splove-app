@@ -73,12 +73,16 @@ export function MeetingAgeRangePreferencesPanel(props: MeetingAgeRangePreference
     setMessage(null);
     setSaving(true);
     try {
+      const agePayload = {
+        preferred_age_min: min,
+        preferred_age_max: max,
+      };
+      if (import.meta.env.DEV) {
+        console.log("[MeetingAgeRangePreferencesPanel] profiles.update payload → Supabase", agePayload);
+      }
       const { error } = await supabase
         .from("profiles")
-        .update({
-          preferred_age_min: min,
-          preferred_age_max: max,
-        })
+        .update(agePayload)
         .eq("id", userId);
       if (error) {
         setMessage(error.message || t("action_impossible"));

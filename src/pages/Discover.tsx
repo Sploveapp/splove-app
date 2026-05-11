@@ -82,7 +82,11 @@ import {
   fetchGrowthProfileFields,
 } from "../services/referral.service";
 import { trackEvent, getAbVariant, SECOND_CHANCE_COPY_TEST } from "../lib/analytics";
-import { hasFiniteDiscoverCoordinates, viewerHasDiscoverSearchCoords } from "../constants/discoverGeo";
+import {
+  hasFiniteDiscoverCoordinates,
+  takeDiscoverProfilesWithValidGps,
+  viewerHasDiscoverSearchCoords,
+} from "../constants/discoverGeo";
 import { formatHeightCmForDisplay } from "../lib/profileHeightCm";
 
 type Profile = {
@@ -819,6 +823,17 @@ const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
   const photoRaw = getProfileDisplayPhotoUrl(profile);
   const photoUrl = useProfilePhotoSignedUrl(photoRaw) ?? "";
   const isBack = layer === "back";
+  if (!hasFiniteDiscoverCoordinates(profile)) {
+    if (import.meta.env.DEV) {
+      console.warn("[Discover GPS] DiscoverStackSilhouette_guard", {
+        candidate_profile_id: profile.id,
+        latitude: profile.latitude ?? null,
+        longitude: profile.longitude ?? null,
+        excluded_reason: "missing_or_invalid_candidate_gps",
+      });
+    }
+    return null;
+  }
   return (
     <div
       className="pointer-events-none absolute inset-x-[7px] overflow-visible sm:inset-x-2.5"
@@ -906,7 +921,7 @@ function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremiu
 
 /** Colonnes Discover depuis `public.profiles` uniquement — pas de colonnes optionnelles absentes en prod. */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, height_cm, portrait_url, fullbody_url, avatar_url, main_photo_url, city, profile_completed, is_photo_verified, photo_status, identity_verified, veriff_status, is_active_mode, sport_practice_type, sport_match_preference, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, height_cm, portrait_url, fullbody_url, avatar_url, main_photo_url, city, latitude, longitude, profile_completed, is_photo_verified, photo_status, identity_verified, veriff_status, is_active_mode, sport_practice_type, sport_match_preference, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Profil viewer Discover : uniquement colonnes plates sur `profiles` (sports chargés séparément sur `profile_sports`). */
 const DISCOVER_VIEWER_ME_SELECT =
@@ -1157,6 +1172,19 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
     }
   }
 
+  if (!hasFiniteDiscoverCoordinates(profile)) {
+    if (import.meta.env.DEV) {
+      console.warn("[Discover GPS] DiscoverSwipeCard_guard", {
+        candidate_profile_id: profile.id,
+        first_name: profile.first_name ?? null,
+        latitude: profile.latitude ?? null,
+        longitude: profile.longitude ?? null,
+        excluded_reason: "missing_or_invalid_candidate_gps",
+      });
+    }
+    return null;
+  }
+
   const rot = Math.max(-4, Math.min(4, dx / 95));
   const liftOpacity = 1 - Math.min(Math.abs(dx) / 320, 0.1);
 
@@ -1280,6 +1308,11 @@ export default function Discover() {
   const [lastRestoredProfileId, setLastRestoredProfileId] = useState<string | null>(null);
   const [swipeHistory, setSwipeHistory] = useState<DiscoverSwipeHistoryEntry[]>([]);
   const swipeHistoryRef = useRef<DiscoverSwipeHistoryEntry[]>([]);
+  /** Liste utilisée pour le rendu des cartes — exclusion absolue sans lat/lng valides (doublon de sécurité). */
+  const profilesCardStack = useMemo(
+    () => takeDiscoverProfilesWithValidGps(profiles),
+    [profiles],
+  );
   /** Dernière implémentation de handleUndoTap (hoisted) pour la nav basse sans dépendances instables. */
   const undoTapLatestRef = useRef<() => Promise<void>>(async () => {});
   const [secondChanceTarget, setSecondChanceTarget] = useState<ProfileWithAffinity | null>(null);
@@ -1394,13 +1427,13 @@ export default function Discover() {
         !loading &&
         !errorMessage &&
         !viewerGeoBlocked &&
-        profiles.length <= 3;
+        profilesCardStack.length <= 3;
     if (!eligible || inviteViewTrackedRef.current) return;
     inviteViewTrackedRef.current = true;
     void trackReferralEvent("invite_view", { variant: referralVariant, source: "discover" }).catch((e) => {
       console.warn("[Discover diagnostics] trackReferralEvent rejected", e);
     });
-  }, [currentUserId, loading, errorMessage, viewerGeoBlocked, profiles.length, referralVariant]);
+  }, [currentUserId, loading, errorMessage, viewerGeoBlocked, profilesCardStack.length, referralVariant]);
 
   function openReportPhotoFromDiscover(p: ProfileWithAffinity) {
     setDiscoverMenuProfileId(null);
@@ -1692,7 +1725,7 @@ export default function Discover() {
   useEffect(() => {
     if (!hasPlus) return;
     setProfiles((prev) =>
-      [...prev].filter((x) => hasFiniteDiscoverCoordinates(x)).sort((a, b) => sortDiscoverProfileStack(a, b, true)),
+      takeDiscoverProfilesWithValidGps([...prev].sort((a, b) => sortDiscoverProfileStack(a, b, true))),
     );
   }, [hasPlus]);
 
@@ -2434,7 +2467,7 @@ export default function Discover() {
           });
         }
       }
-      setProfiles(slice);
+      setProfiles(takeDiscoverProfilesWithValidGps(slice));
       swipeHistoryRef.current = [];
       setSwipeHistory([]);
     } catch (e) {
@@ -2477,7 +2510,7 @@ export default function Discover() {
     let removed: ProfileWithAffinity | undefined;
     setProfiles((prev) => {
       removed = prev.find((p) => p.id === profileId);
-      return prev.filter((p) => p.id !== profileId);
+      return takeDiscoverProfilesWithValidGps(prev.filter((p) => p.id !== profileId));
     });
     if (removed != null) {
       const p = removed;
@@ -2533,7 +2566,7 @@ export default function Discover() {
         return;
       }
     }
-    setProfiles((prev) => prev.filter((p) => p.id !== blockedUserId));
+    setProfiles((prev) => takeDiscoverProfilesWithValidGps(prev.filter((p) => p.id !== blockedUserId)));
     setPreviewProfile((prev) => (prev?.id === blockedUserId ? null : prev));
   }
 
@@ -2636,7 +2669,7 @@ export default function Discover() {
     });
 
     const removeFromFeed = () => {
-      setProfiles((prev) => prev.filter((p) => p.id !== profile.id));
+      setProfiles((prev) => takeDiscoverProfilesWithValidGps(prev.filter((p) => p.id !== profile.id)));
     };
 
     if (is_match && conversation_id) {
@@ -2751,7 +2784,7 @@ export default function Discover() {
       const res = await rewindLastDiscoverSwipe();
       if (!res.ok || !res.target_id) {
         if (optimistic && !IS_BETA_UNDO_FREE) {
-          setProfiles((p) => p.filter((x) => x.id !== optimistic.profile.id));
+          setProfiles((p) => takeDiscoverProfilesWithValidGps(p.filter((x) => x.id !== optimistic.profile.id)));
           setSwipeHistory((prev) => {
             const next = [...prev, optimistic];
             swipeHistoryRef.current = next;
@@ -2816,13 +2849,15 @@ export default function Discover() {
       }
       const card = restored;
       if (!hasFiniteDiscoverCoordinates(card)) return;
-      setProfiles((p) => (p.some((x) => x.id === card.id) ? p : [card, ...p]));
+      setProfiles((p) =>
+        takeDiscoverProfilesWithValidGps(p.some((x) => x.id === card.id) ? p : [card, ...p]),
+      );
       setRewindRestoredId(card.id);
       setRewindToast("Profil restaure");
       refreshRewindStatus();
     } catch {
       if (optimistic && !IS_BETA_UNDO_FREE) {
-        setProfiles((p) => p.filter((x) => x.id !== optimistic.profile.id));
+        setProfiles((p) => takeDiscoverProfilesWithValidGps(p.filter((x) => x.id !== optimistic.profile.id)));
         setSwipeHistory((prev) => {
           const next = [...prev, optimistic];
           swipeHistoryRef.current = next;
@@ -2852,8 +2887,10 @@ export default function Discover() {
       swipeHistoryRef.current = nextHist;
       setSwipeHistory(nextHist);
       setProfiles((p) => {
-        if (!hasFiniteDiscoverCoordinates(last.profile)) return p;
-        return p.some((x) => x.id === last.profile.id) ? p : [last.profile, ...p];
+        if (!hasFiniteDiscoverCoordinates(last.profile)) return takeDiscoverProfilesWithValidGps(p);
+        return takeDiscoverProfilesWithValidGps(
+          p.some((x) => x.id === last.profile.id) ? p : [last.profile, ...p],
+        );
       });
       setRewindRestoredId(last.profile.id);
       setRewindRestoredFrom(last.action === "pass" ? "left" : "right");
@@ -2979,7 +3016,7 @@ export default function Discover() {
                   }}
                 />
               ) : null}
-              {currentUserId && !loading && !errorMessage && !viewerGeoBlocked && profiles.length <= 3 ? (
+              {currentUserId && !loading && !errorMessage && !viewerGeoBlocked && profilesCardStack.length <= 3 ? (
                 <div className="mx-auto w-full max-w-[21rem] text-left">
                   <ReferralCard
                     variant={referralVariant}
@@ -3152,7 +3189,7 @@ export default function Discover() {
           </p>
         ) : null}
 
-        {!loading && !errorMessage && (profiles.length === 0 || viewerGeoBlocked) ? (
+        {!loading && !errorMessage && (profilesCardStack.length === 0 || viewerGeoBlocked) ? (
           <div className="flex min-h-[min(50dvh,420px)] flex-1 items-center">
             <EmptyDiscoverState
               variant={viewerGeoBlocked ? "viewer_geo" : "default"}
@@ -3161,20 +3198,20 @@ export default function Discover() {
           </div>
         ) : null}
 
-        {!loading && !errorMessage && !viewerGeoBlocked && profiles.length > 0 ? (
+        {!loading && !errorMessage && !viewerGeoBlocked && profilesCardStack.length > 0 ? (
           <div className="relative mt-1 flex min-h-[min(540px,calc(100dvh-10rem))] flex-1 flex-col">
-            {profiles[2] ? (
-              <DiscoverStackSilhouette key={profiles[2].id} profile={profiles[2]} layer="back" />
+            {profilesCardStack[2] ? (
+              <DiscoverStackSilhouette key={profilesCardStack[2].id} profile={profilesCardStack[2]} layer="back" />
             ) : null}
-            {profiles[1] ? (
-              <DiscoverStackSilhouette key={profiles[1].id} profile={profiles[1]} layer="mid" />
+            {profilesCardStack[1] ? (
+              <DiscoverStackSilhouette key={profilesCardStack[1].id} profile={profilesCardStack[1]} layer="mid" />
             ) : null}
-            {profiles[0] ? (
+            {profilesCardStack[0] ? (
               <div
-                key={profiles[0].id}
+                key={profilesCardStack[0].id}
                 className="relative z-[24] flex min-h-0 flex-1 flex-col"
                 style={
-                  rewindRestoredId === profiles[0].id
+                  rewindRestoredId === profilesCardStack[0].id
                     ? {
                         animation:
                           rewindRestoredFrom === "right"
@@ -3185,7 +3222,7 @@ export default function Discover() {
                 }
               >
                 <DiscoverSwipeCard
-                  profile={profiles[0]}
+                  profile={profilesCardStack[0]}
                   viewerCity={myCity}
                   mySportMatchKeys={mySportMatchKeys}
                   discoverMenuProfileId={discoverMenuProfileId}

@@ -27,10 +27,11 @@ export function normalizeDiscoveryRadiusKm(n: unknown): DiscoveryRadiusKm | null
 
 /** Coordonnées GPS utilisables pour Discover (nombre fini ou chaîne numérique PostgREST). */
 export function hasFiniteDiscoverCoordinates(p: {
-  latitude?: number | string | null;
-  longitude?: number | string | null;
+  latitude?: unknown;
+  longitude?: unknown;
 }): boolean {
   const toNum = (v: unknown): number | null => {
+    if (v === null || v === undefined) return null;
     if (typeof v === "number" && Number.isFinite(v)) return v;
     if (typeof v === "string") {
       const t = v.trim();
@@ -41,6 +42,32 @@ export function hasFiniteDiscoverCoordinates(p: {
     return null;
   };
   return toNum(p.latitude) != null && toNum(p.longitude) != null;
+}
+
+/**
+ * Liste Discover : exclusion absolue des profils sans lat/lng valides (état + rendu).
+ * Logs DEV : candidat exclu avec raison.
+ */
+export function takeDiscoverProfilesWithValidGps<
+  T extends { id?: string; first_name?: string | null; latitude?: unknown; longitude?: unknown },
+>(list: readonly T[]): T[] {
+  const out: T[] = [];
+  for (const p of list) {
+    if (hasFiniteDiscoverCoordinates(p)) {
+      out.push(p);
+      continue;
+    }
+    if (import.meta.env.DEV) {
+      console.warn("[Discover GPS] excluded_candidate", {
+        candidate_profile_id: p.id ?? null,
+        first_name: p.first_name ?? null,
+        latitude: p.latitude ?? null,
+        longitude: p.longitude ?? null,
+        excluded_reason: "missing_or_invalid_candidate_gps",
+      });
+    }
+  }
+  return out;
 }
 
 export function viewerHasDiscoverSearchCoords(p: {
