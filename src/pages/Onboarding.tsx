@@ -23,7 +23,7 @@ import {
   reverseGeocodeCity,
   searchCitiesApprox,
 } from "../lib/geocoding";
-import { formatCityDisplay } from "../lib/formatCityDisplay";
+import { formatCityDisplay, normalizePrimaryLocalityLabel, normalizeProfileCityForStorage } from "../lib/formatCityDisplay";
 import { getCurrentPositionCoords } from "../utils/geolocation";
 import {
   APP_BORDER,
@@ -677,7 +677,7 @@ export default function Onboarding() {
         looking_for: serializeInterestedInValues(interestedIn),
         meet_pref: intent ? dbIntentFromUiIntent(intent) : null,
         intent: intent ? dbIntentFromUiIntent(intent) : null,
-        city: obLocCity.trim() || null,
+        city: normalizeProfileCityForStorage(obLocCity) ?? null,
         selectedSports: selectedSports.map((s) => s.name),
         portrait_url: portraitSavedUrl || null,
         fullbody_url: bodySavedUrl || null,
@@ -706,7 +706,7 @@ export default function Onboarding() {
         payload.meet_pref = dbIntent;
       }
       if (currentStep >= 2) {
-        payload.city = obLocCity.trim() || null;
+        payload.city = normalizeProfileCityForStorage(obLocCity);
         payload.latitude = obLocLat;
         payload.longitude = obLocLng;
         payload.discovery_radius_km = obLocRadiusKm;
@@ -1877,11 +1877,7 @@ export default function Onboarding() {
 
       const locSourceResolved: "manual" | "device" = obLocSource ?? "manual";
 
-      const rawCityTrimmed = obLocCity.trim();
-      let submitCityFinal =
-        rawCityTrimmed.length > 0
-          ? formatCityDisplay(rawCityTrimmed) || rawCityTrimmed
-          : null;
+      const submitCityFinal = normalizeProfileCityForStorage(obLocCity);
       const pairOk =
         typeof obLocLat === "number" &&
         typeof obLocLng === "number" &&
@@ -1894,11 +1890,7 @@ export default function Onboarding() {
         typeof submitLngFinal === "number" &&
         Number.isFinite(submitLatFinal) &&
         Number.isFinite(submitLngFinal);
-      if (
-        typeof submitCityFinal === "string" &&
-        submitCityFinal.trim().length >= 2 &&
-        !submitCoordsOk
-      ) {
+      if (submitCityFinal != null && submitCityFinal.length >= 2 && !submitCoordsOk) {
         setLoading(false);
         setError(null);
         setStepHint(t("onboarding_city_pick_list_or_geo"));
@@ -2794,7 +2786,8 @@ export default function Onboarding() {
                               className="w-full px-3 py-2.5 text-left font-medium text-app-text hover:bg-app-border/60"
                               onClick={() => {
                                 const shortLabel =
-                                  formatCityDisplay(sug.label) ||
+                                  (sug.locality && sug.locality.trim()) ||
+                                  normalizePrimaryLocalityLabel(sug.label) ||
                                   sug.label.split(",")[0]?.trim() ||
                                   sug.label.trim();
                                 setObLocCity(shortLabel);

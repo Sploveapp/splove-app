@@ -3,7 +3,7 @@
  * Reverse : OpenStreetMap Nominatim (usage raisonnable ; repli manuel si échec réseau / CORS).
  */
 
-import { formatCityDisplay } from "./formatCityDisplay";
+import { formatCityDisplay, normalizePrimaryLocalityLabel } from "./formatCityDisplay";
 
 const NOMINATIM_REVERSE = "https://nominatim.openstreetmap.org/reverse";
 const NOMINATIM_SEARCH = "https://nominatim.openstreetmap.org/search";
@@ -11,19 +11,20 @@ const NOMINATIM_SEARCH = "https://nominatim.openstreetmap.org/search";
 /** Identifiant requis par la politique d’usage Nominatim. */
 const NOMINATIM_USER_AGENT = "SPLove/1.0 (profile-location)";
 
-/** Extrait un libellé ville lisible depuis la réponse Nominatim. */
+/** Extrait la localité principale depuis `address` Nominatim (sans `county`). */
 function pickCityFromNominatimAddress(addr: Record<string, unknown> | null): string | null {
   if (!addr) return null;
   const pick = (k: string) => {
     const v = addr[k];
-    return typeof v === "string" && v.trim() ? v.trim() : null;
+    if (typeof v !== "string") return null;
+    const n = normalizePrimaryLocalityLabel(v);
+    return n.length > 0 ? n : null;
   };
   return (
     pick("city") ||
     pick("town") ||
     pick("village") ||
     pick("municipality") ||
-    pick("county") ||
     null
   );
 }
@@ -35,7 +36,7 @@ function pickCityFromNominatimAddress(addr: Record<string, unknown> | null): str
 export async function reverseGeocodeCity(lat: number, lng: number): Promise<string | null> {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
   try {
-    const url = `${NOMINATIM_REVERSE}?format=json&lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lng))}&accept-language=fr`;
+    const url = `${NOMINATIM_REVERSE}?format=json&addressdetails=1&lat=${encodeURIComponent(String(lat))}&lon=${encodeURIComponent(String(lng))}&accept-language=fr`;
     const res = await fetch(url, {
       headers: {
         Accept: "application/json",
@@ -58,6 +59,8 @@ export type CitySearchSuggestion = {
   lng: number;
   /** Pays lisible pour dédoublonner même nom de commune (UX). */
   country: string | null;
+  /** Localité OSM (`address`) — à persister dans `profiles.city`. */
+  locality: string | null;
 };
 
 function nominatimRowToSuggestion(row: Record<string, unknown>): CitySearchSuggestion | null {
@@ -69,12 +72,13 @@ function nominatimRowToSuggestion(row: Record<string, unknown>): CitySearchSugge
   const addr = (row.address as Record<string, unknown>) ?? null;
   const country =
     addr && typeof addr.country === "string" && addr.country.trim() ? addr.country.trim() : null;
+  const locality = pickCityFromNominatimAddress(addr);
   const display =
     typeof row.display_name === "string" && row.display_name.trim()
       ? row.display_name.trim()
-      : pickCityFromNominatimAddress(addr) ?? "";
+      : locality ?? "";
   const label = display || `${lat},${lng}`;
-  return { label, lat, lng, country };
+  return { label, lat, lng, country, locality };
 }
 
 /**

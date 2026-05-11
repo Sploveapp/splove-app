@@ -8,6 +8,7 @@ import { encodeDiscoverScoringReason } from "@/lib/discoverScoringReasons";
 import { BETA_MODE } from "../constants/beta";
 import { isValidDiscoveryRadiusKm } from "../constants/discoverGeo";
 import { asAgePreferenceScalar, isReciprocalAgeDiscoverMatch } from "../lib/profileAge";
+import { normalizePrimaryLocalityLabel } from "../lib/formatCityDisplay";
 
 type DiscoverProfile = {
   id: string;
@@ -95,8 +96,8 @@ function normalizeToken(raw: string | null | undefined): string {
 }
 
 function cityLabelMatchForDiag(a: string | null | undefined, b: string | null | undefined): boolean {
-  const ca = normalizeToken(a);
-  const cb = normalizeToken(b);
+  const ca = normalizeToken(normalizePrimaryLocalityLabel(a));
+  const cb = normalizeToken(normalizePrimaryLocalityLabel(b));
   return Boolean(ca && cb && ca === cb);
 }
 

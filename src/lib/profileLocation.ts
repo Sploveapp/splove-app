@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { normalizeProfileCityForStorage } from "./formatCityDisplay";
 
 export type ProfileLocationUpdate = {
   city: string | null;
@@ -16,7 +17,7 @@ export async function updateProfileLocation(
   patch: ProfileLocationUpdate,
 ): Promise<{ error: { message: string } | null }> {
   const base = {
-    city: patch.city,
+    city: normalizeProfileCityForStorage(patch.city),
     latitude: patch.latitude,
     longitude: patch.longitude,
     discovery_radius_km: patch.discovery_radius_km,

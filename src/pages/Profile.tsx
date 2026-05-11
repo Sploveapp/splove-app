@@ -22,6 +22,7 @@ import {
 import { supabase } from "../lib/supabase";
 import { getCurrentPositionCoords } from "../utils/geolocation";
 import { forwardGeocodeFirst, reverseGeocodeCity } from "../lib/geocoding";
+import { formatCityDisplay, normalizePrimaryLocalityLabel } from "../lib/formatCityDisplay";
 import { updateProfileLocation } from "../lib/profileLocation";
 import { IconSignOut } from "../components/ui/Icon";
 
@@ -96,7 +97,7 @@ export default function Profile() {
   useEffect(() => {
     if (!profile) return;
     const pr = profile as Record<string, unknown>;
-    setLocCity(typeof pr.city === "string" ? pr.city : "");
+    setLocCity(typeof pr.city === "string" ? formatCityDisplay(pr.city) || pr.city.trim() : "");
     const normalizedR = normalizeDiscoveryRadiusKm(pr.discovery_radius_km);
     setLocRadius(String(normalizedR ?? 25));
   }, [profile]);
@@ -191,8 +192,9 @@ export default function Profile() {
       let lat = typeof pr.latitude === "number" && Number.isFinite(pr.latitude) ? pr.latitude : null;
       let lng = typeof pr.longitude === "number" && Number.isFinite(pr.longitude) ? pr.longitude : null;
       const cityTrim = locCity.trim();
+      const cityQuery = normalizePrimaryLocalityLabel(cityTrim) || cityTrim;
       if (cityTrim.length >= 2 && (lat == null || lng == null)) {
-        const resolved = await forwardGeocodeFirst(cityTrim);
+        const resolved = await forwardGeocodeFirst(cityQuery);
         if (!resolved) {
           setLocMessage(t("location_city_pick_list_prompt"));
           return;
