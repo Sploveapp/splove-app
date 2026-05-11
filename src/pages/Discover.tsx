@@ -82,7 +82,7 @@ import {
   fetchGrowthProfileFields,
 } from "../services/referral.service";
 import { trackEvent, getAbVariant, SECOND_CHANCE_COPY_TEST } from "../lib/analytics";
-import { viewerHasDiscoverSearchCoords } from "../constants/discoverGeo";
+import { hasFiniteDiscoverCoordinates, viewerHasDiscoverSearchCoords } from "../constants/discoverGeo";
 import { formatHeightCmForDisplay } from "../lib/profileHeightCm";
 
 type Profile = {
@@ -799,10 +799,8 @@ function discoverLogStageCount(stage: string, count: number, extra?: Record<stri
 }
 
 const DISCOVER_DISPLAY_LIMIT = 10;
-/** Source Supabase du fil Discover (classement serveur) — repli côté client si colonne absente. */
+/** Sonde navigation externe (profil hors pile) — pas le flux principal Discover. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
-const DISCOVER_FALLBACK_SELECT =
-  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, main_photo_url, avatar_url, portrait_url, fullbody_url, sport_feeling, gender, looking_for, intent, sport_phrase, height_cm, is_photo_verified, photo_status, identity_verified, veriff_status, sport_practice_type, profile_completed, last_active_at, latitude, longitude, is_banned, banned_until, status, sport_match_preference, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Message utilisateur sûr (aucun détail technique backend). */
 function discoverFetchFailedMsg(language: "fr" | "en"): string {
@@ -1253,6 +1251,8 @@ export default function Discover() {
   const [myDiscoveryRadiusKm] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  /** Viewer sans lat/lng valides : aucun candidat, état vide dédié (pas d’erreur réseau). */
+  const [viewerGeoBlocked, setViewerGeoBlocked] = useState(false);
   const [reportProfileId, setReportProfileId] = useState<string | null>(null);
   const [reportPhotoTarget, setReportPhotoTarget] = useState<{
     profileId: string;
@@ -1390,13 +1390,17 @@ export default function Discover() {
 
   useEffect(() => {
     const eligible =
-      Boolean(currentUserId) && !loading && !errorMessage && profiles.length <= 3;
+      Boolean(currentUserId) &&
+        !loading &&
+        !errorMessage &&
+        !viewerGeoBlocked &&
+        profiles.length <= 3;
     if (!eligible || inviteViewTrackedRef.current) return;
     inviteViewTrackedRef.current = true;
     void trackReferralEvent("invite_view", { variant: referralVariant, source: "discover" }).catch((e) => {
       console.warn("[Discover diagnostics] trackReferralEvent rejected", e);
     });
-  }, [currentUserId, loading, errorMessage, profiles.length, referralVariant]);
+  }, [currentUserId, loading, errorMessage, viewerGeoBlocked, profiles.length, referralVariant]);
 
   function openReportPhotoFromDiscover(p: ProfileWithAffinity) {
     setDiscoverMenuProfileId(null);
@@ -1503,6 +1507,7 @@ export default function Discover() {
 
     const fromFeed = profiles.find((p) => p.id === requestedProfileId) ?? null;
     if (fromFeed) {
+      if (!hasFiniteDiscoverCoordinates(fromFeed)) return;
       setDiscoverMenuProfileId(null);
       setPreviewProfile(fromFeed);
       console.log("DISCOVER_SELECTED_PROFILE", fromFeed.id);
@@ -1582,6 +1587,12 @@ export default function Discover() {
         }
         if (!p) {
           console.warn("[Discover] openProfileFromNavigation: profil introuvable", requestedProfileId, candRes.error?.message);
+          return;
+        }
+        if (!hasFiniteDiscoverCoordinates(p)) {
+          console.warn("[Discover] openProfileFromNavigation: candidat sans GPS — aperçu ignoré", {
+            profile_id: requestedProfileId,
+          });
           return;
         }
 
@@ -1680,7 +1691,9 @@ export default function Discover() {
 
   useEffect(() => {
     if (!hasPlus) return;
-    setProfiles((prev) => [...prev].sort((a, b) => sortDiscoverProfileStack(a, b, true)));
+    setProfiles((prev) =>
+      [...prev].filter((x) => hasFiniteDiscoverCoordinates(x)).sort((a, b) => sortDiscoverProfileStack(a, b, true)),
+    );
   }, [hasPlus]);
 
   async function loadProfiles() {
@@ -1691,11 +1704,13 @@ export default function Discover() {
           exclusion_reason: "missing currentUserId",
         });
       }
+      setViewerGeoBlocked(false);
       setLoading(false);
       return;
     }
     setLoading(true);
     setErrorMessage("");
+    setViewerGeoBlocked(false);
     let resultCount = 0;
     try {
       console.log("[Discover feed] currentUserId:", currentUserId);
@@ -1781,6 +1796,7 @@ export default function Discover() {
           });
         }
         setErrorMessage("Impossible de charger ton profil courant.");
+        setViewerGeoBlocked(false);
         setProfiles([]);
         swipeHistoryRef.current = [];
         setSwipeHistory([]);
@@ -1844,10 +1860,11 @@ export default function Discover() {
             city: meProfile.city ?? null,
           },
         );
+        setViewerGeoBlocked(true);
         setSwipeHistory([]);
         swipeHistoryRef.current = [];
         setProfiles([]);
-        setErrorMessage(t("location_city_pick_list_prompt"));
+        setErrorMessage("");
         discoverLogStageCount("viewer geo/radius incomplete — skip feed", 0);
         return;
       }
@@ -1873,10 +1890,10 @@ export default function Discover() {
           });
         }
         setErrorMessage(discoverFetchFailedMsg(language));
+        setViewerGeoBlocked(false);
         return;
       }
 
-      let mergedFromProfilesFallback = false;
       let profilesFromRpc: Profile[] = ((data ?? []) as DiscoverAliveRow[])
         .filter((row): row is DiscoverAliveRow & { profile: Profile } =>
           isValidProfileId(row.profile?.id),
@@ -1887,71 +1904,9 @@ export default function Discover() {
           availability_label: row.availability_label,
           vibe_label: row.vibe_label,
           feed_reason: row.feed_reason,
-        }));
-
-      {
-        const { data: fallbackRows, error: fallbackErr } = await supabase
-          .from("profiles")
-          .select(DISCOVER_FALLBACK_SELECT)
-          .eq("profile_completed", true)
-          .neq("id", currentUserId)
-          .limit(120);
-        if (fallbackErr) {
-          console.warn("[Discover fallback] profiles query failed", fallbackErr.message);
-        } else {
-          const fallbackProfiles = ((fallbackRows ?? []) as unknown as Profile[])
-            .map((p) => ({
-              ...p,
-              profile_sports: Array.isArray(p.profile_sports)
-                ? p.profile_sports.map((entry) => {
-                    const e = (entry as {
-                      sport_id?: string | number | null;
-                      sports?: unknown;
-                    } | null) ?? { sport_id: null, sports: null };
-                    const rawSports = e.sports;
-                    if (Array.isArray(rawSports)) {
-                      const first = rawSports[0] as
-                        | { id?: string | number | null; label?: string | null; slug?: string | null }
-                        | undefined;
-                      return {
-                        sport_id: e.sport_id ?? null,
-                        sports: first
-                          ? { id: first.id ?? null, label: first.label ?? null, slug: first.slug ?? null }
-                          : null,
-                      };
-                    }
-                    const one = rawSports as
-                      | { id?: string | number | null; label?: string | null; slug?: string | null }
-                      | null
-                      | undefined;
-                    return {
-                      sport_id: e.sport_id ?? null,
-                      sports: one ? { id: one.id ?? null, label: one.label ?? null, slug: one.slug ?? null } : null,
-                    };
-                  })
-                : [],
-            }))
-            .filter((p) => isValidProfileId(p?.id));
-          if (profilesFromRpc.length === 0) {
-            profilesFromRpc = fallbackProfiles;
-            mergedFromProfilesFallback = fallbackProfiles.length > 0;
-          } else if (fallbackProfiles.length > 0) {
-            const byId = new Map<string, Profile>();
-            for (const p of profilesFromRpc) byId.set(p.id, p);
-            for (const p of fallbackProfiles) {
-              if (!byId.has(p.id)) byId.set(p.id, p);
-            }
-            profilesFromRpc = [...byId.values()];
-            mergedFromProfilesFallback = true;
-          }
-          console.log("[Discover fallback] using city/sport fallback feed", {
-            count: profilesFromRpc.length,
-            rpc_count: ((data ?? []) as DiscoverAliveRow[]).length,
-            fallback_count: fallbackProfiles.length,
-          });
-        }
-      }
-      console.log("[Discover feed] raw profiles count:", profilesFromRpc.length);
+        }))
+        .filter((p) => hasFiniteDiscoverCoordinates(p));
+      console.log("[Discover feed] raw profiles count (RPC, coords requis):", profilesFromRpc.length);
       if (import.meta.env.DEV) {
         console.info("[Discover diagnostics] candidate_counts", {
           stage: "before_filtering",
@@ -1959,10 +1914,8 @@ export default function Discover() {
         });
       }
       if (import.meta.env.DEV) {
-        const feedQuerySources: string[] = ["get_discover_feed_alive (RPC)"];
-        if (mergedFromProfilesFallback) feedQuerySources.push("profiles (table fallback)");
         console.info("[Discover diagnostics] query_sources_used", {
-          sources: feedQuerySources,
+          sources: ["get_discover_feed_alive (RPC)"],
           feed_profiles_ranked_note:
             "loadProfiles does not query feed_profiles nor feed_profiles_ranked; openProfileFromNavigation may probe feed_profiles_ranked for a single id.",
         });
@@ -1989,7 +1942,7 @@ export default function Discover() {
         });
       }
 
-      let raw: Profile[] = profilesFromRpc;
+      let raw: Profile[] = profilesFromRpc.filter((p) => hasFiniteDiscoverCoordinates(p));
       if (BETA_MODE) {
         const before = raw;
         raw = raw.filter((p) => {
@@ -2088,6 +2041,7 @@ export default function Discover() {
         raw = raw.filter((p) => {
           if (!p?.id || !isValidProfileId(p.id)) return false;
           if (p.id === currentUserId) return false;
+          if (!hasFiniteDiscoverCoordinates(p)) return false;
           return true;
         });
         discoverDevPipelineDiff(before, raw, "sanity_valid_id_not_self", (p) =>
@@ -2425,7 +2379,9 @@ export default function Discover() {
         }
       }
 
-      const safe = discoverOrdered.filter((p) => p?.id && isValidProfileId(p.id));
+      const safe = discoverOrdered.filter(
+        (p) => p?.id && isValidProfileId(p.id) && hasFiniteDiscoverCoordinates(p),
+      );
       const slice = safe.slice(0, DISCOVER_DISPLAY_LIMIT);
       resultCount = slice.length;
       console.log("[Discover audit] pipeline_counts", {
@@ -2483,6 +2439,7 @@ export default function Discover() {
       setSwipeHistory([]);
     } catch (e) {
       console.error("[Discover] loadProfiles erreur inattendue:", e);
+      setViewerGeoBlocked(false);
       setErrorMessage(discoverFetchFailedMsg(language));
     } finally {
       setLoading(false);
@@ -2582,6 +2539,7 @@ export default function Discover() {
 
   function handleViewProfileFromSuggestion(p: ProfileWithAffinity) {
     if (!isValidProfileId(p.id)) return;
+    if (!hasFiniteDiscoverCoordinates(p)) return;
     setPreviewProfile(p);
   }
 
@@ -2857,6 +2815,7 @@ export default function Discover() {
         });
       }
       const card = restored;
+      if (!hasFiniteDiscoverCoordinates(card)) return;
       setProfiles((p) => (p.some((x) => x.id === card.id) ? p : [card, ...p]));
       setRewindRestoredId(card.id);
       setRewindToast("Profil restaure");
@@ -2892,7 +2851,10 @@ export default function Discover() {
       const nextHist = h.slice(0, -1);
       swipeHistoryRef.current = nextHist;
       setSwipeHistory(nextHist);
-      setProfiles((p) => (p.some((x) => x.id === last.profile.id) ? p : [last.profile, ...p]));
+      setProfiles((p) => {
+        if (!hasFiniteDiscoverCoordinates(last.profile)) return p;
+        return p.some((x) => x.id === last.profile.id) ? p : [last.profile, ...p];
+      });
       setRewindRestoredId(last.profile.id);
       setRewindRestoredFrom(last.action === "pass" ? "left" : "right");
       setRewindToast("Profil restaure");
@@ -2909,7 +2871,7 @@ export default function Discover() {
       setDiscoverUndoNav(null);
       return;
     }
-    const discoverReady = Boolean(!errorMessage && !loading);
+    const discoverReady = Boolean(!errorMessage && !loading && !viewerGeoBlocked);
     setDiscoverUndoNav({
       undoAvailable: discoverReady && canUndo,
       undoNavTapEnabled: Boolean(discoverReady && (IS_BETA_UNDO_FREE || canUndo)),
@@ -2924,6 +2886,7 @@ export default function Discover() {
     canUndo,
     rewindBusy,
     errorMessage,
+    viewerGeoBlocked,
     loading,
     setDiscoverUndoNav,
   ]);
@@ -2948,7 +2911,7 @@ export default function Discover() {
     <div className="flex min-h-0 flex-1 flex-col bg-app-bg font-sans">
       <main
         className={`mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col px-2 pt-1 sm:px-3 ${
-          currentUserId && !errorMessage && !loading ? "pb-24" : "pb-10"
+          currentUserId && !errorMessage && !loading && !viewerGeoBlocked ? "pb-24" : "pb-10"
         }`}
       >
         <section className="mb-2 shrink-0 px-0.5">
@@ -3016,7 +2979,7 @@ export default function Discover() {
                   }}
                 />
               ) : null}
-              {currentUserId && !loading && !errorMessage && profiles.length <= 3 ? (
+              {currentUserId && !loading && !errorMessage && !viewerGeoBlocked && profiles.length <= 3 ? (
                 <div className="mx-auto w-full max-w-[21rem] text-left">
                   <ReferralCard
                     variant={referralVariant}
@@ -3189,13 +3152,16 @@ export default function Discover() {
           </p>
         ) : null}
 
-        {!loading && !errorMessage && profiles.length === 0 ? (
+        {!loading && !errorMessage && (profiles.length === 0 || viewerGeoBlocked) ? (
           <div className="flex min-h-[min(50dvh,420px)] flex-1 items-center">
-            <EmptyDiscoverState onRefresh={() => void loadProfiles()} />
+            <EmptyDiscoverState
+              variant={viewerGeoBlocked ? "viewer_geo" : "default"}
+              onRefresh={() => void loadProfiles()}
+            />
           </div>
         ) : null}
 
-        {!loading && !errorMessage && profiles.length > 0 ? (
+        {!loading && !errorMessage && !viewerGeoBlocked && profiles.length > 0 ? (
           <div className="relative mt-1 flex min-h-[min(540px,calc(100dvh-10rem))] flex-1 flex-col">
             {profiles[2] ? (
               <DiscoverStackSilhouette key={profiles[2].id} profile={profiles[2]} layer="back" />

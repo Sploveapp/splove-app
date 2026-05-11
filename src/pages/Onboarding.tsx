@@ -24,6 +24,7 @@ import {
   searchCitiesApprox,
 } from "../lib/geocoding";
 import { formatCityDisplay, normalizePrimaryLocalityLabel, normalizeProfileCityForStorage } from "../lib/formatCityDisplay";
+import { clearOnboardingUiLocalCache } from "../lib/onboardingUiLocalCache";
 import { getCurrentPositionCoords } from "../utils/geolocation";
 import {
   APP_BORDER,
@@ -1067,6 +1068,17 @@ export default function Onboarding() {
     let cancelled = false;
     void (async () => {
       const pid = user.id!;
+      const row = profile as unknown as Record<string, unknown>;
+      if (import.meta.env.DEV) {
+        console.info("[OnboardingRouteGuard] audit_input", {
+          auth_user_id: pid,
+          current_route: "/onboarding",
+          profile_completed: row.profile_completed ?? null,
+          onboarding_completed: row.onboarding_completed ?? null,
+          onboarding_done: row.onboarding_done ?? null,
+        });
+      }
+
       const { count, error: sportCntErr } = await supabase
         .from("profile_sports")
         .select("sport_id", { count: "exact", head: true })
@@ -1080,12 +1092,32 @@ export default function Onboarding() {
           onboarding_ui_step_when_checked: TOTAL_STEPS,
           error_message: sportCntErr.message,
         });
+        if (import.meta.env.DEV) {
+          console.info("[OnboardingRouteGuard] redirect_decision", {
+            auth_user_id: pid,
+            current_route: "/onboarding",
+            redirect_reason: "audit_skipped_profile_sports_count_error",
+            profile_completed: row.profile_completed ?? null,
+            onboarding_completed: row.onboarding_completed ?? null,
+            onboarding_done: row.onboarding_done ?? null,
+          });
+        }
         return;
       }
 
-      const row = profile as unknown as Record<string, unknown>;
       const auditResult = auditOnboardingProfileForDiscover(row, count ?? 0);
       if (auditResult.ok) {
+        if (import.meta.env.DEV) {
+          console.info("[OnboardingRouteGuard] redirect_decision", {
+            auth_user_id: pid,
+            current_route: "/onboarding",
+            redirect_reason: "navigate_discover_audit_ok",
+            profile_completed: row.profile_completed ?? null,
+            onboarding_completed: row.onboarding_completed ?? null,
+            onboarding_done: row.onboarding_done ?? null,
+          });
+        }
+        clearOnboardingUiLocalCache();
         navigate("/discover", { replace: true });
         return;
       }
@@ -1096,6 +1128,18 @@ export default function Onboarding() {
         suggested_step: auditResult.suggestedStep,
         context: "session_flags_complete_audit_fail",
       });
+      if (import.meta.env.DEV) {
+        console.info("[OnboardingRouteGuard] redirect_decision", {
+          auth_user_id: pid,
+          current_route: "/onboarding",
+          redirect_reason: "audit_fail_stay_onboarding",
+          missing_fields: auditResult.missingFields,
+          suggested_step: auditResult.suggestedStep,
+          profile_completed: row.profile_completed ?? null,
+          onboarding_completed: row.onboarding_completed ?? null,
+          onboarding_done: row.onboarding_done ?? null,
+        });
+      }
       setStep(auditResult.suggestedStep);
       setError(t("onboarding_discover_readiness_blocked"));
     })();

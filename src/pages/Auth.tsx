@@ -9,6 +9,7 @@ import { SplashScreen } from "../components/SplashScreen";
 import { IconEye, IconEyeOff } from "../components/ui/Icon";
 import { useTranslation } from "../i18n/useTranslation";
 import { stashPendingReferralCodeFromSearch } from "../services/referral.service";
+import { clearOnboardingUiLocalCache } from "../lib/onboardingUiLocalCache";
 
 function signupModeFromSearchParams(sp: URLSearchParams): boolean {
   return sp.get("signup") === "1" || sp.get("mode") === "signup";
@@ -36,7 +37,7 @@ function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
 export default function Auth() {
   const { t, language, setLanguage } = useTranslation();
   const [searchParams] = useSearchParams();
-  const { user, isProfileComplete, isLoading, isAuthInitialized, isProfileLoading } = useAuth();
+  const { user, profile, isProfileComplete, isLoading, isAuthInitialized, isProfileLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -62,13 +63,23 @@ export default function Auth() {
 
   useEffect(() => {
     if (!isAuthInitialized || isLoading) return;
-    // TEMP DEBUG: final redirect decision inputs on /auth.
-    console.debug("[Auth page] post-auth state", {
-      hasUser: Boolean(user?.id),
-      userId: user?.id ? user.id.slice(0, 8) + "…" : null,
-      isProfileComplete,
-    });
-  }, [isAuthInitialized, isLoading, user?.id, isProfileComplete]);
+    if (import.meta.env.DEV) {
+      const pr = profile as Record<string, unknown> | null | undefined;
+      console.info("[AuthRouteGuard] post_auth_state", {
+        current_route: "/auth",
+        auth_user_id: user?.id ?? null,
+        isProfileComplete,
+        profile_completed: pr?.profile_completed ?? null,
+        onboarding_completed: pr?.onboarding_completed ?? null,
+        onboarding_done: pr?.onboarding_done ?? null,
+      });
+    }
+  }, [isAuthInitialized, isLoading, user?.id, isProfileComplete, profile]);
+
+  useEffect(() => {
+    if (!user?.id || !isProfileComplete || isProfileLoading) return;
+    clearOnboardingUiLocalCache();
+  }, [user?.id, isProfileComplete, isProfileLoading]);
 
   if (!isAuthInitialized || isLoading) {
     return <SplashScreen />;
@@ -79,16 +90,22 @@ export default function Auth() {
   }
 
   if (user) {
+    const pr = profile as Record<string, unknown> | null | undefined;
     if (isProfileComplete) {
       console.log("[ONBOARDING_GUARD] auth redirect -> /discover", {
         userId: user.id,
-        profile_completed: true,
+        profile_completed: pr?.profile_completed ?? null,
+        onboarding_completed: pr?.onboarding_completed ?? null,
+        onboarding_done: pr?.onboarding_done ?? null,
       });
       return <Navigate to="/discover" replace />;
     }
     console.log("[ONBOARDING_GUARD] auth redirect -> /onboarding", {
       userId: user.id,
-      profile_completed: false,
+      profile_completed: pr?.profile_completed ?? null,
+      onboarding_completed: pr?.onboarding_completed ?? null,
+      onboarding_done: pr?.onboarding_done ?? null,
+      isProfileComplete,
     });
     return <Navigate to="/onboarding" replace />;
   }

@@ -226,6 +226,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         hasProfile: Boolean(p),
         profile_completed: p?.profile_completed ?? null,
         onboarding_completed: (p as { onboarding_completed?: unknown } | null)?.onboarding_completed ?? null,
+        onboarding_done: (p as { onboarding_done?: unknown } | null)?.onboarding_done ?? null,
       });
       if (p?.id) {
         lastLoadedUserIdRef.current = p.id;

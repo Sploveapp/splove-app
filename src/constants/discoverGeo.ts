@@ -25,6 +25,24 @@ export function normalizeDiscoveryRadiusKm(n: unknown): DiscoveryRadiusKm | null
     : null;
 }
 
+/** Coordonnées GPS utilisables pour Discover (nombre fini ou chaîne numérique PostgREST). */
+export function hasFiniteDiscoverCoordinates(p: {
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+}): boolean {
+  const toNum = (v: unknown): number | null => {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (!t) return null;
+      const n = Number(t);
+      return Number.isFinite(n) ? n : null;
+    }
+    return null;
+  };
+  return toNum(p.latitude) != null && toNum(p.longitude) != null;
+}
+
 export function viewerHasDiscoverSearchCoords(p: {
   latitude?: number | null;
   longitude?: number | null;

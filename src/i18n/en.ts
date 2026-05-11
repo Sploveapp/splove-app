@@ -642,6 +642,10 @@ const en = {
     "Momentum builds every day — after a match, suggest a bite-sized outing before chats cool off.",
   "discover.emptyAliveButton": "See profiles nearby",
   "discover.emptyAliveTip": "Tip: a short line about how you like to move makes it vivid for others.",
+  "discover.viewerGeoEmptyTitle": "Turn on your location to see profiles",
+  "discover.viewerGeoEmptyText":
+    "Discover shows people near you — we need your latitude and longitude (from your profile or device), plus a valid search radius.",
+  "discover.viewerGeoEmptyTip": "Open your profile, set your area or use current location, then come back here.",
 
   "discover.profileCard_photoAlt": "Photo of {{name}}",
   "discover.profileCard_passStamp": "NOPE",

@@ -14,6 +14,17 @@ function hasPortraitOrMainPhoto(row: Record<string, unknown>): boolean {
   return Boolean(p.length > 0 || m.length > 0);
 }
 
+function isFiniteCoordinate(v: unknown): boolean {
+  if (typeof v === "number") return Number.isFinite(v);
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (!t) return false;
+    const n = Number(t);
+    return Number.isFinite(n);
+  }
+  return false;
+}
+
 const FIELD_TO_STEP: Record<string, number> = {
   city: 4,
   latitude: 4,
@@ -44,8 +55,8 @@ export function auditOnboardingProfileForDiscover(
 
   const lat = profileRow.latitude;
   const lng = profileRow.longitude;
-  const latOk = typeof lat === "number" && Number.isFinite(lat);
-  const lngOk = typeof lng === "number" && Number.isFinite(lng);
+  const latOk = isFiniteCoordinate(lat);
+  const lngOk = isFiniteCoordinate(lng);
   if (!latOk) missing.push("latitude");
   if (!lngOk) missing.push("longitude");
 
@@ -69,7 +80,11 @@ export function auditOnboardingProfileForDiscover(
   if ((profileRow as { onboarding_completed?: unknown }).onboarding_completed !== true) {
     missing.push("onboarding_completed");
   }
-  if ((profileRow as { onboarding_done?: unknown }).onboarding_done !== true) {
+  const od = (profileRow as { onboarding_done?: unknown }).onboarding_done;
+  const oc = (profileRow as { onboarding_completed?: unknown }).onboarding_completed === true;
+  const pc = profileRow.profile_completed === true;
+  /** `onboarding_done` absent du SELECT palier bas : si les deux autres drapeaux sont OK, on ne bloque pas Discover. */
+  if (od !== true && !(pc && oc && od !== false)) {
     missing.push("onboarding_done");
   }
 

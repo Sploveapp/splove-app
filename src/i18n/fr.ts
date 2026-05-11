@@ -651,6 +651,10 @@ const fr = {
     "La communauté se construit tous les jours — un réflexe après le match ? Propose une petite sortie avant que ce ne soit trop virtuel.",
   "discover.emptyAliveButton": "Explorer ma zone",
   "discover.emptyAliveTip": "Astuce : une phrase courte sur ta façon de bouger aide à se projeter à deux.",
+  "discover.viewerGeoEmptyTitle": "Active ta position pour voir des profils",
+  "discover.viewerGeoEmptyText":
+    "Discover affiche des personnes autour de toi : il nous faut ta latitude et ta longitude (depuis ton profil ou la géolocalisation), avec un rayon valide.",
+  "discover.viewerGeoEmptyTip": "Ouvre ton profil, renseigne ta zone ou utilise « ma position », puis reviens ici.",
 
   "discover.profileCard_photoAlt": "Photo de {{name}}",
   "discover.profileCard_passStamp": "PLUS TARD",

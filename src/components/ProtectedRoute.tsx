@@ -23,11 +23,15 @@ export function ProtectedRoute({ children }: Props) {
   const profileFetchResult = profile ? "ok" : "null";
 
   if (import.meta.env.DEV) {
+    const pr = profile as Record<string, unknown> | null | undefined;
     console.info("[ProtectedRoute diagnostics] decision_input", {
       current_route: pathname,
       auth_user_id: authUserId,
       profile_fetch_result: profileFetchResult,
       profile_completed: profile?.profile_completed ?? null,
+      onboarding_completed: pr?.onboarding_completed ?? null,
+      onboarding_done: pr?.onboarding_done ?? null,
+      is_profile_complete: isProfileComplete,
       is_auth_initialized: isAuthInitialized,
       is_loading: isLoading,
       is_profile_loading: isProfileLoading,
@@ -36,12 +40,15 @@ export function ProtectedRoute({ children }: Props) {
 
   if (!isAuthInitialized || isLoading) {
     if (import.meta.env.DEV) {
+      const pr = profile as Record<string, unknown> | null | undefined;
       console.info("[ProtectedRoute diagnostics] redirect_decision", {
         current_route: pathname,
         auth_user_id: authUserId,
         profile_fetch_result: profileFetchResult,
         profile_completed: profile?.profile_completed ?? null,
-        redirect_decision: "show_splash_auth_bootstrap",
+        onboarding_completed: pr?.onboarding_completed ?? null,
+        onboarding_done: pr?.onboarding_done ?? null,
+        redirect_reason: "show_splash_auth_bootstrap",
       });
     }
     return <SplashScreen />;
@@ -50,12 +57,15 @@ export function ProtectedRoute({ children }: Props) {
   if (!session) {
     console.log("[ONBOARDING_GUARD] no-session -> /auth", { pathname });
     if (import.meta.env.DEV) {
+      const pr = profile as Record<string, unknown> | null | undefined;
       console.info("[ProtectedRoute diagnostics] redirect_decision", {
         current_route: pathname,
         auth_user_id: authUserId,
         profile_fetch_result: profileFetchResult,
         profile_completed: profile?.profile_completed ?? null,
-        redirect_decision: "navigate_auth",
+        onboarding_completed: pr?.onboarding_completed ?? null,
+        onboarding_done: pr?.onboarding_done ?? null,
+        redirect_reason: "navigate_auth",
       });
     }
     return <Navigate to="/auth?signup=1" replace />;
@@ -64,12 +74,15 @@ export function ProtectedRoute({ children }: Props) {
   if (isProfileLoading) {
     console.log("[ONBOARDING_GUARD] profile-loading", { pathname });
     if (import.meta.env.DEV) {
+      const pr = profile as Record<string, unknown> | null | undefined;
       console.info("[ProtectedRoute diagnostics] redirect_decision", {
         current_route: pathname,
         auth_user_id: authUserId,
         profile_fetch_result: profileFetchResult,
         profile_completed: profile?.profile_completed ?? null,
-        redirect_decision: "show_splash_profile_loading",
+        onboarding_completed: pr?.onboarding_completed ?? null,
+        onboarding_done: pr?.onboarding_done ?? null,
+        redirect_reason: "show_splash_profile_loading",
       });
     }
     return <SplashScreen />;
@@ -83,7 +96,9 @@ export function ProtectedRoute({ children }: Props) {
         auth_user_id: authUserId,
         profile_fetch_result: profileFetchResult,
         profile_completed: null,
-        redirect_decision: "show_profile_fetch_error_state",
+        onboarding_completed: null,
+        onboarding_done: null,
+        redirect_reason: "show_profile_fetch_error_state",
       });
     }
     return (
@@ -111,13 +126,16 @@ export function ProtectedRoute({ children }: Props) {
       blocked_scope: isMainFeaturePath ? "main_features" : "protected_area",
     });
     if (import.meta.env.DEV) {
+      const pr = profile as Record<string, unknown> | null | undefined;
       console.info("[ProtectedRoute diagnostics] redirect_decision", {
         current_route: pathname,
         auth_user_id: authUserId,
         profile_fetch_result: profileFetchResult,
         profile_completed: profile?.profile_completed ?? null,
+        onboarding_completed: pr?.onboarding_completed ?? null,
+        onboarding_done: pr?.onboarding_done ?? null,
         is_profile_complete: isProfileComplete,
-        redirect_decision: "navigate_onboarding",
+        redirect_reason: "navigate_onboarding_profile_incomplete",
       });
     }
     return <Navigate to="/onboarding" replace />;
@@ -131,12 +149,16 @@ export function ProtectedRoute({ children }: Props) {
     });
   }
   if (import.meta.env.DEV) {
+    const pr = profile as Record<string, unknown> | null | undefined;
     console.info("[ProtectedRoute diagnostics] redirect_decision", {
       current_route: pathname,
       auth_user_id: authUserId,
       profile_fetch_result: profileFetchResult,
       profile_completed: profile?.profile_completed ?? null,
-      redirect_decision: "allow_route",
+      onboarding_completed: pr?.onboarding_completed ?? null,
+      onboarding_done: pr?.onboarding_done ?? null,
+      is_profile_complete: isProfileComplete,
+      redirect_reason: "allow_route",
     });
   }
 

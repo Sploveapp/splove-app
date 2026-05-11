@@ -3,11 +3,19 @@ import { useTranslation } from "../../i18n/useTranslation";
 
 export type EmptyDiscoverStateProps = {
   onRefresh: () => void;
+  /** Géolocalisation du compte manquante : message orienté action (profil). */
+  variant?: "default" | "viewer_geo";
 };
 
 /** État vide lorsque plus aucun profil n’est disponible dans la pile Discover. */
-export function EmptyDiscoverState({ onRefresh }: EmptyDiscoverStateProps) {
+export function EmptyDiscoverState({ onRefresh, variant = "default" }: EmptyDiscoverStateProps) {
   const { t } = useTranslation();
+  const titleKey =
+    variant === "viewer_geo" ? "discover.viewerGeoEmptyTitle" : "discover.emptyAliveTitle";
+  const textKey =
+    variant === "viewer_geo" ? "discover.viewerGeoEmptyText" : "discover.emptyAliveText";
+  const tipKey =
+    variant === "viewer_geo" ? "discover.viewerGeoEmptyTip" : "discover.emptyAliveTip";
 
   return (
     <div
@@ -22,9 +30,9 @@ export function EmptyDiscoverState({ onRefresh }: EmptyDiscoverStateProps) {
           ◎
         </span>
       </div>
-      <p className="mt-5 text-[1.05rem] font-bold leading-snug text-app-text">{t("discover.emptyAliveTitle")}</p>
+      <p className="mt-5 text-[1.05rem] font-bold leading-snug text-app-text">{t(titleKey)}</p>
       <p className="mx-auto mt-2 max-w-[22rem] text-sm leading-relaxed text-app-muted">
-        {t("discover.emptyAliveText")}
+        {t(textKey)}
       </p>
       <button
         type="button"
@@ -35,7 +43,7 @@ export function EmptyDiscoverState({ onRefresh }: EmptyDiscoverStateProps) {
         {t("discover.emptyAliveButton")}
       </button>
       <p className="mx-auto mt-4 max-w-[22rem] text-[12px] leading-relaxed text-app-muted">
-        {t("discover.emptyAliveTip")}
+        {t(tipKey)}
       </p>
     </div>
   );
