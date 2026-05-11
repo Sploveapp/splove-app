@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Language } from "../../i18n";
 import { BRAND_BG, TEXT_ON_BRAND } from "../../constants/theme";
-import cyclingImg from "../../assets/messages-empty-cycling.webp";
-import runningImg from "../../assets/messages-empty-running.webp";
 
 /** URL publique SPLove (hash router). */
 export const REFERRAL_PUBLIC_APP_URL = "https://splove-app.onrender.com/#/";
@@ -113,27 +111,11 @@ export function ReferralEmptyState({ language }: ReferralEmptyStateProps) {
   return (
     <div className="mt-8 overflow-hidden rounded-3xl border border-white/[0.08] bg-[#0b0b0f] px-4 pb-8 pt-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] ring-1 ring-[#FF1E2D]/15">
       <div className="relative mx-auto mb-6 h-[168px] w-full max-w-[320px]">
-        <div className="absolute left-[2%] top-0 z-10 aspect-[4/5] w-[42%] overflow-hidden rounded-2xl border border-white/10 shadow-lg shadow-black/40 -rotate-6">
-          <img
-            src={cyclingImg}
-            alt=""
-            width={285}
-            height={356}
-            className="h-full w-full object-cover"
-            loading="lazy"
-            decoding="async"
-          />
+        <div className="absolute left-[2%] top-0 z-10 aspect-[4/5] w-[42%] overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-rose-900/70 via-neutral-950 to-neutral-950 shadow-lg shadow-black/40 -rotate-6">
+          <div className="flex h-full w-full items-center justify-center gap-0.5 text-3xl drop-shadow-md">🚴‍♀️🚴‍♂️</div>
         </div>
-        <div className="absolute right-[6%] top-[4%] z-20 aspect-[4/5] w-[44%] overflow-hidden rounded-2xl border border-white/10 shadow-lg shadow-black/40 rotate-3">
-          <img
-            src={runningImg}
-            alt=""
-            width={300}
-            height={375}
-            className="h-full w-full object-cover"
-            loading="lazy"
-            decoding="async"
-          />
+        <div className="absolute right-[6%] top-[4%] z-20 aspect-[4/5] w-[44%] overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-fuchsia-950/60 via-neutral-950 to-neutral-950 shadow-lg shadow-black/40 rotate-3">
+          <div className="flex h-full w-full items-center justify-center text-4xl drop-shadow-md">🛹</div>
         </div>
       </div>
 
