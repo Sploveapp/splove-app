@@ -55,7 +55,7 @@ export function ProtectedRoute({ children }: Props) {
   }
 
   if (!session) {
-    console.log("[ONBOARDING_GUARD] no-session -> /auth", { pathname });
+    console.log("[ONBOARDING_GUARD] no-session -> /", { pathname });
     if (import.meta.env.DEV) {
       const pr = profile as Record<string, unknown> | null | undefined;
       console.info("[ProtectedRoute diagnostics] redirect_decision", {
@@ -68,7 +68,7 @@ export function ProtectedRoute({ children }: Props) {
         redirect_reason: "navigate_auth",
       });
     }
-    return <Navigate to="/auth?signup=1" replace />;
+    return <Navigate to="/" replace />;
   }
 
   if (isProfileLoading) {

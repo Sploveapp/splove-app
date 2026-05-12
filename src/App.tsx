@@ -26,6 +26,7 @@ import InviteFriendScreen from "./screens/InviteFriendScreen";
 import Notifications from "./pages/Notifications";
 import LegalCGU from "./pages/LegalCGU.tsx";
 import PrivacyPolicy from "./pages/PrivacyPolicy.tsx";
+import { PublicRootEntry } from "./components/PublicRootEntry";
 function App() {
   const hash = window.location.hash;
   if (
@@ -54,11 +55,13 @@ function App() {
       <AuthProvider>
         <RecoveryRedirect />
         <Routes>
+          <Route path="/" element={<PublicRootEntry />} />
           <Route path="/auth" element={<Auth />} />
           {/* OAuth return: outside ProtectedRoute; AuthContext must not force /auth on this path */}
           <Route path="/auth/callback" element={<AuthCallback />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/bienvenue" element={<Navigate to="/" replace />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/cgu" element={<LegalCGU />} />
           <Route path="/privacy" element={<PrivacyPolicy />} />
@@ -68,7 +71,6 @@ function App() {
               <ProtectedRoute>
                 <Routes>
                   <Route element={<AppLayout />}>
-                    <Route path="/" element={<Navigate to="/discover" replace />} />
                     <Route path="/onboarding" element={<Onboarding />} />
                     <Route path="/discover" element={<Discover />} />
                     <Route path="/notifications" element={<Notifications />} />

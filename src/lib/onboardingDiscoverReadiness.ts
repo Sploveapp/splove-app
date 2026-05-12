@@ -1,5 +1,15 @@
 import { isValidDiscoveryRadiusKm } from "../constants/discoverGeo";
 
+/**
+ * Contrat UX (référence produit, hors SQL) — champs typiquement exigés avant Discover / Move :
+ * prénom, majorité 18+, genre, taille, ville + coordonnées, rayon, tranche d’âge souhaitée (18–85),
+ * 1–3 sports avec niveau, « tu souhaites rencontrer », intention (« que cherches-tu »),
+ * au moins les photos requises par le flux (portrait + corps), acceptation CGU + confidentialité.
+ * Champs souvent facultatifs : bio / phrase sport, niveaux détaillés, préférence sport matching (même logique métier que l’étape 6).
+ *
+ * La fonction ci-dessous reflète la garde technique actuelle (flags + audit) — ne pas confondre avec le pourcentage décoratif `computeOnboardingProfileFillPercent`.
+ */
+
 const SPORT_PREF_ALLOWED = ["same_sports", "open_to_different_sports", "both"] as const;
 
 function isValidSportMatchPreference(raw: unknown): boolean {

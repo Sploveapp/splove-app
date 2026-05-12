@@ -56,6 +56,7 @@ import {
 } from "../lib/profileAge";
 import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/sportMatchPreference";
 import { auditOnboardingProfileForDiscover } from "../lib/onboardingDiscoverReadiness";
+import { computeOnboardingProfileFillPercent } from "../lib/onboardingProfileFillPercent";
 import {
   type EnergyOptionKey,
   normalizeIntensityForOnboardingHydrate,
@@ -69,23 +70,26 @@ import {
 } from "../lib/onboardingSportsQuickPick";
 
 const genderOptions = [
-  { value: "female", label: "gender.female" },
   { value: "male", label: "gender.male" },
-  { value: "trans_female", label: "gender.trans_female" },
+  { value: "female", label: "gender.female" },
   { value: "trans_male", label: "gender.trans_male" },
+  { value: "trans_female", label: "gender.trans_female" },
   { value: "non_binary", label: "gender.non_binary" },
 ];
 
 const INTERESTED_IN_OPTIONS = [
-  { value: "women", label: "gender_preference.women" },
   { value: "men", label: "gender_preference.men" },
-  { value: "trans_women", label: "gender_preference.trans_women" },
+  { value: "women", label: "gender_preference.women" },
   { value: "trans_men", label: "gender_preference.trans_men" },
+  { value: "trans_women", label: "gender_preference.trans_women" },
   { value: "non_binary", label: "gender_preference.non_binary" },
   { value: "all", label: "gender_preference.everyone" },
 ] as const;
 const INTERESTED_IN_ALL_VALUE = "all";
 type InterestedInValue = (typeof INTERESTED_IN_OPTIONS)[number]["value"];
+
+/** « Tous » conservé en données ; masqué en UI pour privilégier des choix explicites. */
+const INTERESTED_IN_OPTIONS_UI = INTERESTED_IN_OPTIONS.filter((o) => o.value !== INTERESTED_IN_ALL_VALUE);
 
 function normalizeInterestedInValues(raw: unknown): InterestedInValue[] {
   const mapLegacy = (v: string): InterestedInValue | "" => {
@@ -1371,6 +1375,31 @@ export default function Onboarding() {
   const finalStepBlockReason =
     step === TOTAL_STEPS && !canSubmit && !loading ? getCanSubmitBlockReason() : null;
 
+  const onboardingProfileFillPct = computeOnboardingProfileFillPercent({
+    firstName,
+    birthDate,
+    gender,
+    interestedIn,
+    intent,
+    preferredAgeMinStr: obPreferredAgeMinStr,
+    preferredAgeMaxStr: obPreferredAgeMaxStr,
+    heightCmInput,
+    city: obLocCity,
+    lat: obLocLat,
+    lng: obLocLng,
+    radiusKm: obLocRadiusKm,
+    sportIds: selectedSportIds.map((id) => String(id)),
+    sportLevelsById,
+    portraitSavedUrl,
+    bodySavedUrl,
+    hasPortraitFile: portraitFile != null,
+    hasBodyFile: bodyFile != null,
+    confirm18,
+    acceptTerms,
+    openToAdaptedPractice,
+    optionalPhrase: sportPhraseOptional,
+  });
+
   function toggleInterestedInOption(value: InterestedInValue): void {
     setInterestedIn((prev) => {
       if (value === INTERESTED_IN_ALL_VALUE) {
@@ -2478,6 +2507,9 @@ export default function Onboarding() {
                 transition={{ type: "spring", stiffness: 380, damping: 38 }}
               />
             </div>
+            <p className="mt-2 text-center text-[11px] font-semibold leading-snug text-app-muted">
+              {t("onboarding_profile_fill_line", { pct: onboardingProfileFillPct })}
+            </p>
 
             <div className="mt-2.5 flex flex-col items-center">
               <div className="flex max-w-full items-center gap-2.5">
@@ -2772,7 +2804,7 @@ export default function Onboarding() {
                     role="group"
                     aria-label={t("interested_in_required")}
                   >
-                    {INTERESTED_IN_OPTIONS.map((o) => (
+                    {INTERESTED_IN_OPTIONS_UI.map((o) => (
                       <button
                         key={o.value}
                         type="button"

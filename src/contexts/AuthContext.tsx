@@ -353,7 +353,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       console.log("[AuthContext] loading false");
       // Only post-logout; never used to “recover” from /auth/callback
-      navigate("/auth", { replace: true });
+      navigate("/", { replace: true });
     } catch (e) {
       console.error("[Logout] error", e);
       flushSync(() => {
