@@ -1,21 +1,70 @@
-import { useEffect, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { APP_BORDER, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { useTranslation } from "../i18n/useTranslation";
 import { useLocalDayNightPhase } from "../hooks/useLocalDayNightPhase";
+import welcomeLogoMark from "../assets/welcome/splove-mark.png";
+import tileRunning from "../assets/welcome/tile-running.webp";
+import tileCycling from "../assets/welcome/tile-cycling.webp";
+import tileBrand from "../assets/welcome/tile-brand.png";
+import tileRunningAlt from "../assets/welcome/tile-running-alt.webp";
 
 /**
  * Porte d’entrée visuelle publique (avant auth / onboarding).
  * Ne réutilise pas SplashScreen : celui-ci reste réservé au chargement session / profil.
+ * Images locales (import Vite) : plus de dépendance aux URLs Unsplash / hotlinking Render.
  */
 
-const SPORT_TILE_IMAGES = [
-  "https://images.unsplash.com/photo-1571019613454-1cb2e99899d4?auto=format&fit=crop&w=800&q=80",
-  "https://images.unsplash.com/photo-1476480862126-297bfaa98591?auto=format&fit=crop&w=800&q=80",
-  "https://images.unsplash.com/photo-1541625602330-2277a4c46182?auto=format&fit=crop&w=800&q=80",
-  "https://images.unsplash.com/photo-1551632811-567ad4aea806?auto=format&fit=crop&w=800&q=80",
+const WELCOME_TILES = [
+  { src: tileRunning, objectPosition: "50% 38%" },
+  { src: tileCycling, objectPosition: "48% 52%" },
+  { src: tileBrand, objectPosition: "50% 50%" },
+  { src: tileRunningAlt, objectPosition: "78% 40%" },
 ] as const;
+
+function WelcomePhotoTile({
+  src,
+  objectPosition,
+  isDay,
+}: {
+  src: string;
+  objectPosition: string;
+  isDay: boolean;
+}) {
+  const [didError, setDidError] = useState(false);
+  const fallbackBg = isDay
+    ? "linear-gradient(135deg, #dce3ee 0%, #c5d0e3 42%, #e7eaef 100%)"
+    : "linear-gradient(135deg, #1a1a22 0%, #101018 48%, #07070b 100%)";
+
+  return (
+    <div
+      className="relative min-h-[min(28vh,15rem)] w-full overflow-hidden sm:min-h-[min(32vh,17rem)] md:min-h-[13.5rem]"
+      style={{ background: fallbackBg }}
+    >
+      {!didError ? (
+        <img
+          src={src}
+          alt=""
+          className="absolute inset-0 h-full w-full scale-[1.06] object-cover"
+          loading="eager"
+          decoding="async"
+          draggable={false}
+          style={{ objectPosition }}
+          onError={() => setDidError(true)}
+        />
+      ) : null}
+      <div
+        className="absolute inset-0 transition-opacity duration-500"
+        style={{
+          background: isDay
+            ? "linear-gradient(180deg, rgba(231,234,239,0.42) 0%, rgba(231,234,239,0.78) 55%, rgba(231,234,239,0.93) 100%)"
+            : "linear-gradient(180deg, rgba(5,5,8,0.28) 0%, rgba(5,5,8,0.68) 48%, rgba(5,5,8,0.9) 100%)",
+        }}
+      />
+    </div>
+  );
+}
 
 function SportIconRow({ stroke }: { stroke: string }) {
   const common = {
@@ -67,12 +116,15 @@ function SportIconRow({ stroke }: { stroke: string }) {
   );
 }
 
+const LOGO_PUBLIC_FALLBACK = `${import.meta.env.BASE_URL}logo.png`.replace(/\/{2,}/g, "/");
+
 export default function WelcomeSPLove() {
   const navigate = useNavigate();
   const { t, language, setLanguage } = useTranslation();
   const dayNight = useLocalDayNightPhase();
   const isDay = dayNight === "day";
   const { user, isAuthInitialized, isLoading, isProfileLoading, isProfileComplete } = useAuth();
+  const [logoSrc, setLogoSrc] = useState<string>(welcomeLogoMark);
 
   useEffect(() => {
     if (!isAuthInitialized || isLoading || isProfileLoading) return;
@@ -151,32 +203,26 @@ export default function WelcomeSPLove() {
       </div>
 
       <div className="pointer-events-none absolute inset-0 z-0">
-        <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-px bg-black/40">
-          {SPORT_TILE_IMAGES.map((src) => (
-            <div key={src} className="relative min-h-[28vh] overflow-hidden sm:min-h-[32vh]">
-              <img src={src} alt="" className="h-full w-full scale-105 object-cover" loading="eager" decoding="async" />
-              <div
-                className="absolute inset-0 transition-opacity duration-500"
-                style={{
-                  background: isDay
-                    ? "linear-gradient(180deg, rgba(231,234,239,0.5) 0%, rgba(231,234,239,0.82) 55%, rgba(231,234,239,0.94) 100%)"
-                    : "linear-gradient(180deg, rgba(5,5,8,0.35) 0%, rgba(5,5,8,0.72) 48%, rgba(5,5,8,0.92) 100%)",
-                }}
-              />
+        <div className="flex h-full w-full justify-center md:px-4 md:pt-5">
+          <div className="w-full max-w-6xl">
+            <div className="grid h-[min(52vh,28rem)] w-full grid-cols-2 grid-rows-2 gap-px bg-black/35 sm:h-[min(56vh,30rem)] md:h-[min(48vh,26rem)] md:rounded-2xl md:shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+              {WELCOME_TILES.map((tile, i) => (
+                <WelcomePhotoTile key={i} src={tile.src} objectPosition={tile.objectPosition} isDay={isDay} />
+              ))}
             </div>
-          ))}
+          </div>
         </div>
         <div
           className="absolute inset-0 transition-opacity duration-500"
           style={{
             opacity: isDay ? 0.55 : 1,
             background:
-              "radial-gradient(120% 85% at 50% 18%, rgba(255,30,45,0.14) 0%, transparent 42%), linear-gradient(180deg, rgba(5,5,8,0.08) 0%, rgba(5,5,8,0.2) 100%)",
+              "radial-gradient(120% 85% at 50% 18%, rgba(255,30,45,0.14) 0%, transparent 42%), linear-gradient(180deg, rgba(5,5,8,0.08) 0%, rgba(5,5,8,0.22) 100%)",
           }}
         />
       </div>
 
-      <main className="relative z-10 flex min-h-[100dvh] flex-1 flex-col px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-[max(1.5rem,env(safe-area-inset-top))]">
+      <main className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-lg flex-1 flex-col px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-[max(1.5rem,env(safe-area-inset-top))] md:max-w-xl md:px-8 lg:max-w-2xl">
         <div className="splove-content-reveal flex flex-1 flex-col items-center justify-center text-center">
           <div className="flex flex-col items-center gap-3">
             <div className="flex items-center justify-center gap-1.5 sm:gap-2">
@@ -187,7 +233,7 @@ export default function WelcomeSPLove() {
                 SPL
               </span>
               <img
-                src="/logo.png"
+                src={logoSrc}
                 alt=""
                 width={72}
                 height={72}
@@ -195,6 +241,9 @@ export default function WelcomeSPLove() {
                 decoding="async"
                 draggable={false}
                 aria-hidden
+                onError={() => {
+                  setLogoSrc((prev) => (prev !== LOGO_PUBLIC_FALLBACK ? LOGO_PUBLIC_FALLBACK : prev));
+                }}
               />
               <span
                 className="text-[2.1rem] font-extrabold tracking-tight sm:text-[2.45rem]"
@@ -221,7 +270,7 @@ export default function WelcomeSPLove() {
           </div>
         </div>
 
-        <div className="splove-content-reveal mx-auto mt-auto flex w-full max-w-md flex-col gap-3">
+        <div className="splove-content-reveal mx-auto mt-auto flex w-full max-w-md flex-col gap-3 md:max-w-lg">
           <button
             type="button"
             onClick={goCommencer}
