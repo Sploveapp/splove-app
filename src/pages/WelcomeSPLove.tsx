@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { Bike, CircleDot, Footprints, Mountain, Waves } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { APP_BORDER, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { useTranslation } from "../i18n/useTranslation";
@@ -28,65 +29,65 @@ function oauthErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
 
 /**
  * Porte d’entrée visuelle publique (avant auth / onboarding).
- * Fond vidéo plein écran (`/videos/splove-hero.mp4`) + overlay sombre premium.
- * Aucune mosaïque d’images, aucun texte d’arrière-plan : uniquement la vidéo
- * et un dégradé sombre pour la lisibilité. Fallback noir si la vidéo échoue.
+ * Fond image sportive plein écran (`welcome-sport-clean.png` dans /public)
+ * + overlay dégradé pour la lisibilité.
  */
 
-function SportIconRow({ stroke }: { stroke: string }) {
-  const common = {
+function WelcomeSportIconRow({ stroke }: { stroke: string }) {
+  const sw = 1.35;
+  const shared = {
+    size: 22 as const,
+    strokeWidth: sw,
+    color: stroke,
+    "aria-hidden": true as const,
+    className: "shrink-0",
+  };
+
+  const svgCommon = {
+    width: 22,
+    height: 22,
+    viewBox: "0 0 24 24",
     fill: "none" as const,
     stroke,
-    strokeWidth: 1.35,
+    strokeWidth: sw,
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
+    className: "shrink-0",
+    "aria-hidden": true as const,
   };
 
   return (
     <div
-      className="flex w-full max-w-[min(100%,22rem)] items-center justify-between gap-0.5 px-0.5 opacity-[0.92]"
+      className="flex w-full max-w-[min(100%,22rem)] items-center justify-center gap-1 px-0.5 opacity-[0.92] sm:gap-1.5"
       aria-hidden
     >
-      <svg className="h-[22px] w-[22px] shrink-0" viewBox="0 0 24 24" {...common}>
-        <path d="M7 18c1.5-2 2-4 2-6s-.5-4-2-6M17 18c-1.5-2-2-4-2-6s.5-4 2-6" />
-        <ellipse cx="12" cy="12" rx="3" ry="1.5" />
-      </svg>
-      <svg className="h-[22px] w-[22px] shrink-0" viewBox="0 0 24 24" {...common}>
-        <ellipse cx="12" cy="14" rx="6" ry="3" />
-        <path d="M6 14V9l6-3 6 3v5" />
-        <path d="M12 6V3" />
-      </svg>
-      <svg className="h-[22px] w-[22px] shrink-0" viewBox="0 0 24 24" {...common}>
-        <circle cx="8" cy="16" r="3.25" />
-        <circle cx="16" cy="16" r="3.25" />
-        <path d="M5.5 16V11L12 7l6.5 4v5" />
-      </svg>
-      <svg className="h-[22px] w-[22px] shrink-0" viewBox="0 0 24 24" {...common}>
-        <path d="M8 18V6l8-2v14" />
-        <path d="M8 11h8" />
-      </svg>
-      <svg className="h-[22px] w-[22px] shrink-0" viewBox="0 0 24 24" {...common}>
-        <path d="M12 5v14M8 9l4-4 4 4M8 15l4 4 4-4" />
-      </svg>
-      <svg className="h-[22px] w-[22px] shrink-0" viewBox="0 0 24 24" {...common}>
-        <circle cx="12" cy="12" r="7" />
-        <path d="M12 5v14M5 12h14" />
-      </svg>
-      <svg className="h-[22px] w-[22px] shrink-0" viewBox="0 0 24 24" {...common}>
+      <Footprints {...shared} />
+      <CircleDot {...shared} />
+      <svg {...svgCommon}>
         <circle cx="12" cy="12" r="7.25" />
-        <path d="M12 5a7 7 0 0 1 0 14 7 7 0 0 1 0-14Z" />
-        <path d="M5 12h14" />
+        <path d="M12 4.75v14.5" />
+        <path d="M5.25 9.5c2.5 1.25 5.25 1.9 6.75 2.5 1.5.6 4.25 1.25 6.75 2.5" />
+        <path d="M5.25 14.5c2.5-1.25 5.25-1.9 6.75-2.5 1.5-.6 4.25-1.25 6.75-2.5" />
       </svg>
-      <svg className="h-[22px] w-[22px] shrink-0" viewBox="0 0 24 24" {...common}>
-        <path d="M6 19l4-12 2 6 2-3 4 9" />
-        <circle cx="17" cy="19" r="1.35" />
-        <circle cx="7" cy="19" r="1.35" />
+      <Waves {...shared} />
+      <svg {...svgCommon}>
+        <rect x="4" y="10" width="16" height="3.5" rx="1" />
+        <circle cx="8" cy="16.5" r="1.35" />
+        <circle cx="16" cy="16.5" r="1.35" />
+      </svg>
+      <Mountain {...shared} />
+      <Bike {...shared} />
+      <svg {...svgCommon}>
+        <circle cx="7" cy="12" r="2.1" />
+        <circle cx="12" cy="12" r="2.1" />
+        <circle cx="17" cy="12" r="2.1" />
       </svg>
     </div>
   );
 }
 
 const LOGO_PUBLIC_FALLBACK = `${import.meta.env.BASE_URL}logo.png`.replace(/\/{2,}/g, "/");
+const WELCOME_BG_IMAGE = `${import.meta.env.BASE_URL}welcome-sport-clean.png`;
 
 export default function WelcomeSPLove() {
   const navigate = useNavigate();
@@ -183,16 +184,13 @@ export default function WelcomeSPLove() {
       className="relative min-h-[100dvh] w-full overflow-hidden"
       style={{ backgroundColor: "#050509", color: textMain }}
     >
-      <video
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="auto"
+      <img
+        src={WELCOME_BG_IMAGE}
+        alt=""
         aria-hidden
-        tabIndex={-1}
-        disablePictureInPicture
-        disableRemotePlayback
+        decoding="async"
+        draggable={false}
+        className="pointer-events-none select-none"
         style={{
           position: "absolute",
           inset: 0,
@@ -200,11 +198,8 @@ export default function WelcomeSPLove() {
           height: "100%",
           objectFit: "cover",
           zIndex: 0,
-          pointerEvents: "none",
         }}
-      >
-        <source src="/videos/splove-hero.mp4" type="video/mp4" />
-      </video>
+      />
 
       <div
         aria-hidden
@@ -278,7 +273,7 @@ export default function WelcomeSPLove() {
           </p>
 
           <div className="mt-3 w-full max-w-[min(100%,22rem)] sm:mt-3.5">
-            <SportIconRow stroke={sportIconStroke} />
+            <WelcomeSportIconRow stroke={sportIconStroke} />
           </div>
 
           <div className="mt-5 flex w-full max-w-[min(100%,22rem)] flex-col gap-2.5 sm:mt-5">
