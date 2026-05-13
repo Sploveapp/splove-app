@@ -72,6 +72,7 @@ function App() {
                 <Routes>
                   <Route element={<AppLayout />}>
                     <Route path="/onboarding" element={<Onboarding />} />
+                    <Route path="/move" element={<Navigate to="/discover" replace />} />
                     <Route path="/discover" element={<Discover />} />
                     <Route path="/notifications" element={<Notifications />} />
                     <Route path="/activity" element={<Navigate to="/discover" replace />} />

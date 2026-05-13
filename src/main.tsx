@@ -7,8 +7,11 @@ import {
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import "./styles/globals.css";
+import { initTheme } from "./lib/theme";
 
 console.log("[main bootstrap]");
+
+initTheme();
 
 class AppErrorBoundary extends Component<
   { children: ReactNode },
