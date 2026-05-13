@@ -34,22 +34,25 @@ function oauthErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
  */
 
 function WelcomeSportIconRow({ stroke }: { stroke: string }) {
-  const sw = 1.35;
+  const px = 18;
+  const sw = 1.2;
   const shared = {
-    size: 22 as const,
+    size: px,
     strokeWidth: sw,
     color: stroke,
+    absoluteStrokeWidth: true as const,
     "aria-hidden": true as const,
     className: "shrink-0",
   };
 
   const svgCommon = {
-    width: 22,
-    height: 22,
+    width: px,
+    height: px,
     viewBox: "0 0 24 24",
     fill: "none" as const,
     stroke,
     strokeWidth: sw,
+    vectorEffect: "non-scaling-stroke" as const,
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
     className: "shrink-0",
@@ -58,7 +61,7 @@ function WelcomeSportIconRow({ stroke }: { stroke: string }) {
 
   return (
     <div
-      className="flex w-full max-w-[min(100%,22rem)] items-center justify-center gap-1 px-0.5 opacity-[0.92] sm:gap-1.5"
+      className="flex w-full max-w-[min(100%,22rem)] items-center justify-center gap-1.5 px-0.5 opacity-[0.78] sm:gap-2"
       aria-hidden
     >
       <Footprints {...shared} />
@@ -87,7 +90,7 @@ function WelcomeSportIconRow({ stroke }: { stroke: string }) {
 }
 
 const LOGO_PUBLIC_FALLBACK = `${import.meta.env.BASE_URL}logo.png`.replace(/\/{2,}/g, "/");
-const WELCOME_BG_IMAGE = `${import.meta.env.BASE_URL}welcome-sport-clean.png`;
+const WELCOME_BG_IMAGE = `${import.meta.env.BASE_URL}welcome-sport-clean.png?v=2`;
 
 export default function WelcomeSPLove() {
   const navigate = useNavigate();
@@ -177,7 +180,7 @@ export default function WelcomeSPLove() {
 
   const textMain = "#fafafa";
   const textSoft = "rgba(255,255,255,0.9)";
-  const sportIconStroke = "rgba(255,255,255,0.88)";
+  const sportIconStroke = "rgba(255,255,255,0.78)";
 
   return (
     <div
@@ -193,10 +196,14 @@ export default function WelcomeSPLove() {
         className="pointer-events-none select-none"
         style={{
           position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
+          left: "50%",
+          top: "50%",
+          width: "108%",
+          height: "108%",
+          maxWidth: "none",
+          transform: "translate(-50%, -50%)",
           objectFit: "cover",
+          objectPosition: "center 46%",
           zIndex: 0,
         }}
       />
@@ -232,8 +239,15 @@ export default function WelcomeSPLove() {
         </button>
       </div>
 
-      <main className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-md flex-col justify-center px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(3.25rem,env(safe-area-inset-top))] sm:max-w-[21rem] md:max-w-[22rem] md:px-6">
+      <main className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-md flex-col justify-start px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(4.75rem,calc(env(safe-area-inset-top)+3rem))] sm:max-w-[21rem] md:max-w-[22rem] md:px-6">
         <div className="splove-content-reveal mx-auto flex w-full flex-col items-center text-center">
+          <div
+            className="w-full max-w-[min(100%,22rem)] rounded-2xl px-3 py-3 shadow-sm backdrop-blur-[3px] sm:px-4 sm:py-3.5"
+            style={{
+              background: "linear-gradient(180deg, rgba(0,0,0,0.42) 0%, rgba(0,0,0,0.32) 100%)",
+              border: "1px solid rgba(255,255,255,0.06)",
+            }}
+          >
             <div className="flex items-center justify-center gap-1 sm:gap-1.5" role="img" aria-label="SPLove">
               <span aria-hidden className="text-[2rem] font-extrabold leading-none tracking-tight sm:text-[2.2rem]" style={{ color: textMain }}>
                 SPL
@@ -262,21 +276,22 @@ export default function WelcomeSPLove() {
               {t("welcome_tagline")}
             </p>
 
-          <p className="mt-2 max-w-[20rem] text-lg font-semibold leading-snug tracking-[-0.015em] sm:mt-2.5 sm:text-xl">
-            <span className="block" style={{ color: textMain }}>
-              {t("welcome_headline_l1")}
-            </span>
-            <span className="mt-0.5 block">
-              <span style={{ color: textMain }}>{t("welcome_headline_l2_prefix")}</span>
-              <span style={{ color: BRAND_BG }}>{t("welcome_headline_l2_accent")}</span>
-            </span>
-          </p>
+            <p className="mt-2 max-w-[20rem] text-lg font-semibold leading-snug tracking-[-0.015em] sm:mt-2.5 sm:text-xl">
+              <span className="block" style={{ color: textMain }}>
+                {t("welcome_headline_l1")}
+              </span>
+              <span className="mt-0.5 block">
+                <span style={{ color: textMain }}>{t("welcome_headline_l2_prefix")}</span>
+                <span style={{ color: BRAND_BG }}>{t("welcome_headline_l2_accent")}</span>
+              </span>
+            </p>
+          </div>
 
-          <div className="mt-3 w-full max-w-[min(100%,22rem)] sm:mt-3.5">
+          <div className="mt-4 w-full max-w-[min(100%,22rem)] sm:mt-5">
             <WelcomeSportIconRow stroke={sportIconStroke} />
           </div>
 
-          <div className="mt-5 flex w-full max-w-[min(100%,22rem)] flex-col gap-2.5 sm:mt-5">
+          <div className="mt-8 flex w-full max-w-[min(100%,22rem)] flex-col gap-2.5 sm:mt-9">
             <button
               type="button"
               onClick={goCommencer}
