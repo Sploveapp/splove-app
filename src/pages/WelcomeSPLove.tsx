@@ -203,7 +203,7 @@ export default function WelcomeSPLove() {
           maxWidth: "none",
           transform: "translate(-50%, -50%)",
           objectFit: "cover",
-          objectPosition: "center 46%",
+          objectPosition: "center 38%",
           zIndex: 0,
         }}
       />
@@ -239,8 +239,8 @@ export default function WelcomeSPLove() {
         </button>
       </div>
 
-      <main className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-md flex-col justify-start px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(4.75rem,calc(env(safe-area-inset-top)+3rem))] sm:max-w-[21rem] md:max-w-[22rem] md:px-6">
-        <div className="splove-content-reveal mx-auto flex w-full flex-col items-center text-center">
+      <main className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-md flex-col justify-start overflow-x-hidden px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(4.75rem,calc(env(safe-area-inset-top)+3rem))] sm:max-w-[21rem] md:max-w-[22rem] md:px-6">
+        <div className="splove-content-reveal mx-auto flex w-full shrink-0 flex-col items-center text-center">
           <div
             className="w-full max-w-[min(100%,22rem)] rounded-2xl px-3 py-3 shadow-sm backdrop-blur-[3px] sm:px-4 sm:py-3.5"
             style={{
@@ -389,6 +389,16 @@ export default function WelcomeSPLove() {
             {t("welcome_legal_part3")}
           </p>
         </div>
+
+        {/* Ferme la zone transparente sous le bloc : évite de voir le bas du visuel (maquette / CTA) à travers le <main>. */}
+        <div
+          aria-hidden
+          className="pointer-events-none min-h-0 w-full min-w-0 flex-1 shrink-0"
+          style={{
+            background:
+              "linear-gradient(180deg, rgba(5,5,9,0) 0%, rgba(5,5,9,0.45) 32%, rgba(5,5,9,0.88) 72%, #050509 100%)",
+          }}
+        />
       </main>
     </div>
   );
