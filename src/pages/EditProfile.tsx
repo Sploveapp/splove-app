@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
 import { useAuth } from "../contexts/AuthContext";
@@ -109,6 +109,8 @@ export default function EditProfile() {
   const { user, profile, refetchProfile, commitProfileRow } = useAuth();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [saveSuccessToast, setSaveSuccessToast] = useState(false);
+  const redirectAfterSaveTimerRef = useRef<number | null>(null);
 
   const [sportsCatalog, setSportsCatalog] = useState<SportOption[]>([]);
   const [selectedSports, setSelectedSports] = useState<SportOption[]>([]);
@@ -204,6 +206,15 @@ export default function EditProfile() {
     setBodyPreviewUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [bodyFile]);
+
+  useEffect(() => {
+    return () => {
+      if (redirectAfterSaveTimerRef.current != null) {
+        window.clearTimeout(redirectAfterSaveTimerRef.current);
+        redirectAfterSaveTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const searchMatches = useMemo(() => {
     const q = sportSearch.trim().toLowerCase();
@@ -396,9 +407,13 @@ export default function EditProfile() {
       }
 
       await refetchProfile();
-      setMessage(t("edit_profile_saved"));
       setPortraitFile(null);
       setBodyFile(null);
+      setSaveSuccessToast(true);
+      redirectAfterSaveTimerRef.current = window.setTimeout(() => {
+        redirectAfterSaveTimerRef.current = null;
+        navigate("/discover", { replace: true });
+      }, 900);
     } catch (e) {
       const msg = e instanceof Error ? e.message : t("edit_profile_save_error");
       setMessage(msg);
@@ -658,6 +673,31 @@ export default function EditProfile() {
         </div>
         {message ? <p style={{ margin: "10px 2px 0", color: APP_TEXT_MUTED, fontSize: 13 }}>{message}</p> : null}
       </main>
+      {saveSuccessToast ? (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            left: "50%",
+            bottom: "max(24px, env(safe-area-inset-bottom, 0px))",
+            transform: "translateX(-50%)",
+            zIndex: 50,
+            maxWidth: "min(92vw, 360px)",
+            padding: "12px 18px",
+            borderRadius: 14,
+            background: APP_CARD,
+            border: `1px solid ${APP_BORDER}`,
+            color: APP_TEXT,
+            fontSize: 14,
+            fontWeight: 600,
+            textAlign: "center",
+            boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
+          }}
+        >
+          {t("edit_profile_saved")}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -59,6 +59,7 @@ const fr = {
   create_account: "Créer mon compte",
   auth_hero_title_line_1: "Swipe ailleurs.",
   auth_hero_title_line_2: "Rencontre ici.",
+  auth_hero_main_slogan: "Bouge. Matche. Rencontre.",
   auth_hero_subtitle: "Un match. Une activité. Une vraie rencontre.",
   forgot_password: "Mot de passe oublié ?",
   auth_toggle_signin: "Déjà un compte ? Se connecter",

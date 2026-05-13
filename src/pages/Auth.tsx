@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabase";
 import { oauthRedirectUrl } from "../lib/authRedirect";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { useAuth } from "../contexts/AuthContext";
-import { APP_BG, APP_BORDER, APP_CARD, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
+import { APP_BG, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { SplashScreen } from "../components/SplashScreen";
 import { IconEye, IconEyeOff } from "../components/ui/Icon";
 import { useTranslation } from "../i18n/useTranslation";
@@ -172,7 +172,7 @@ export default function Auth() {
   const btnPrimary: React.CSSProperties = {
     width: "100%",
     padding: "16px 18px",
-    borderRadius: "16px",
+    borderRadius: "20px",
     border: "none",
     background: BRAND_BG,
     color: TEXT_ON_BRAND,
@@ -180,17 +180,21 @@ export default function Auth() {
     fontSize: "16px",
     cursor: loading || oauthLoading ? "wait" : "pointer",
     opacity: loading || oauthLoading ? 0.75 : 1,
+    boxShadow: "0 10px 30px rgba(0,0,0,0.32)",
   };
 
   const btnOAuth: React.CSSProperties = {
     ...btnPrimary,
-    background: APP_CARD,
+    background: "rgba(20, 20, 24, 0.55)",
     color: "rgba(255,255,255,0.95)",
-    border: `1px solid ${APP_BORDER}`,
+    border: "1px solid rgba(255,255,255,0.14)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
+    backdropFilter: "blur(12px)",
+    WebkitBackdropFilter: "blur(12px)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.32)",
   };
 
   const langPillBtn = (lang: "fr" | "en"): React.CSSProperties => ({
@@ -211,14 +215,72 @@ export default function Auth() {
       style={{
         position: "relative",
         minHeight: "100vh",
-        background: APP_BG,
+        background: "#000",
+        overflow: "hidden",
         display: "flex",
         flexDirection: "column",
         justifyContent: "center",
-        padding: "24px 18px 32px",
+        padding: "20px 18px 36px",
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
       }}
     >
+      <style>{`
+        @keyframes spvAuthFadeUp {
+          from { opacity: 0; transform: translate3d(0, 10px, 0); }
+          to { opacity: 1; transform: translate3d(0, 0, 0); }
+        }
+        .spv-auth-fade-in {
+          opacity: 0;
+          animation: spvAuthFadeUp 380ms ease-out forwards;
+          will-change: opacity, transform;
+        }
+        .spv-auth-tactile {
+          transition: transform 140ms ease, box-shadow 200ms ease, opacity 200ms ease;
+        }
+        .spv-auth-tactile:active {
+          transform: scale(0.985);
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .spv-auth-fade-in { animation: none !important; opacity: 1 !important; transform: none !important; }
+          .spv-auth-tactile { transition: none !important; }
+        }
+      `}</style>
+
+      <video
+        autoPlay
+        muted
+        loop
+        playsInline
+        preload="auto"
+        aria-hidden
+        tabIndex={-1}
+        disablePictureInPicture
+        disableRemotePlayback
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          zIndex: 0,
+          pointerEvents: "none",
+        }}
+      >
+        <source src="/videos/splove-hero.mp4" type="video/mp4" />
+      </video>
+
+      <div
+        aria-hidden
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 1,
+          pointerEvents: "none",
+          background:
+            "linear-gradient(to bottom, rgba(0,0,0,0.45), rgba(0,0,0,0.78))",
+        }}
+      />
+
       <div
         role="group"
         aria-label="Language"
@@ -231,10 +293,10 @@ export default function Auth() {
           gap: 2,
           padding: "3px",
           borderRadius: "999px",
-          background: "rgba(255,255,255,0.04)",
-          border: `1px solid ${APP_BORDER}`,
-          backdropFilter: "blur(6px)",
-          WebkitBackdropFilter: "blur(6px)",
+          background: "rgba(255,255,255,0.06)",
+          border: `1px solid rgba(255,255,255,0.12)`,
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
           zIndex: 10,
         }}
       >
@@ -260,34 +322,43 @@ export default function Auth() {
           EN
         </button>
       </div>
-      <div style={{ width: "100%", maxWidth: "420px", margin: "0 auto" }}>
-        <div style={{ textAlign: "center", marginBottom: "28px" }}>
+      <div
+        className="spv-auth-fade-in"
+        style={{
+          position: "relative",
+          zIndex: 2,
+          width: "100%",
+          maxWidth: "420px",
+          margin: "0 auto",
+        }}
+      >
+        <div style={{ textAlign: "center", marginBottom: "26px" }}>
           <img
             src="/logo.png"
             alt=""
-            style={{ width: 72, height: "auto", marginBottom: 20, opacity: 0.95 }}
+            style={{ width: 78, height: "auto", marginBottom: 18, opacity: 0.96 }}
           />
           <h1
             style={{
-              margin: "0 0 12px 0",
+              margin: "0 0 10px 0",
               fontSize: "28px",
               fontWeight: 800,
               color: "rgba(255,255,255,0.98)",
-              lineHeight: 1.15,
+              lineHeight: 1.18,
               letterSpacing: "-0.02em",
+              textShadow: "0 1px 14px rgba(0,0,0,0.45)",
             }}
           >
-            {t("auth_hero_title_line_1")}
-            <br />
-            {t("auth_hero_title_line_2")}
+            {t("auth_hero_main_slogan")}
           </h1>
           <p
             style={{
               margin: 0,
-              fontSize: "16px",
+              fontSize: "15px",
               fontWeight: 500,
-              color: "rgba(255,255,255,0.58)",
+              color: "rgba(255,255,255,0.78)",
               lineHeight: 1.45,
+              textShadow: "0 1px 10px rgba(0,0,0,0.45)",
             }}
           >
             {t("auth_hero_subtitle")}
@@ -297,7 +368,7 @@ export default function Auth() {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <button
             type="button"
-            className="opacity-60 cursor-pointer"
+            className="opacity-60 cursor-pointer spv-auth-tactile"
             style={{
               ...btnOAuth,
               opacity: loading || oauthLoading ? 0.5 : 0.6,
@@ -320,6 +391,7 @@ export default function Auth() {
           )}
           <button
             type="button"
+            className="spv-auth-tactile"
             style={btnOAuth}
             disabled={!!oauthLoading || loading}
             onClick={() => void signInWithGoogle()}
@@ -329,19 +401,17 @@ export default function Auth() {
 
           <button
             type="button"
+            className="spv-auth-tactile"
             onClick={() => {
               setShowEmailForm((v) => !v);
               setMessage(null);
             }}
             style={{
-              marginTop: 4,
-              padding: "12px",
-              border: "none",
-              background: "transparent",
-              color: "rgba(255,255,255,0.5)",
-              fontSize: "14px",
+              ...btnOAuth,
+              marginTop: 2,
+              background: "rgba(20, 20, 24, 0.45)",
+              color: "rgba(255,255,255,0.85)",
               fontWeight: 600,
-              cursor: "pointer",
             }}
           >
             {showEmailForm ? t("hide_email") : t("continue_with_email")}
@@ -353,9 +423,12 @@ export default function Auth() {
               style={{
                 marginTop: 8,
                 padding: "20px 18px",
-                borderRadius: "20px",
-                border: `1px solid ${APP_BORDER}`,
-                background: APP_CARD,
+                borderRadius: "22px",
+                border: "1px solid rgba(255,255,255,0.10)",
+                background: "rgba(18, 18, 22, 0.62)",
+                backdropFilter: "blur(14px)",
+                WebkitBackdropFilter: "blur(14px)",
+                boxShadow: "0 12px 36px rgba(0,0,0,0.4)",
                 display: "flex",
                 flexDirection: "column",
                 gap: 14,
@@ -441,7 +514,7 @@ export default function Auth() {
                   {message.text}
                 </p>
               )}
-              <button type="submit" disabled={loading} style={btnPrimary}>
+              <button type="submit" disabled={loading} className="spv-auth-tactile" style={btnPrimary}>
                 {loading ? t("loading") : isSignUp ? t("create_account") : t("login")}
               </button>
               <button
@@ -468,12 +541,13 @@ export default function Auth() {
 
         <p
           style={{
-            marginTop: 28,
+            marginTop: 24,
             textAlign: "center",
             fontSize: "11px",
             lineHeight: 1.5,
-            color: "rgba(255,255,255,0.42)",
+            color: "rgba(255,255,255,0.62)",
             padding: "0 8px",
+            textShadow: "0 1px 8px rgba(0,0,0,0.45)",
           }}
         >
           {t("auth_terms_notice")}

@@ -459,16 +459,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void loadProfile(uid);
   }, [session?.user?.id, loadProfile]);
 
-  /** Garde navigation : `profile_completed`, alignement onboarding (063), ou `onboarding_done` définitif (migration 063). */
-  const onboardingDoneResolved =
-    profile != null && (profile as { onboarding_done?: unknown }).onboarding_done === true;
-  const pcRaw = profile?.profile_completed;
-  const onboardingCompletedAligned =
-    profile != null &&
-    profile.onboarding_completed === true &&
-    pcRaw !== false &&
-    !onboardingDoneResolved;
-  const isProfileComplete = pcRaw === true || onboardingCompletedAligned || onboardingDoneResolved;
+  /** Garde navigation : une seule source de vérité BDD — `profile_completed` (produit). */
+  const isProfileComplete =
+    profile != null && typeof profile.id === "string" && profile.id.length > 0 && profile.profile_completed === true;
   const profileIncompleteReason = isProfileComplete ? null : "profile_not_completed";
 
   const value: AuthState = {

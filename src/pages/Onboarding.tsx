@@ -1059,7 +1059,7 @@ export default function Onboarding() {
     navigate("/auth", { replace: true });
   }, [user?.id, authLoading, isAuthInitialized, navigate]);
 
-  /** Profil avec flags auth « complet » mais audit Discover KO → pas de redirection. */
+  /** `profile_completed` (AuthContext) : ne pas conserver un compte déjà onboardé sur cet écran. */
   useEffect(() => {
     if (!isAuthInitialized || authLoading) return;
     if (isProfileLoading) return;
@@ -1069,88 +1069,19 @@ export default function Onboarding() {
     if (!isProfileComplete) return;
     if (!profile?.id || profile.id !== user.id) return;
 
-    let cancelled = false;
-    void (async () => {
-      const pid = user.id!;
-      const row = profile as unknown as Record<string, unknown>;
-      if (import.meta.env.DEV) {
-        console.info("[OnboardingRouteGuard] audit_input", {
-          auth_user_id: pid,
-          current_route: "/onboarding",
-          profile_completed: row.profile_completed ?? null,
-          onboarding_completed: row.onboarding_completed ?? null,
-          onboarding_done: row.onboarding_done ?? null,
-        });
-      }
-
-      const { count, error: sportCntErr } = await supabase
-        .from("profile_sports")
-        .select("sport_id", { count: "exact", head: true })
-        .eq("profile_id", pid);
-
-      if (cancelled) return;
-
-      if (sportCntErr) {
-        console.warn("[Onboarding audit] discover readiness: échec comptage profile_sports — redirection omit", {
-          profile_id: pid,
-          onboarding_ui_step_when_checked: TOTAL_STEPS,
-          error_message: sportCntErr.message,
-        });
-        if (import.meta.env.DEV) {
-          console.info("[OnboardingRouteGuard] redirect_decision", {
-            auth_user_id: pid,
-            current_route: "/onboarding",
-            redirect_reason: "audit_skipped_profile_sports_count_error",
-            profile_completed: row.profile_completed ?? null,
-            onboarding_completed: row.onboarding_completed ?? null,
-            onboarding_done: row.onboarding_done ?? null,
-          });
-        }
-        return;
-      }
-
-      const auditResult = auditOnboardingProfileForDiscover(row, count ?? 0);
-      if (auditResult.ok) {
-        if (import.meta.env.DEV) {
-          console.info("[OnboardingRouteGuard] redirect_decision", {
-            auth_user_id: pid,
-            current_route: "/onboarding",
-            redirect_reason: "navigate_discover_audit_ok",
-            profile_completed: row.profile_completed ?? null,
-            onboarding_completed: row.onboarding_completed ?? null,
-            onboarding_done: row.onboarding_done ?? null,
-          });
-        }
-        clearOnboardingUiLocalCache();
-        navigate("/discover", { replace: true });
-        return;
-      }
-
-      console.warn("[Onboarding audit] discover readiness bloque la redirection auto vers Discover", {
-        profile_id: pid,
-        missing_fields: auditResult.missingFields,
-        suggested_step: auditResult.suggestedStep,
-        context: "session_flags_complete_audit_fail",
+    const row = profile as unknown as Record<string, unknown>;
+    if (import.meta.env.DEV) {
+      console.info("[OnboardingRouteGuard] redirect_decision", {
+        auth_user_id: user.id,
+        current_route: "/onboarding",
+        redirect_reason: "navigate_discover_profile_completed",
+        profile_completed: row.profile_completed ?? null,
+        onboarding_completed: row.onboarding_completed ?? null,
+        onboarding_done: row.onboarding_done ?? null,
       });
-      if (import.meta.env.DEV) {
-        console.info("[OnboardingRouteGuard] redirect_decision", {
-          auth_user_id: pid,
-          current_route: "/onboarding",
-          redirect_reason: "audit_fail_stay_onboarding",
-          missing_fields: auditResult.missingFields,
-          suggested_step: auditResult.suggestedStep,
-          profile_completed: row.profile_completed ?? null,
-          onboarding_completed: row.onboarding_completed ?? null,
-          onboarding_done: row.onboarding_done ?? null,
-        });
-      }
-      setStep(auditResult.suggestedStep);
-      setError(t("onboarding_discover_readiness_blocked"));
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    }
+    clearOnboardingUiLocalCache();
+    navigate("/discover", { replace: true });
   }, [
     authLoading,
     isAuthInitialized,
@@ -1159,7 +1090,6 @@ export default function Onboarding() {
     loading,
     navigate,
     profile,
-    t,
     user?.id,
   ]);
 

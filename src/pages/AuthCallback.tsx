@@ -298,7 +298,7 @@ export default function AuthCallback() {
 
       const profile = profileRow;
       const done = profile?.profile_completed === true;
-      const target = done ? "/profile" : "/onboarding";
+      const target = done ? "/discover" : "/onboarding";
       console.log("[ONBOARDING_GUARD] oauth-callback profile status", {
         profile_completed: done,
         target,
