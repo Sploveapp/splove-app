@@ -8,6 +8,15 @@ import welcomeLogoMark from "../assets/welcome/splove-mark.png";
 import { supabase } from "../lib/supabase";
 import { oauthRedirectUrl } from "../lib/authRedirect";
 
+/** WebKit iOS Safari : backdrop-filter + calques peut dupliquer le rendu des CTA. */
+function welcomeIsIosSafari(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  const iOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const webKitSafari = /Safari/i.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/i.test(ua);
+  return iOS && webKitSafari;
+}
+
 function oauthErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
   const raw = err instanceof Error ? err.message : String(err);
   const m = raw.toLowerCase();
@@ -101,6 +110,13 @@ export default function WelcomeSPLove() {
   const appleTimerRef = useRef<number | undefined>(undefined);
   const [oauthLoading, setOauthLoading] = useState<"google" | null>(null);
   const [oauthBanner, setOauthBanner] = useState<string | null>(null);
+  const [iosSafariNoBackdrop, setIosSafariNoBackdrop] = useState(() =>
+    typeof window !== "undefined" ? welcomeIsIosSafari() : false,
+  );
+
+  useEffect(() => {
+    setIosSafariNoBackdrop(welcomeIsIosSafari());
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -221,7 +237,7 @@ export default function WelcomeSPLove() {
       <div
         role="group"
         aria-label={t("language")}
-        className="absolute right-4 z-20 flex items-center gap-0.5 rounded-full border p-0.5 shadow-sm backdrop-blur-md"
+        className={`absolute right-4 z-20 flex items-center gap-0.5 rounded-full border p-0.5 shadow-sm${iosSafariNoBackdrop ? "" : " backdrop-blur-md"}`}
         style={{
           top: "max(0.75rem, env(safe-area-inset-top))",
           borderColor: APP_BORDER,
@@ -239,10 +255,13 @@ export default function WelcomeSPLove() {
         </button>
       </div>
 
-      <main className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-md flex-col justify-start overflow-x-hidden px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(4.75rem,calc(env(safe-area-inset-top)+3rem))] sm:max-w-[21rem] md:max-w-[22rem] md:px-6">
-        <div className="splove-content-reveal mx-auto flex w-full shrink-0 flex-col items-center text-center">
+      <main
+        className="relative z-10 mx-auto flex min-h-[100dvh] w-full max-w-md flex-col justify-start overflow-x-hidden px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(4.75rem,calc(env(safe-area-inset-top)+3rem))] sm:max-w-[21rem] md:max-w-[22rem] md:px-6"
+        style={{ isolation: "isolate", contain: "layout" }}
+      >
+        <div className="mx-auto flex w-full shrink-0 flex-col items-center overflow-x-hidden text-center">
           <div
-            className="w-full max-w-[min(100%,22rem)] rounded-2xl px-3 py-3 shadow-sm backdrop-blur-[3px] sm:px-4 sm:py-3.5"
+            className={`w-full max-w-[min(100%,22rem)] rounded-2xl px-3 py-3 shadow-sm${iosSafariNoBackdrop ? "" : " backdrop-blur-[3px]"} sm:px-4 sm:py-3.5`}
             style={{
               background: "linear-gradient(180deg, rgba(0,0,0,0.42) 0%, rgba(0,0,0,0.32) 100%)",
               border: "1px solid rgba(255,255,255,0.06)",
