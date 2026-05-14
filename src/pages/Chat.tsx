@@ -185,6 +185,24 @@ function parseCreatedMs(iso: string | null | undefined): number {
   return Number.isNaN(n) ? 0 : n;
 }
 
+/** Au plus une proposition `pending` / `proposed` (la plus récente) ; historique inchangé. */
+function dedupeActivePendingProposalsForChat<T extends { id: string; status?: string | null; created_at?: string }>(
+  rows: T[],
+): T[] {
+  const sorted = [...rows].sort((a, b) => parseCreatedMs(b.created_at) - parseCreatedMs(a.created_at));
+  let activeKept = false;
+  const out: T[] = [];
+  for (const row of sorted) {
+    const st = (row.status ?? "").trim().toLowerCase();
+    if (st === "pending" || st === "proposed") {
+      if (activeKept) continue;
+      activeKept = true;
+    }
+    out.push(row);
+  }
+  return out;
+}
+
 function timeToMinutes(value: string): number {
   const parts = value.split(":");
   if (parts.length < 2) return 0;
@@ -471,15 +489,17 @@ export default function Chat() {
     console.log("[Chat] reloadProposals: start", { conversationId: cid });
     const rows = await listConversationProposals(cid);
     const latest = await getLatestProposalForConversation(cid);
+    const deduped = dedupeActivePendingProposalsForChat(rows as ProposalRow[]);
     console.log("[Chat] reloadProposals: response", {
       conversationId: cid,
       rowCount: rows.length,
-      proposalIds: rows.map((r) => r.id),
+      dedupedCount: deduped.length,
+      proposalIds: deduped.map((r) => r.id),
     });
-    setProposals(rows);
+    setProposals(deduped);
     setLatestProposalTop(latest as ProposalRow | null);
-    if (user?.id && rows.length > 0) {
-      const ids = rows.map((r) => r.id);
+    if (user?.id && deduped.length > 0) {
+      const ids = deduped.map((r) => r.id);
       const { data: od, error: oe } = await supabase
         .from("activity_participant_outcomes")
         .select("activity_proposal_id, sentiment")
@@ -491,14 +511,15 @@ export default function Chat() {
           message: oe.message,
           code: oe.code,
         });
-        return;
+        setMyActivityOutcomes({});
+      } else {
+        const next: Record<string, ActivityFeedbackSentiment> = {};
+        for (const row of od ?? []) {
+          const r = row as { activity_proposal_id: string; sentiment: ActivityFeedbackSentiment };
+          next[r.activity_proposal_id] = r.sentiment;
+        }
+        setMyActivityOutcomes(next);
       }
-      const next: Record<string, ActivityFeedbackSentiment> = {};
-      for (const row of od ?? []) {
-        const r = row as { activity_proposal_id: string; sentiment: ActivityFeedbackSentiment };
-        next[r.activity_proposal_id] = r.sentiment;
-      }
-      setMyActivityOutcomes(next);
     } else {
       setMyActivityOutcomes({});
     }
@@ -1181,6 +1202,10 @@ export default function Chat() {
     const cid = conversationId ?? "";
     const latestProposalId = sortedProposalsDesc[0]?.id ?? null;
     const canonicalActiveId = pendingProposal?.id ?? null;
+    /** Header `ProposalCard` + une seule bulle par `proposal.id` dans le fil. */
+    const bubbleIdsRendered = new Set<string>();
+    if (latestProposal?.id) bubbleIdsRendered.add(latestProposal.id);
+
     const linkedIds = new Set<string>();
     const fromMessages: ChatTimelineItem[] = chatMessages.map((msg) => {
       const createdMs = parseCreatedMs(msg.created_at);
@@ -1193,22 +1218,23 @@ export default function Chat() {
         if (!proposal) {
           return { kind: "message" as const, sortKey, createdMs, message: msg };
         }
+        if (bubbleIdsRendered.has(proposal.id)) {
+          return { kind: "message" as const, sortKey, createdMs, message: msg };
+        }
         const isActiveSlot = isPendingProposalStatus(proposal.status);
         const staleExtraActive =
           canonicalActiveId != null && isActiveSlot && proposal.id !== canonicalActiveId;
-        const duplicateOfHeaderCard =
-          latestProposal != null &&
-          latestProposal.id === proposal.id &&
-          isPendingProposalStatus(latestProposal.status);
-        if (staleExtraActive || duplicateOfHeaderCard) {
+        if (staleExtraActive) {
           return { kind: "message" as const, sortKey, createdMs, message: msg };
         }
+        bubbleIdsRendered.add(proposal.id);
         return { kind: "proposal" as const, sortKey, createdMs, proposal };
       }
       return { kind: "message" as const, sortKey, createdMs, message: msg };
     });
     const orphanProposals: ChatTimelineItem[] = proposals
       .filter((p) => {
+        if (bubbleIdsRendered.has(p.id)) return false;
         if (linkedIds.has(p.id)) return false;
         if (latestProposalId && p.id !== latestProposalId) return false;
         if (
