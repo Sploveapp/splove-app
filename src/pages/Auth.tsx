@@ -6,6 +6,7 @@ import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { useAuth } from "../contexts/AuthContext";
 import { APP_BG, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { SplashScreen } from "../components/SplashScreen";
+import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
 import { IconEye, IconEyeOff } from "../components/ui/Icon";
 import { useTranslation } from "../i18n/useTranslation";
 import { stashPendingReferralCodeFromSearch } from "../services/referral.service";
@@ -86,7 +87,7 @@ export default function Auth() {
   }
 
   if (user && isProfileLoading) {
-    return <SplashScreen />;
+    return <PostLoginProfileSplash />;
   }
 
   if (user) {

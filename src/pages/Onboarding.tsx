@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Accessibility } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -7,6 +7,7 @@ import { env } from "../lib/env";
 import { useAuth } from "../contexts/AuthContext";
 import { GlobalHeader } from "../components/GlobalHeader";
 import { SplashScreen } from "../components/SplashScreen";
+import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
 import { isAdultFromBirthIso } from "../lib/ageGate";
 import {
   mergeOptionalProfileFields,
@@ -1059,8 +1060,8 @@ export default function Onboarding() {
     navigate("/auth", { replace: true });
   }, [user?.id, authLoading, isAuthInitialized, navigate]);
 
-  /** `profile_completed` (AuthContext) : ne pas conserver un compte déjà onboardé sur cet écran. */
-  useEffect(() => {
+  /** Profil déjà complet : purge cache onboarding ; la navigation est synchrone via `<Navigate />` sous le guard de rendu. */
+  useLayoutEffect(() => {
     if (!isAuthInitialized || authLoading) return;
     if (isProfileLoading) return;
     if (!user?.id) return;
@@ -1081,14 +1082,12 @@ export default function Onboarding() {
       });
     }
     clearOnboardingUiLocalCache();
-    navigate("/discover", { replace: true });
   }, [
     authLoading,
     isAuthInitialized,
     isProfileComplete,
     isProfileLoading,
     loading,
-    navigate,
     profile,
     user?.id,
   ]);
@@ -1224,6 +1223,23 @@ export default function Onboarding() {
 
   if (authLoading) {
     return <SplashScreen />;
+  }
+
+  if (user?.id && isProfileLoading) {
+    return <PostLoginProfileSplash />;
+  }
+
+  if (
+    isAuthInitialized &&
+    !authLoading &&
+    user?.id &&
+    !isProfileLoading &&
+    !loading &&
+    !onboardingSubmitInFlightRef.current &&
+    isProfileComplete &&
+    profile?.id === user.id
+  ) {
+    return <Navigate to="/discover" replace />;
   }
 
   const onboardingPreferredAgeDraftOk = (() => {

@@ -1,6 +1,7 @@
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { SplashScreen } from "./SplashScreen";
+import { PostLoginProfileSplash } from "./PostLoginProfileSplash";
 import WelcomeSPLove from "../pages/WelcomeSPLove";
 
 /**
@@ -13,7 +14,7 @@ export function PublicRootEntry() {
     return <SplashScreen />;
   }
   if (session?.user?.id && isProfileLoading) {
-    return <SplashScreen />;
+    return <PostLoginProfileSplash />;
   }
   if (user?.id && isProfileComplete) {
     return <Navigate to="/discover" replace />;

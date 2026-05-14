@@ -12,6 +12,7 @@ import {
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
+import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
 import { ReportModal } from "../components/ReportModal";
 import { ReportPhotoModal } from "../components/ReportPhotoModal";
 import { BLOCK_PROFILE_CONFIRM, BLOCK_PROFILE_LINK_LABEL } from "../constants/copy";
@@ -2932,19 +2933,7 @@ export default function Discover() {
   ]);
 
   if (!authLoading && user?.id && isProfileLoading) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col bg-app-bg font-sans">
-        <main
-          className="mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col px-3 pb-24 pt-3"
-          role="status"
-          aria-live="polite"
-          aria-busy="true"
-          aria-label={t("loading")}
-        >
-          <DiscoverProfileCardSkeleton immersive />
-        </main>
-      </div>
-    );
+    return <PostLoginProfileSplash />;
   }
 
   return (

@@ -1,6 +1,7 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { SplashScreen } from "./SplashScreen";
+import { PostLoginProfileSplash } from "./PostLoginProfileSplash";
 
 type Props = {
   children: React.ReactNode;
@@ -85,7 +86,7 @@ export function ProtectedRoute({ children }: Props) {
         redirect_reason: "show_splash_profile_loading",
       });
     }
-    return <SplashScreen />;
+    return <PostLoginProfileSplash />;
   }
 
   // Stable failure state: avoid /onboarding redirect loops when profile fetch returns null.

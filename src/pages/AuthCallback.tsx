@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { SplashScreen } from "../components/SplashScreen";
+import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
@@ -472,7 +472,7 @@ export default function AuthCallback() {
 
   return (
     <div className="relative min-h-screen w-full" style={{ backgroundColor: "#0B0B0F" }}>
-      <SplashScreen />
+      <PostLoginProfileSplash />
       <DevDebugPanel debug={debug} />
     </div>
   );

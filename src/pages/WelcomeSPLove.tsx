@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Bike, CircleDot, Footprints, Mountain, Waves } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
 import { APP_BORDER, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { useTranslation } from "../i18n/useTranslation";
 import welcomeLogoMark from "../assets/welcome/splove-mark.png";
@@ -203,6 +204,7 @@ export default function WelcomeSPLove() {
       className="relative min-h-[100dvh] w-full overflow-hidden"
       style={{ backgroundColor: "#050509", color: textMain }}
     >
+      {user?.id && isProfileLoading ? <PostLoginProfileSplash /> : null}
       <img
         src={WELCOME_BG_IMAGE}
         alt=""
