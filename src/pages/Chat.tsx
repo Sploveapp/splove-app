@@ -1180,6 +1180,7 @@ export default function Chat() {
   const chatTimeline = useMemo((): ChatTimelineItem[] => {
     const cid = conversationId ?? "";
     const latestProposalId = sortedProposalsDesc[0]?.id ?? null;
+    const canonicalActiveId = pendingProposal?.id ?? null;
     const linkedIds = new Set<string>();
     const fromMessages: ChatTimelineItem[] = chatMessages.map((msg) => {
       const createdMs = parseCreatedMs(msg.created_at);
@@ -1192,12 +1193,33 @@ export default function Chat() {
         if (!proposal) {
           return { kind: "message" as const, sortKey, createdMs, message: msg };
         }
+        const isActiveSlot = isPendingProposalStatus(proposal.status);
+        const staleExtraActive =
+          canonicalActiveId != null && isActiveSlot && proposal.id !== canonicalActiveId;
+        const duplicateOfHeaderCard =
+          latestProposal != null &&
+          latestProposal.id === proposal.id &&
+          isPendingProposalStatus(latestProposal.status);
+        if (staleExtraActive || duplicateOfHeaderCard) {
+          return { kind: "message" as const, sortKey, createdMs, message: msg };
+        }
         return { kind: "proposal" as const, sortKey, createdMs, proposal };
       }
       return { kind: "message" as const, sortKey, createdMs, message: msg };
     });
     const orphanProposals: ChatTimelineItem[] = proposals
-      .filter((p) => !linkedIds.has(p.id) && (!latestProposalId || p.id === latestProposalId))
+      .filter((p) => {
+        if (linkedIds.has(p.id)) return false;
+        if (latestProposalId && p.id !== latestProposalId) return false;
+        if (
+          canonicalActiveId &&
+          isPendingProposalStatus(p.status ?? "") &&
+          p.id !== canonicalActiveId
+        ) {
+          return false;
+        }
+        return true;
+      })
       .map((p) => ({
         kind: "proposal" as const,
         sortKey: `p:${p.id}`,
@@ -1211,7 +1233,15 @@ export default function Chat() {
       return a.sortKey.localeCompare(b.sortKey);
     });
     return items;
-  }, [chatMessages, proposals, proposalsById, conversationId, sortedProposalsDesc]);
+  }, [
+    chatMessages,
+    proposals,
+    proposalsById,
+    conversationId,
+    sortedProposalsDesc,
+    pendingProposal?.id,
+    latestProposal,
+  ]);
 
   async function sendActivity(payload: ActivityPayload, replaceProposalId: string | null = null) {
     if (!user?.id || !conversationId || !chatMatchId) throw new Error("chat_error_not_connected");
