@@ -49,6 +49,19 @@ function userFacingError(
   message: string,
 ): string {
   if (message === SAFETY_CONTENT_REFUSAL) return t("safety_content_refusal");
+
+  const low = message.toLowerCase();
+
+  if (
+    low.includes("23505") ||
+    low.includes("uniq_pending_per_conversation") ||
+    low.includes("duplicate key") ||
+    low.includes("cannot coerce") ||
+    low.includes("pgrst116")
+  ) {
+    return t("chat_double_slot_waiting");
+  }
+
   if (
     message.startsWith("chat_") ||
     message.startsWith("proposal_") ||
@@ -56,6 +69,7 @@ function userFacingError(
   ) {
     return t(message);
   }
+
   return message;
 }
 import { canUserSendChatTextMessage } from "../lib/chatFirstMessagePolicy";

@@ -151,13 +151,35 @@ export function ActivityProposalModal({
       onClose();
     } catch (err) {
       console.error("[ActivityProposalModal] submit failed:", err);
+
       const m = err instanceof Error ? err.message : "";
-      if (!m) setError(t("activity_modal_err_send"));
-      else if (m === SAFETY_CONTENT_REFUSAL || m === "safety_content_refusal")
+      const low = m.toLowerCase();
+
+      if (!m) {
+        setError(t("activity_modal_err_send"));
+      } else if (
+        m === SAFETY_CONTENT_REFUSAL ||
+        m === "safety_content_refusal"
+      ) {
         setError(t("safety_content_refusal"));
-      else if (m.startsWith("chat_") || m.startsWith("proposal_") || m.startsWith("safety_"))
+      } else if (
+        m === "chat_double_slot_waiting" ||
+        low.includes("23505") ||
+        low.includes("uniq_pending_per_conversation") ||
+        low.includes("duplicate key") ||
+        low.includes("cannot coerce") ||
+        low.includes("pgrst116")
+      ) {
+        setError(t("chat_double_slot_waiting"));
+      } else if (
+        m.startsWith("chat_") ||
+        m.startsWith("proposal_") ||
+        m.startsWith("safety_")
+      ) {
         setError(t(m));
-      else setError(m);
+      } else {
+        setError(m);
+      }
     } finally {
       setSending(false);
     }
