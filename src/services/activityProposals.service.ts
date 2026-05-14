@@ -34,6 +34,33 @@ function defaultExpiryIso(): string {
   return new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 }
 
+function isActivityProposalUniqueOrRowShapeError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const msg = (error.message ?? "").toLowerCase();
+  return (
+    error.code === "23505" ||
+    msg.includes("uniq_pending_per_conversation") ||
+    msg.includes("duplicate key") ||
+    msg.includes("cannot coerce") ||
+    msg.includes("pgrst116")
+  );
+}
+
+/** Données historiques incohérentes : plusieurs pending/proposed — n’en exposer qu’une (la plus récente, liste déjà triée desc). */
+function dedupeSingleActivePendingOrProposed(rows: ActivityProposal[]): ActivityProposal[] {
+  let activeSeen = false;
+  const out: ActivityProposal[] = [];
+  for (const row of rows) {
+    const st = (row.status ?? "").trim().toLowerCase();
+    if (st === "pending" || st === "proposed") {
+      if (activeSeen) continue;
+      activeSeen = true;
+    }
+    out.push(row);
+  }
+  return out;
+}
+
 async function verifyCoreTablesReady(): Promise<boolean> {
   const checks = await Promise.all([
     supabase.from("profiles").select("id").limit(1),
@@ -200,8 +227,11 @@ export async function listConversationProposals(conversationId: string): Promise
     .select(ACTIVITY_PROPOSAL_SELECT)
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message || "Impossible de charger les propositions.");
-  return (data ?? []) as ActivityProposal[];
+  if (isActivityProposalUniqueOrRowShapeError(error)) {
+    throw new Error("chat_double_slot_waiting");
+  }
+  if (error) throw new Error("chat_error_generic");
+  return dedupeSingleActivePendingOrProposed((data ?? []) as ActivityProposal[]);
 }
 
 export async function getLatestProposalForConversation(conversationId: string): Promise<ActivityProposal | null> {
@@ -212,7 +242,10 @@ export async function getLatestProposalForConversation(conversationId: string): 
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error) throw new Error(error.message || "Impossible de charger la dernière proposition.");
+  if (isActivityProposalUniqueOrRowShapeError(error)) {
+    throw new Error("chat_double_slot_waiting");
+  }
+  if (error) throw new Error("chat_error_generic");
   return (data as ActivityProposal | null) ?? null;
 }
 
@@ -225,6 +258,18 @@ export async function createConversationProposal(input: {
   location: string | null;
   note: string | null;
 }): Promise<ActivityProposal> {
+  const { data: existingPending } = await supabase
+    .from("activity_proposals")
+    .select("id")
+    .eq("conversation_id", input.conversationId)
+    .in("status", ["pending", "proposed"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if ((existingPending as { id?: string } | null)?.id) {
+    throw new Error("chat_double_slot_waiting");
+  }
+
   const { data, error } = await supabase
     .from("activity_proposals")
     .insert({
@@ -239,8 +284,12 @@ export async function createConversationProposal(input: {
       expires_at: defaultExpiryIso(),
     })
     .select(ACTIVITY_PROPOSAL_SELECT)
-    .single();
-  if (error) throw new Error(error.message || "Création de proposition impossible.");
+    .maybeSingle();
+  if (isActivityProposalUniqueOrRowShapeError(error)) {
+    throw new Error("chat_double_slot_waiting");
+  }
+  if (error) throw new Error("chat_error_generic");
+  if (!data) throw new Error("chat_double_slot_waiting");
   return data as ActivityProposal;
 }
 
@@ -251,8 +300,12 @@ export async function acceptConversationProposal(proposalId: string): Promise<Ac
     .eq("id", proposalId)
     .eq("status", "pending")
     .select(ACTIVITY_PROPOSAL_SELECT)
-    .single();
-  if (error) throw new Error(error.message || "Acceptation impossible.");
+    .maybeSingle();
+  if (isActivityProposalUniqueOrRowShapeError(error)) {
+    throw new Error("chat_double_slot_waiting");
+  }
+  if (error) throw new Error("chat_error_generic");
+  if (!data) throw new Error("chat_error_proposal_not_found");
   return data as ActivityProposal;
 }
 
@@ -263,8 +316,12 @@ export async function declineConversationProposal(proposalId: string): Promise<A
     .eq("id", proposalId)
     .eq("status", "pending")
     .select(ACTIVITY_PROPOSAL_SELECT)
-    .single();
-  if (error) throw new Error(error.message || "Refus impossible.");
+    .maybeSingle();
+  if (isActivityProposalUniqueOrRowShapeError(error)) {
+    throw new Error("chat_double_slot_waiting");
+  }
+  if (error) throw new Error("chat_error_generic");
+  if (!data) throw new Error("chat_error_proposal_not_found");
   return data as ActivityProposal;
 }
 
@@ -275,8 +332,12 @@ export async function cancelConversationProposal(proposalId: string): Promise<Ac
     .eq("id", proposalId)
     .eq("status", "pending")
     .select(ACTIVITY_PROPOSAL_SELECT)
-    .single();
-  if (error) throw new Error(error.message || "Annulation impossible.");
+    .maybeSingle();
+  if (isActivityProposalUniqueOrRowShapeError(error)) {
+    throw new Error("chat_double_slot_waiting");
+  }
+  if (error) throw new Error("chat_error_generic");
+  if (!data) throw new Error("chat_error_proposal_not_found");
   return data as ActivityProposal;
 }
 
@@ -291,12 +352,18 @@ export async function requestConversationProposalReschedule(input: {
   note: string | null;
 }): Promise<ActivityProposal> {
   const now = new Date().toISOString();
-  const { error: markError } = await supabase
+  const { data: marked, error: markError } = await supabase
     .from("activity_proposals")
     .update({ status: "reschedule_requested", responded_at: now })
     .eq("id", input.proposalId)
-    .eq("status", "pending");
-  if (markError) throw new Error(markError.message || "Replanification impossible.");
+    .eq("status", "pending")
+    .select("id")
+    .maybeSingle();
+  if (isActivityProposalUniqueOrRowShapeError(markError)) {
+    throw new Error("chat_double_slot_waiting");
+  }
+  if (markError) throw new Error("chat_error_generic");
+  if (!marked) throw new Error("chat_double_slot_waiting");
 
   return createConversationProposal({
     conversationId: input.conversationId,
