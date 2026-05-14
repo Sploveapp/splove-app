@@ -77,10 +77,10 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "delete_messages_failed" }, 500);
   }
 
-  const { error: matchesError } = await admin
-    .from("matches")
-    .delete()
-    .or(`user_a.eq.${userId},user_b.eq.${userId}`);
+  // Deux deletes : évite les soucis de parsing `.or()` PostgREST avec certains UUID / proxies.
+  const { error: matchErrA } = await admin.from("matches").delete().eq("user_a", userId);
+  const { error: matchErrB } = await admin.from("matches").delete().eq("user_b", userId);
+  const matchesError = matchErrA ?? matchErrB;
   if (matchesError) {
     console.error("[delete-my-account] matches delete failed", matchesError);
     return jsonResponse({ error: "delete_matches_failed" }, 500);

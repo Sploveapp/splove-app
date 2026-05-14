@@ -154,6 +154,13 @@ const en = {
   delete_input_error: "Type SUPPRIMER exactly to confirm.",
   session_expired_relogin: "Session expired. Please log in again.",
   delete_unavailable: "Deletion is unavailable right now.",
+  delete_error_service:
+    "Deletion couldn’t complete on the server (Edge Function or service role key missing).",
+  delete_error_cleanup:
+    "Some data tied to your account couldn’t be removed. Try again later or contact support.",
+  delete_error_function:
+    "The deletion service isn’t reachable. Make sure the « delete-my-account » Edge Function is deployed on your Supabase project.",
+  delete_error_network: "Connection issue. Please try again in a moment.",
   discovery_unavailable: "Discover unavailable",
   interest_sent: "Interest sent",
   interest_sent_desc: "If they reply, move quickly to a time slot.",

@@ -15,6 +15,41 @@ import {
 import { useTranslation } from "../i18n/useTranslation";
 const CONFIRM_WORD = "SUPPRIMER";
 
+function mapDeleteAccountFailureMessage(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  payload: { ok?: boolean; error?: string } | null,
+  invokeError: unknown,
+): string {
+  const code = payload?.error?.trim();
+  if (code === "missing_authorization" || code === "unauthorized") {
+    return t("session_expired_relogin");
+  }
+  if (code === "confirmation_invalid") return t("delete_input_error");
+  if (code === "server_misconfigured") return t("delete_error_service");
+  if (
+    code === "delete_messages_failed" ||
+    code === "delete_matches_failed" ||
+    code === "delete_profile_failed" ||
+    code === "delete_auth_user_failed"
+  ) {
+    return t("delete_error_cleanup");
+  }
+  const ie = invokeError as { message?: string } | undefined;
+  const msg = (ie?.message ?? "").toLowerCase();
+  if (
+    msg.includes("404") ||
+    msg.includes("not found") ||
+    msg.includes("non-2xx") ||
+    msg.includes("edge function")
+  ) {
+    return t("delete_error_function");
+  }
+  if (msg.includes("failed to fetch") || msg.includes("network")) {
+    return t("delete_error_network");
+  }
+  return t("delete_unavailable");
+}
+
 export default function AccountSettings() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -83,17 +118,32 @@ export default function AccountSettings() {
     setDeleteError(null);
     setDeleteLoading(true);
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        setDeleteError(t("session_expired_relogin"));
+        return;
+      }
+
       const { data, error } = await supabase.functions.invoke<{ ok?: boolean; error?: string }>(
         "delete-my-account",
         {
           body: { confirmPhrase: CONFIRM_WORD },
+          headers: { Authorization: `Bearer ${token}` },
         },
       );
-      if (error || data?.ok !== true) {
-        if (import.meta.env.DEV) {
-          console.error("[account] delete-my-account failed", error ?? data?.error);
-        }
-        setDeleteError(t("delete_unavailable"));
+
+      const payload = data ?? null;
+      const ok = Boolean(!error && payload?.ok === true);
+
+      console.warn("[account] delete-my-account result", {
+        ok,
+        serverError: payload?.error ?? null,
+        invokeMessage: error?.message ?? null,
+      });
+
+      if (!ok) {
+        setDeleteError(mapDeleteAccountFailureMessage(t, payload, error));
         return;
       }
       setDeleteModalOpen(false);
@@ -101,10 +151,8 @@ export default function AccountSettings() {
       await signOut({ scope: "local" });
       navigate("/auth", { replace: true });
     } catch (error) {
-      if (import.meta.env.DEV) {
-        console.error("[account] delete-my-account failed", error);
-      }
-      setDeleteError(t("delete_unavailable"));
+      console.warn("[account] delete-my-account exception", error);
+      setDeleteError(mapDeleteAccountFailureMessage(t, null, error));
     } finally {
       setDeleteLoading(false);
     }

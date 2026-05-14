@@ -157,6 +157,13 @@ const fr = {
   delete_input_error: "Tape exactement SUPPRIMER pour confirmer.",
   session_expired_relogin: "Session expirée. Reconnecte-toi.",
   delete_unavailable: "Suppression impossible pour le moment.",
+  delete_error_service:
+    "La suppression ne peut pas aboutir côté serveur (Edge Function ou clé service manquante).",
+  delete_error_cleanup:
+    "Certaines données liées au compte n’ont pas pu être effacées. Réessaie plus tard ou contacte le support.",
+  delete_error_function:
+    "Le service de suppression n’est pas joignable. Vérifie que l’Edge Function « delete-my-account » est déployée sur ton projet Supabase.",
+  delete_error_network: "Problème de connexion. Réessaie dans un instant.",
   discovery_unavailable: "Découverte indisponible",
   interest_sent: "Intérêt envoyé",
   interest_sent_desc: "S'ils répondent, passez vite à un créneau — le mouvement, c'est le bon fil.",
