@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, Link, useSearchParams } from "react-router-dom";
+import { Navigate, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { oauthRedirectUrl } from "../lib/authRedirect";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
@@ -14,6 +14,11 @@ import { clearOnboardingUiLocalCache } from "../lib/onboardingUiLocalCache";
 
 function signupModeFromSearchParams(sp: URLSearchParams): boolean {
   return sp.get("signup") === "1" || sp.get("mode") === "signup";
+}
+
+/** Welcome « Continuer avec email » : formulaire direct sans palier Apple/Google/Email. */
+function emailFormDirectFromSearchParams(sp: URLSearchParams): boolean {
+  return sp.get("email") === "1";
 }
 
 function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
@@ -37,6 +42,7 @@ function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
 
 export default function Auth() {
   const { t, language, setLanguage } = useTranslation();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user, profile, isProfileComplete, isLoading, isAuthInitialized, isProfileLoading } = useAuth();
   const [email, setEmail] = useState("");
@@ -81,6 +87,9 @@ export default function Auth() {
     if (!user?.id || !isProfileComplete || isProfileLoading) return;
     clearOnboardingUiLocalCache();
   }, [user?.id, isProfileComplete, isProfileLoading]);
+
+  const emailDirect = emailFormDirectFromSearchParams(searchParams);
+  const showEmailFormBlock = showEmailForm || emailDirect;
 
   if (!isAuthInitialized || isLoading) {
     return <SplashScreen />;
@@ -367,58 +376,62 @@ export default function Auth() {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <button
-            type="button"
-            className="opacity-60 cursor-pointer spv-auth-tactile"
-            style={{
-              ...btnOAuth,
-              opacity: loading || oauthLoading ? 0.5 : 0.6,
-            }}
-            disabled={!!oauthLoading || loading}
-            onClick={handleAppleComingSoon}
-          >
-            {t("continue_with_apple")}
-          </button>
-          {appleNotice && (
-            <div
-              role="status"
-              aria-live="polite"
-              className="mt-3 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white shadow-lg backdrop-blur"
-            >
-              {t("auth_apple_coming_soon_line_1")}
-              <br />
-              <span className="text-white/70">{t("auth_apple_coming_soon_line_2")}</span>
-            </div>
-          )}
-          <button
-            type="button"
-            className="spv-auth-tactile"
-            style={btnOAuth}
-            disabled={!!oauthLoading || loading}
-            onClick={() => void signInWithGoogle()}
-          >
-            {oauthLoading === "google" ? `${t("loading")}` : t("continue_with_google")}
-          </button>
+          {!emailDirect ? (
+            <>
+              <button
+                type="button"
+                className="opacity-60 cursor-pointer spv-auth-tactile"
+                style={{
+                  ...btnOAuth,
+                  opacity: loading || oauthLoading ? 0.5 : 0.6,
+                }}
+                disabled={!!oauthLoading || loading}
+                onClick={handleAppleComingSoon}
+              >
+                {t("continue_with_apple")}
+              </button>
+              {appleNotice && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="mt-3 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white shadow-lg backdrop-blur"
+                >
+                  {t("auth_apple_coming_soon_line_1")}
+                  <br />
+                  <span className="text-white/70">{t("auth_apple_coming_soon_line_2")}</span>
+                </div>
+              )}
+              <button
+                type="button"
+                className="spv-auth-tactile"
+                style={btnOAuth}
+                disabled={!!oauthLoading || loading}
+                onClick={() => void signInWithGoogle()}
+              >
+                {oauthLoading === "google" ? `${t("loading")}` : t("continue_with_google")}
+              </button>
 
-          <button
-            type="button"
-            className="spv-auth-tactile"
-            onClick={() => {
-              setShowEmailForm((v) => !v);
-              setMessage(null);
-            }}
-            style={{
-              ...btnOAuth,
-              marginTop: 2,
-              background: "rgba(20, 20, 24, 0.45)",
-              color: "rgba(255,255,255,0.85)",
-              fontWeight: 600,
-            }}
-          >
-            {showEmailForm ? t("hide_email") : t("continue_with_email")}
-          </button>
+              <button
+                type="button"
+                className="spv-auth-tactile"
+                onClick={() => {
+                  setShowEmailForm((v) => !v);
+                  setMessage(null);
+                }}
+                style={{
+                  ...btnOAuth,
+                  marginTop: 2,
+                  background: "rgba(20, 20, 24, 0.45)",
+                  color: "rgba(255,255,255,0.85)",
+                  fontWeight: 600,
+                }}
+              >
+                {showEmailForm ? t("hide_email") : t("continue_with_email")}
+              </button>
+            </>
+          ) : null}
 
-          {showEmailForm ? (
+          {showEmailFormBlock ? (
             <form
               onSubmit={handleSubmit}
               style={{
@@ -537,6 +550,32 @@ export default function Auth() {
                 {isSignUp ? t("auth_toggle_signin") : t("auth_toggle_signup")}
               </button>
             </form>
+          ) : null}
+
+          {emailDirect ? (
+            <button
+              type="button"
+              className="spv-auth-tactile self-center"
+              onClick={() => {
+                navigate("/auth", { replace: true });
+                setShowEmailForm(false);
+                setMessage(null);
+              }}
+              style={{
+                marginTop: 4,
+                padding: "10px 14px",
+                border: "none",
+                background: "transparent",
+                color: BRAND_BG,
+                fontSize: "14px",
+                fontWeight: 600,
+                cursor: "pointer",
+                textDecoration: "underline",
+                textUnderlineOffset: "3px",
+              }}
+            >
+              {t("auth_email_other_options")}
+            </button>
           ) : null}
         </div>
 

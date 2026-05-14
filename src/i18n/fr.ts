@@ -56,6 +56,7 @@ const fr = {
   continue_with_apple: "Continuer avec Apple",
   continue_with_email: "Continuer avec email",
   hide_email: "Masquer email",
+  auth_email_other_options: "Google, Apple ou autre",
   create_account: "Créer mon compte",
   auth_hero_title_line_1: "Swipe ailleurs.",
   auth_hero_title_line_2: "Rencontre ici.",

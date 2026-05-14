@@ -179,7 +179,7 @@ export default function WelcomeSPLove() {
 
   function goEmailAuth() {
     if (!navigationReady) return;
-    navigate("/auth", { replace: false });
+    navigate("/auth?email=1", { replace: false });
   }
 
   const langPill = (lang: "fr" | "en") =>
