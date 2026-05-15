@@ -34,8 +34,8 @@ import {
   declineConversationProposal,
   getLatestProposalForConversation,
   listConversationProposals,
-  requestConversationProposalReschedule,
 } from "../services/activityProposals.service";
+import { createCounterProposal } from "../lib/messages/activityProposalMutations";
 import {
   assertProposalActionAllowed,
   buildProposalRulesContext,
@@ -1372,16 +1372,23 @@ export default function Chat() {
     setProposalActionInFlightId(lockId);
     try {
       if (replaceProposalId) {
-        await requestConversationProposalReschedule({
-          proposalId: replaceProposalId,
+        if (import.meta.env.DEV) {
+          console.log("[Chat] sendActivity counter via RPC", { replaceProposalId });
+        }
+        const res = await createCounterProposal(supabase, {
+          replaceProposalId,
           conversationId,
-          proposerId: user.id,
-          matchId: chatMatchId,
+          currentUserId: user.id,
           sport: payload.sport,
           timeSlot: timeLabel,
           location: loc,
           note: payload.message.trim() || null,
+          scheduledAt: scheduledAtIso,
         });
+        if ("error" in res) {
+          console.warn("[Chat] createCounterProposal failed", res.error);
+          throw new Error(res.error.code === "rpc" ? "chat_error_generic" : res.error.message);
+        }
       } else {
         await createConversationProposal({
           conversationId,
@@ -1394,11 +1401,19 @@ export default function Chat() {
         });
       }
 
+      setProposalOutcomeNotice(null);
       await reloadProposals(conversationId);
       await reloadChatMessages(conversationId);
     } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
       if (import.meta.env.DEV) {
-        console.warn("[Chat] sendActivity error", e);
+        console.warn("[Chat] sendActivity error", msg, e);
+      }
+      if (replaceProposalId && msg === "chat_double_slot_waiting") {
+        return;
+      }
+      if (msg && msg !== "chat_error_proposal_not_found") {
+        throw e;
       }
     } finally {
       setProposalActionInFlightId(null);

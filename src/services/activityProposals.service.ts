@@ -257,32 +257,43 @@ export async function createConversationProposal(input: {
   timeSlot: string;
   location: string | null;
   note: string | null;
+  /** Contre-proposition : l’ancienne ligne est déjà passée en `countered` — ne pas bloquer sur le pending existant. */
+  replacesProposalId?: string | null;
 }): Promise<ActivityProposal> {
-  const { data: existingPending } = await supabase
-    .from("activity_proposals")
-    .select("id")
-    .eq("conversation_id", input.conversationId)
-    .in("status", ["pending", "proposed"])
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if ((existingPending as { id?: string } | null)?.id) {
-    throw new Error("chat_double_slot_waiting");
+  const isCounterInsert = Boolean(input.replacesProposalId?.trim());
+
+  if (!isCounterInsert) {
+    const { data: existingPending } = await supabase
+      .from("activity_proposals")
+      .select("id")
+      .eq("conversation_id", input.conversationId)
+      .in("status", ["pending", "proposed"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if ((existingPending as { id?: string } | null)?.id) {
+      throw new Error("chat_double_slot_waiting");
+    }
+  }
+
+  const insertRow: Record<string, unknown> = {
+    conversation_id: input.conversationId,
+    proposer_id: input.proposerId,
+    match_id: input.matchId,
+    sport: input.sport.trim(),
+    time_slot: input.timeSlot.trim(),
+    location: input.location?.trim() || null,
+    note: input.note?.trim() || null,
+    status: "pending",
+    expires_at: defaultExpiryIso(),
+  };
+  if (isCounterInsert) {
+    insertRow.counter_of = input.replacesProposalId;
   }
 
   const { data, error } = await supabase
     .from("activity_proposals")
-    .insert({
-      conversation_id: input.conversationId,
-      proposer_id: input.proposerId,
-      match_id: input.matchId,
-      sport: input.sport.trim(),
-      time_slot: input.timeSlot.trim(),
-      location: input.location?.trim() || null,
-      note: input.note?.trim() || null,
-      status: "pending",
-      expires_at: defaultExpiryIso(),
-    })
+    .insert(insertRow)
     .select(ACTIVITY_PROPOSAL_SELECT)
     .maybeSingle();
   if (isActivityProposalUniqueOrRowShapeError(error)) {
@@ -354,16 +365,23 @@ export async function requestConversationProposalReschedule(input: {
   const now = new Date().toISOString();
   const { data: marked, error: markError } = await supabase
     .from("activity_proposals")
-    .update({ status: "reschedule_requested", responded_at: now })
+    .update({ status: "countered", responded_at: now })
     .eq("id", input.proposalId)
-    .eq("status", "pending")
+    .in("status", ["pending", "proposed"])
     .select("id")
     .maybeSingle();
-  if (isActivityProposalUniqueOrRowShapeError(markError)) {
-    throw new Error("chat_double_slot_waiting");
+  if (markError) {
+    console.warn("[activityProposals] counter mark previous failed", markError);
+    throw new Error("chat_error_generic");
   }
-  if (markError) throw new Error("chat_error_generic");
-  if (!marked) throw new Error("chat_double_slot_waiting");
+  if (!marked) {
+    console.warn("[activityProposals] counter: no pending row to supersede", input.proposalId);
+    throw new Error("chat_error_proposal_not_found");
+  }
+
+  if (import.meta.env.DEV) {
+    console.log("[activityProposals] counter: previous marked countered", input.proposalId);
+  }
 
   return createConversationProposal({
     conversationId: input.conversationId,
@@ -373,6 +391,7 @@ export async function requestConversationProposalReschedule(input: {
     timeSlot: input.timeSlot,
     location: input.location,
     note: input.note,
+    replacesProposalId: input.proposalId,
   });
 }
 

@@ -195,7 +195,7 @@ export async function createCounterProposal(
   /** Pas de `p_scheduled_at` côté RPC sur les BDD alignées 051/052 — la date est portée par le message / métadonnées. */
   const { data, error } = await client.rpc("respond_to_activity_proposal", {
     p_proposal_id: args.replaceProposalId,
-    p_action: "reschedule_requested",
+    p_action: "countered",
     p_time_slot: args.timeSlot,
     p_location: args.location,
     p_note: args.note,
