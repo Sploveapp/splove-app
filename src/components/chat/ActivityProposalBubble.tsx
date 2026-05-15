@@ -18,6 +18,10 @@ export type ActivityProposalBubbleProps = {
   mine: boolean;
   /** Requête en cours sur une action proposition (toutes actions désactivées sur le fil). */
   proposalActionLocked: boolean;
+  /** Id proposition en cours de mutation (spinner sur le bouton actif). */
+  proposalActionInFlightId?: string | null;
+  /** Action en cours sur cette carte (accept / decline / cancel). */
+  proposalMutationAction?: "accept" | "decline" | "cancel" | null;
   onOpenDetail: () => void;
   onAccept: () => void;
   onDecline: () => void;
@@ -65,12 +69,15 @@ export function ActivityProposalBubble({
   pairBlocked,
   mine,
   proposalActionLocked,
+  proposalActionInFlightId = null,
+  proposalMutationAction = null,
   onOpenDetail,
   onAccept,
   onDecline,
   onCounter,
   onCancel,
 }: ActivityProposalBubbleProps) {
+  if (!p?.id) return null;
   const { t, language } = useTranslation();
   const dateLocale = language === "en" ? "en-GB" : "fr-FR";
   const ctx = buildProposalRulesContext({
@@ -96,6 +103,10 @@ export function ActivityProposalBubble({
 
   const shellDisabled = proposalActionLocked || pairBlocked;
   const btn = (allowed: boolean) => shellDisabled || !allowed;
+  const inFlightHere = proposalActionInFlightId === p.id;
+  const loadingAccept = inFlightHere && proposalMutationAction === "accept";
+  const loadingDecline = inFlightHere && proposalMutationAction === "decline";
+  const loadingCancel = inFlightHere && proposalMutationAction === "cancel";
 
   return (
     <div
@@ -172,7 +183,7 @@ export function ActivityProposalBubble({
               className="w-full rounded-xl py-2.5 text-[13px] font-bold shadow-sm transition hover:opacity-95 disabled:opacity-50"
               style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
             >
-              {t("activity_accept")}
+              {loadingAccept ? t("account_in_progress") : t("activity_accept")}
             </button>
             <button
               type="button"
@@ -180,7 +191,7 @@ export function ActivityProposalBubble({
               onClick={onDecline}
               className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border/40 disabled:opacity-50"
             >
-              {t("activity_decline")}
+              {loadingDecline ? t("account_in_progress") : t("activity_decline")}
             </button>
             <button
               type="button"
@@ -205,7 +216,7 @@ export function ActivityProposalBubble({
               onClick={onCancel}
               className="w-full rounded-xl border border-app-border bg-app-bg py-2.5 text-[13px] font-semibold text-app-text transition hover:bg-app-border disabled:opacity-50"
             >
-              {t("cancel")}
+              {loadingCancel ? t("account_in_progress") : t("cancel")}
             </button>
           </div>
         ) : null}

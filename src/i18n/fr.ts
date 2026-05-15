@@ -232,6 +232,9 @@ const fr = {
   chat_in_progress: "Echange en cours.",
   chat_propose_when_ready: "Proposez un créneau quand vous êtes prêts.",
   chat_activity_confirmed: "Activité confirmée",
+  chat_proposal_outcome_accepted: "✅ Activité confirmée",
+  chat_proposal_outcome_declined: "❌ Créneau refusé",
+  chat_proposal_outcome_cancelled: "⚪ Créneau annulé",
   rl_session_real_life_title: "Séance réelle",
   rl_session_density_hint:
     "Confirmez que vous y étiez tous les deux, puis terminez la séance. Ça garde Splove ancré sur du sport réel.",

@@ -62,6 +62,10 @@ function userFacingError(
     return t("chat_double_slot_waiting");
   }
 
+  if (message === "chat_error_proposal_not_found") {
+    return "";
+  }
+
   if (
     message.startsWith("chat_") ||
     message.startsWith("proposal_") ||
@@ -171,6 +175,31 @@ type TextMessageRow = {
 type ChatTimelineItem =
   | { kind: "message"; sortKey: string; createdMs: number; message: TextMessageRow }
   | { kind: "proposal"; sortKey: string; createdMs: number; proposal: ProposalRow };
+
+type ProposalMutationAction = "accept" | "decline" | "cancel" | "counter";
+
+type ProposalMutationState = {
+  proposalId: string;
+  action: ProposalMutationAction;
+  snapshot: ProposalRow;
+} | null;
+
+type ProposalOutcomeNotice = {
+  status: "accepted" | "declined" | "cancelled";
+} | null;
+
+function findProposalRowForAction(
+  proposalId: string,
+  proposals: ProposalRow[],
+  detail: ProposalRow | null,
+  mutation: ProposalMutationState,
+): ProposalRow | null {
+  const fromList = proposals.find((x) => x.id === proposalId);
+  if (fromList) return fromList;
+  if (detail?.id === proposalId) return detail;
+  if (mutation?.proposalId === proposalId) return mutation.snapshot;
+  return null;
+}
 
 type AvailabilitySlot = {
   user_id: string;
@@ -309,6 +338,8 @@ export default function Chat() {
   const [proposalDetail, setProposalDetail] = useState<ProposalRow | null>(null);
   /** Id message proposition concerné, ou `__create__` pendant création / contre-proposition. */
   const [proposalActionInFlightId, setProposalActionInFlightId] = useState<string | null>(null);
+  const [proposalMutation, setProposalMutation] = useState<ProposalMutationState>(null);
+  const [proposalOutcomeNotice, setProposalOutcomeNotice] = useState<ProposalOutcomeNotice>(null);
   /** Fin de fenêtre pour afficher « … est en train d’écrire » (partenaire uniquement). */
   const [partnerTypingUntil, setPartnerTypingUntil] = useState(0);
   /** Table `conversation_typing` parfois absente — désactive upserts + realtime après erreur schéma. */
@@ -1181,8 +1212,22 @@ export default function Chat() {
   const proposalsById = useMemo(() => {
     const m = new Map<string, ProposalRow>();
     for (const p of proposals) m.set(p.id, p);
+    if (proposalMutation) {
+      const cur = m.get(proposalMutation.proposalId);
+      m.set(proposalMutation.proposalId, { ...(cur ?? proposalMutation.snapshot), ...proposalMutation.snapshot });
+    }
     return m;
-  }, [proposals]);
+  }, [proposals, proposalMutation]);
+
+  const headerProposal = useMemo((): ProposalRow | null => {
+    if (latestProposal?.id && isPendingProposalStatus(latestProposal.status)) {
+      return proposalsById.get(latestProposal.id) ?? latestProposal;
+    }
+    if (proposalMutation && isPendingProposalStatus(proposalMutation.snapshot.status)) {
+      return proposalsById.get(proposalMutation.proposalId) ?? proposalMutation.snapshot;
+    }
+    return latestProposal;
+  }, [latestProposal, proposalMutation, proposalsById]);
 
   const proposalDetailActions = useMemo(() => {
     if (!proposalDetail || !user?.id) return null;
@@ -1292,14 +1337,22 @@ export default function Chat() {
     })();
     const loc = payload.place.trim() || t("place_to_define");
 
+    let counterPrev: ProposalRow | null = null;
     if (replaceProposalId) {
-      const prev = proposals.find((x) => x.id === replaceProposalId);
-      if (!prev) {
-        if (import.meta.env.DEV) console.debug("[Chat] sendActivity counter: proposal not found", replaceProposalId);
-        throw new Error("chat_error_proposal_not_found");
+      counterPrev = findProposalRowForAction(
+        replaceProposalId,
+        proposals,
+        proposalDetail,
+        proposalMutation,
+      );
+      if (!counterPrev?.id) {
+        if (import.meta.env.DEV) {
+          console.debug("[Chat] sendActivity counter: proposal not found", replaceProposalId);
+        }
+        return;
       }
       const ctx = buildProposalRulesContext({
-        proposal: prev,
+        proposal: counterPrev,
         currentUserId: user.id,
         conversationReady: Boolean(conversationId && user.id),
         pairBlocked,
@@ -1307,8 +1360,12 @@ export default function Chat() {
       const gate = assertProposalActionAllowed("counter", ctx);
       if (!gate.ok) {
         if (import.meta.env.DEV) console.debug("[Chat] sendActivity counter blocked", gate.reason);
-        throw new Error(gate.reason);
+        if (gate.reason !== "chat_error_proposal_not_found") {
+          throw new Error(gate.reason);
+        }
+        return;
       }
+      setProposalMutation({ proposalId: replaceProposalId, action: "counter", snapshot: counterPrev });
     }
 
     const lockId = replaceProposalId ?? "__create__";
@@ -1339,8 +1396,13 @@ export default function Chat() {
 
       await reloadProposals(conversationId);
       await reloadChatMessages(conversationId);
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.warn("[Chat] sendActivity error", e);
+      }
     } finally {
       setProposalActionInFlightId(null);
+      setProposalMutation(null);
     }
   }
 
@@ -1455,9 +1517,9 @@ export default function Chat() {
     if (!user?.id || !conversationId) return;
     if (proposalActionInFlightId !== null) return;
 
-    const p = proposals.find((x) => x.id === proposalId);
-    if (!p) {
-      setMessagePolicyError(t("chat_error_proposal_not_found"));
+    const p = findProposalRowForAction(proposalId, proposals, proposalDetail, proposalMutation);
+    if (!p?.id) {
+      if (import.meta.env.DEV) console.debug("[Chat] respondToProposal skip: no row", proposalId);
       return;
     }
     const ctx = buildProposalRulesContext({
@@ -1470,11 +1532,22 @@ export default function Chat() {
     const gate = assertProposalActionAllowed(action, ctx);
     if (!gate.ok) {
       if (import.meta.env.DEV) console.debug("[Chat] respondToProposal blocked", gate.reason);
-      setMessagePolicyError(t(gate.reason));
+      if (gate.reason !== "chat_error_proposal_not_found") {
+        setMessagePolicyError(t(gate.reason));
+      }
       return;
     }
 
+    const mutationAction: ProposalMutationAction =
+      status === "accepted" ? "accept" : status === "declined" ? "decline" : "cancel";
+    const respondedAt = new Date().toISOString();
+    const optimistic: ProposalRow = { ...p, status, responded_at: respondedAt };
+
+    setProposalMutation({ proposalId, action: mutationAction, snapshot: p });
     setProposalActionInFlightId(proposalId);
+    setProposals((prev) => prev.map((row) => (row.id === proposalId ? optimistic : row)));
+    if (proposalDetail?.id === proposalId) setProposalDetail(optimistic);
+
     try {
       if (status === "accepted") {
         await acceptConversationProposal(proposalId);
@@ -1483,15 +1556,29 @@ export default function Chat() {
       } else {
         await cancelConversationProposal(proposalId);
       }
+      setProposalOutcomeNotice({ status });
       setProposalDetail(null);
       setMessagePolicyError(null);
       await reloadProposals(conversationId);
       await reloadChatMessages(conversationId);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : t("chat_error_generic");
-      setMessagePolicyError(userFacingError(t, msg));
+      const msg = e instanceof Error ? e.message : "";
+      if (import.meta.env.DEV) console.warn("[Chat] respondToProposal error", msg);
+      if (msg && msg !== "chat_error_proposal_not_found") {
+        const friendly = userFacingError(t, msg).trim();
+        if (friendly.length > 0) {
+          setMessagePolicyError(friendly);
+        }
+      }
+      try {
+        await reloadProposals(conversationId);
+        await reloadChatMessages(conversationId);
+      } catch {
+        /* resync best-effort */
+      }
     } finally {
       setProposalActionInFlightId(null);
+      setProposalMutation(null);
     }
   }
 
@@ -1929,30 +2016,47 @@ export default function Chat() {
           </div>
         ) : null}
 
-        {latestProposal ? (
+        {proposalOutcomeNotice ? (
+          <div className="mb-3 rounded-2xl border border-app-border/90 bg-app-card px-4 py-3 text-center text-[13px] font-semibold leading-snug text-app-text shadow-sm">
+            {proposalOutcomeNotice.status === "accepted"
+              ? t("chat_proposal_outcome_accepted")
+              : proposalOutcomeNotice.status === "declined"
+                ? t("chat_proposal_outcome_declined")
+                : t("chat_proposal_outcome_cancelled")}
+          </div>
+        ) : null}
+
+        {headerProposal?.id && isPendingProposalStatus(headerProposal.status) ? (
           <div className="mb-3">
             <ProposalCard
-              proposal={latestProposal}
+              proposal={headerProposal}
               currentUserId={user?.id}
               conversationReady={Boolean(conversationId && user?.id)}
               pairBlocked={pairBlocked}
-              mine={latestProposal.proposer_id === user?.id}
+              mine={headerProposal.proposer_id === user?.id}
               proposalActionLocked={proposalActionBusy}
-              onOpenDetail={() => setProposalDetail(latestProposal)}
-              onAccept={() => void respondToProposal(latestProposal.id, "accepted")}
-              onDecline={() => void respondToProposal(latestProposal.id, "declined")}
+              proposalActionInFlightId={proposalActionInFlightId}
+              proposalMutationAction={
+                proposalMutation?.proposalId === headerProposal.id &&
+                proposalMutation.action !== "counter"
+                  ? proposalMutation.action
+                  : null
+              }
+              onOpenDetail={() => setProposalDetail(headerProposal)}
+              onAccept={() => void respondToProposal(headerProposal.id, "accepted")}
+              onDecline={() => void respondToProposal(headerProposal.id, "declined")}
               onCounter={() => {
-                setCounterReplaceProposalId(latestProposal.id);
+                setCounterReplaceProposalId(headerProposal.id);
                 setCounterPrefill({
-                  sport: latestProposal.sport?.trim() || "",
-                  place: latestProposal.location?.trim() || "",
+                  sport: headerProposal.sport?.trim() || "",
+                  place: headerProposal.location?.trim() || "",
                 });
                 setModalOpen(true);
               }}
-              onCancel={() => void respondToProposal(latestProposal.id, "cancelled")}
+              onCancel={() => void respondToProposal(headerProposal.id, "cancelled")}
             />
           </div>
-        ) : (
+        ) : !proposalOutcomeNotice ? (
           <button
             type="button"
             onClick={() => {
@@ -1963,7 +2067,7 @@ export default function Chat() {
           >
             {t("propose_activity")}
           </button>
-        )}
+        ) : null}
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-4">
           {chatTimeline.length === 0 ? (
@@ -1995,6 +2099,7 @@ export default function Chat() {
                   );
                 }
                 const p = item.proposal;
+                if (!p?.id) return null;
                 const mine = p.proposer_id === user?.id;
                 return (
                   <ActivityProposalBubble
@@ -2005,6 +2110,13 @@ export default function Chat() {
                     pairBlocked={pairBlocked}
                     mine={mine}
                     proposalActionLocked={proposalActionBusy}
+                    proposalActionInFlightId={proposalActionInFlightId}
+                    proposalMutationAction={
+                      proposalMutation?.proposalId === p.id &&
+                      proposalMutation.action !== "counter"
+                        ? proposalMutation.action
+                        : null
+                    }
                     onOpenDetail={() => setProposalDetail(p)}
                     onAccept={() => void respondToProposal(p.id, "accepted")}
                     onDecline={() => void respondToProposal(p.id, "declined")}

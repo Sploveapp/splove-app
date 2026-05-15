@@ -230,6 +230,9 @@ const en = {
   chat_in_progress: "Conversation in progress.",
   chat_propose_when_ready: "Suggest a time slot when you are ready.",
   chat_activity_confirmed: "Activity confirmed",
+  chat_proposal_outcome_accepted: "✅ Activity confirmed",
+  chat_proposal_outcome_declined: "❌ Time slot declined",
+  chat_proposal_outcome_cancelled: "⚪ Time slot cancelled",
   rl_session_real_life_title: "Real-life session",
   rl_session_density_hint:
     "Confirm you both met, then mark the session done. It keeps Splove focused on real sport meetups.",
