@@ -19,6 +19,7 @@ import { ChatPostMatchPanel } from "../components/ChatPostMatchPanel";
 import { RealLifeSessionPanel } from "../components/RealLifeSessionPanel";
 import { PriorityProposalUpsell } from "../components/PriorityProposalUpsell";
 import type { ActivityPayload } from "../lib/chatActivity";
+import { toSupabaseScheduledAtIso } from "../lib/activitySchedule";
 import {
   computeProposalSchedule,
   getMatchOpenedAt,
@@ -1327,7 +1328,13 @@ export default function Chat() {
     }
 
     const fallbackSchedule = computeProposalSchedule(payload.when);
-    const scheduledAtIso = payload.scheduledAt?.trim() || fallbackSchedule.scheduledAt;
+    const scheduledAtForRpc =
+      toSupabaseScheduledAtIso(payload.scheduledAt) ??
+      toSupabaseScheduledAtIso(fallbackSchedule.scheduledAt);
+    if (replaceProposalId && !scheduledAtForRpc) {
+      throw new Error("chat_error_generic");
+    }
+    const scheduledAtIso = scheduledAtForRpc ?? fallbackSchedule.scheduledAt;
     const dateLocale = language === "en" ? "en-GB" : "fr-FR";
     const timeLabel = (() => {
       if (!scheduledAtIso) return fallbackSchedule.timeLabel;
@@ -1383,7 +1390,7 @@ export default function Chat() {
           timeSlot: timeLabel,
           location: loc,
           note: payload.message.trim() || null,
-          scheduledAt: scheduledAtIso,
+          scheduledAt: scheduledAtForRpc,
         });
         if ("error" in res) {
           console.warn("[Chat] createCounterProposal failed", res.error);

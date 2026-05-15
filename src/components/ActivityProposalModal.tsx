@@ -4,6 +4,7 @@ import {
   type ActivityWhen,
   formatActivityProposalNote,
 } from "../lib/chatActivity";
+import { toSupabaseScheduledAtIso } from "../lib/activitySchedule";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { SAFETY_CONTENT_REFUSAL } from "../constants/copy";
 import { messageContainsDisallowedContent } from "../lib/contentModeration";
@@ -126,7 +127,8 @@ export function ActivityProposalModal({
       setError(t("activity_modal_err_datetime"));
       return;
     }
-    const scheduledAtIso = scheduledAtDate.toISOString();
+    const scheduledAtIso =
+      toSupabaseScheduledAtIso(scheduledAtDate.toISOString()) ?? scheduledAtDate.toISOString();
     const pieces = [place.trim(), noteText.trim(), sportOther.trim(), resolvedSport];
     for (const p of pieces) {
       if (p && messageContainsDisallowedContent(p)) {

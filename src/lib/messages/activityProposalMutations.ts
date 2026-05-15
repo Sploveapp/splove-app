@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { toSupabaseScheduledAtIso } from "../activitySchedule";
 import { CHAT_MESSAGES_TABLE } from "../supabase";
 import { buildInitialActivityProposalPayload, buildUpdatedActivityProposalPayload } from "./activityPayload";
 import { buildMetadataPayloadForInsert } from "./activityProposal";
@@ -8,6 +9,67 @@ export type ActivityMutationError = {
   code: "forbidden" | "rpc" | "message" | "unknown";
   message: string;
 };
+
+/** Signature PostgREST unique : respond_to_activity_proposal(uuid, text×5, timestamptz). */
+export type RespondToActivityProposalRpcPayload = {
+  p_proposal_id: string;
+  p_action: string;
+  p_time_slot: string | null;
+  p_location: string | null;
+  p_note: string | null;
+  p_sport: string | null;
+  p_scheduled_at: string | null;
+};
+
+export function buildRespondToActivityProposalRpcPayload(args: {
+  proposalId: string;
+  action: string;
+  timeSlot?: string | null;
+  location?: string | null;
+  note?: string | null;
+  sport?: string | null;
+  scheduledAt?: string | null;
+}): RespondToActivityProposalRpcPayload {
+  const note = typeof args.note === "string" ? args.note.trim() : "";
+  const scheduledAtIso = toSupabaseScheduledAtIso(args.scheduledAt ?? null);
+  return {
+    p_proposal_id: String(args.proposalId),
+    p_action: args.action,
+    p_time_slot: args.timeSlot?.trim() || null,
+    p_location: args.location?.trim() || null,
+    p_note: note.length > 0 ? note : null,
+    p_sport: args.sport?.trim() || null,
+    p_scheduled_at: scheduledAtIso,
+  };
+}
+
+/** PostgREST exige les 7 args pour résoudre (uuid, text×5, timestamptz) — jamais de clé omise. */
+function finalizeRespondToActivityProposalRpcPayload(
+  payload: RespondToActivityProposalRpcPayload,
+): RespondToActivityProposalRpcPayload {
+  const scheduledAtIso =
+    payload.p_scheduled_at ??
+    (payload.p_action === "countered" ? null : new Date().toISOString());
+
+  return {
+    p_proposal_id: payload.p_proposal_id,
+    p_action: payload.p_action,
+    p_time_slot: payload.p_time_slot,
+    p_location: payload.p_location,
+    p_note: payload.p_note,
+    p_sport: payload.p_sport,
+    p_scheduled_at: scheduledAtIso,
+  };
+}
+
+async function rpcRespondToActivityProposal(
+  client: SupabaseClient,
+  payload: RespondToActivityProposalRpcPayload,
+) {
+  const final = finalizeRespondToActivityProposalRpcPayload(payload);
+  console.log("RPC PAYLOAD FINAL", final);
+  return client.rpc("respond_to_activity_proposal", final);
+}
 
 /**
  * Payload pour `supabase.rpc("create_activity_proposal", …)` — aligné sur les migrations repo :
@@ -22,6 +84,7 @@ export function buildCreateActivityProposalRpcArgs(args: {
   timeSlot: string;
   location: string;
   note: string | null | undefined;
+  scheduledAt?: string | null;
 }): Record<string, string> {
   const out: Record<string, string> = {
     p_conversation_id: args.conversationId,
@@ -32,6 +95,10 @@ export function buildCreateActivityProposalRpcArgs(args: {
   const note = typeof args.note === "string" ? args.note.trim() : "";
   if (note.length > 0) {
     out.p_note = note;
+  }
+  const scheduledAtIso = toSupabaseScheduledAtIso(args.scheduledAt);
+  if (scheduledAtIso) {
+    out.p_scheduled_at = scheduledAtIso;
   }
   return out;
 }
@@ -69,10 +136,13 @@ export async function acceptActivityProposal(
   client: SupabaseClient,
   args: { proposalId: string; conversationId: string; currentUserId: string },
 ): Promise<{ data: ActivityProposalRowLike } | { error: ActivityMutationError }> {
-  const { data, error } = await client.rpc("respond_to_activity_proposal", {
-    p_proposal_id: args.proposalId,
-    p_action: "accepted",
-  });
+  const { data, error } = await rpcRespondToActivityProposal(
+    client,
+    buildRespondToActivityProposalRpcPayload({
+      proposalId: args.proposalId,
+      action: "accepted",
+    }),
+  );
   if (error) {
     return { error: { code: "rpc", message: error.message ?? "Réponse impossible." } };
   }
@@ -113,10 +183,13 @@ export async function declineActivityProposal(
   client: SupabaseClient,
   args: { proposalId: string; conversationId: string; currentUserId: string },
 ): Promise<{ data: ActivityProposalRowLike } | { error: ActivityMutationError }> {
-  const { data, error } = await client.rpc("respond_to_activity_proposal", {
-    p_proposal_id: args.proposalId,
-    p_action: "declined",
-  });
+  const { data, error } = await rpcRespondToActivityProposal(
+    client,
+    buildRespondToActivityProposalRpcPayload({
+      proposalId: args.proposalId,
+      action: "declined",
+    }),
+  );
   if (error) {
     return { error: { code: "rpc", message: error.message ?? "Réponse impossible." } };
   }
@@ -192,15 +265,56 @@ export async function createCounterProposal(
     scheduledAt: string | null;
   },
 ): Promise<{ data: ActivityProposalRowLike } | { error: ActivityMutationError }> {
-  /** Pas de `p_scheduled_at` côté RPC sur les BDD alignées 051/052 — la date est portée par le message / métadonnées. */
-  const { data, error } = await client.rpc("respond_to_activity_proposal", {
-    p_proposal_id: args.replaceProposalId,
-    p_action: "countered",
-    p_time_slot: args.timeSlot,
-    p_location: args.location,
-    p_note: args.note,
-    p_sport: args.sport,
+  const rpcPayload = buildRespondToActivityProposalRpcPayload({
+    proposalId: args.replaceProposalId,
+    action: "countered",
+    timeSlot: args.timeSlot,
+    location: args.location,
+    note: args.note,
+    sport: args.sport,
+    scheduledAt: args.scheduledAt,
   });
+  if (!rpcPayload.p_scheduled_at) {
+    return {
+      error: {
+        code: "rpc",
+        message: "Date du créneau invalide (ISO requis pour p_scheduled_at).",
+      },
+    };
+  }
+
+  const rpcPayloadFinal = finalizeRespondToActivityProposalRpcPayload(rpcPayload);
+  const respondRpcKeys = [
+    "p_proposal_id",
+    "p_action",
+    "p_time_slot",
+    "p_location",
+    "p_note",
+    "p_sport",
+    "p_scheduled_at",
+  ] as const satisfies readonly (keyof RespondToActivityProposalRpcPayload)[];
+
+  console.log(
+    "[createCounterProposal] supabase.rpc('respond_to_activity_proposal') — 7 clés finales:",
+    respondRpcKeys,
+  );
+  for (const key of respondRpcKeys) {
+    const value = rpcPayloadFinal[key];
+    console.log(`[createCounterProposal] ${key}`, {
+      value,
+      typeof: typeof value,
+      jsType: value === null ? "null" : Object.prototype.toString.call(value),
+      isNull: value === null,
+      isUndefined: value === undefined,
+      json: JSON.stringify(value),
+    });
+  }
+  console.log(
+    "[createCounterProposal] supabase.rpc('respond_to_activity_proposal') — payload objet complet:",
+    rpcPayloadFinal,
+  );
+
+  const { data, error } = await rpcRespondToActivityProposal(client, rpcPayload);
   if (error) {
     return { error: { code: "rpc", message: error.message ?? "Contre-proposition impossible." } };
   }
@@ -287,6 +401,7 @@ export async function createPendingActivityProposal(
       timeSlot: args.timeSlot,
       location: args.location,
       note: args.note,
+      scheduledAt: args.scheduledAt,
     }),
   );
   if (error) {
