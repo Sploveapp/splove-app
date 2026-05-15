@@ -1,22 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { APP_BG } from "../constants/theme";
 import { GlobalHeader } from "./GlobalHeader";
 import { SPLoveBottomNav } from "./navigation/SPLoveBottomNav";
 import { DiscoverUndoNavProvider } from "../contexts/DiscoverUndoNavContext";
 import { useAuth } from "../contexts/AuthContext";
 import { fetchIncomingNonBlockedLikesCount } from "../services/likes.service";
-import { INBOX_REFRESH_EVENT } from "../constants";
+import { ACTIVITY_PROPOSALS_REFRESH_EVENT, INBOX_REFRESH_EVENT } from "../constants";
+import { fetchActivityProposalsPendingActionCount } from "../lib/activityProposalPendingAction";
 import { CHAT_MESSAGES_TABLE, supabase } from "../lib/supabase";
 import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
 import { pulseInAppNotifications } from "../services/inAppNotifications.service";
 
 export function AppLayout() {
   const location = useLocation();
-  const { isProfileComplete, isProfileLoading } = useAuth();
+  const navigate = useNavigate();
+  const { isProfileComplete, isProfileLoading, user } = useAuth();
   const [inboxCount, setInboxCount] = useState(0);
   const [likesCount, setLikesCount] = useState(0);
   const [inAppUnread, setInAppUnread] = useState(0);
+  const [activityPendingCount, setActivityPendingCount] = useState(0);
   const isChat = location.pathname.startsWith("/chat/");
   /** Agenda autonome : pas de bandeau global ; fond clair sur tout le shell (évite l’encadrement sombre type Discover). */
   const isMesRencontres = /^\/mes-rencontres\/?$/.test(location.pathname);
@@ -37,6 +40,16 @@ export function AppLayout() {
     const n = await fetchIncomingNonBlockedLikesCount(user.id);
     setLikesCount(n);
   }, []);
+
+  const loadActivityPendingCount = useCallback(async () => {
+    const uid = user?.id;
+    if (!uid) {
+      setActivityPendingCount(0);
+      return;
+    }
+    const n = await fetchActivityProposalsPendingActionCount(uid);
+    setActivityPendingCount(n);
+  }, [user?.id]);
 
   const loadInboxCount = useCallback(async () => {
     const {
@@ -90,11 +103,13 @@ export function AppLayout() {
       await loadInboxCount();
       if (cancelled) return;
       await loadLikesBadgeCount();
+      if (cancelled) return;
+      await loadActivityPendingCount();
     })();
     return () => {
       cancelled = true;
     };
-  }, [location.pathname, loadInboxCount, loadLikesBadgeCount]);
+  }, [location.pathname, loadInboxCount, loadLikesBadgeCount, loadActivityPendingCount]);
 
   useEffect(() => {
     const onRefresh = () => {
@@ -104,6 +119,14 @@ export function AppLayout() {
     window.addEventListener(INBOX_REFRESH_EVENT, onRefresh);
     return () => window.removeEventListener(INBOX_REFRESH_EVENT, onRefresh);
   }, [loadInboxCount, loadLikesBadgeCount]);
+
+  useEffect(() => {
+    const onRefresh = () => {
+      void loadActivityPendingCount();
+    };
+    window.addEventListener(ACTIVITY_PROPOSALS_REFRESH_EVENT, onRefresh);
+    return () => window.removeEventListener(ACTIVITY_PROPOSALS_REFRESH_EVENT, onRefresh);
+  }, [loadActivityPendingCount]);
 
   useEffect(() => {
     void pulseAppNotifications();
@@ -192,6 +215,14 @@ export function AppLayout() {
             unreadMessagesCount={inboxCount}
             likesCount={likesCount}
             profileNeedsAction={!isProfileLoading && !isProfileComplete}
+            activityProposalsNeedAction={activityPendingCount > 0}
+            onProfileActivate={() => {
+              if (activityPendingCount > 0) {
+                navigate("/mes-rencontres?tab=to_confirm");
+              } else {
+                navigate("/profile");
+              }
+            }}
           />
         </div>
       </div>

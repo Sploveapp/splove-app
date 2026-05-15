@@ -7,6 +7,13 @@ export const APP_NAME = "SPLove";
 /** Window event to refresh the Messages tab badge after reads or realtime updates. */
 export const INBOX_REFRESH_EVENT = "splove:inbox-refresh";
 
+/** Window event to refresh activity proposal pending-action badges (nav, Mes rencontres). */
+export const ACTIVITY_PROPOSALS_REFRESH_EVENT = "splove:activity-proposals-refresh";
+
+export function dispatchActivityProposalsRefresh(): void {
+  window.dispatchEvent(new CustomEvent(ACTIVITY_PROPOSALS_REFRESH_EVENT));
+}
+
 /** Options du prompt "Le sport me fait me sentir..." */
 export const SPORT_FEELING_OPTIONS = [
   "vivant",

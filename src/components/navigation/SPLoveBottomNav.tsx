@@ -27,6 +27,8 @@ export type SPLoveBottomNavProps = {
   unreadMessagesCount: number;
   likesCount: number;
   profileNeedsAction: boolean;
+  activityProposalsNeedAction?: boolean;
+  onProfileActivate?: () => void;
 };
 
 function matchActiveDiscover(pathname: string): boolean {
@@ -50,6 +52,8 @@ export function SPLoveBottomNav({
   unreadMessagesCount,
   likesCount,
   profileNeedsAction,
+  activityProposalsNeedAction = false,
+  onProfileActivate,
 }: SPLoveBottomNavProps) {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -120,12 +124,19 @@ export function SPLoveBottomNav({
         <BottomItem
           label={t("nav_tab_profile")}
           ariaLabel={
-            profileNeedsAction ? `${t("nav_tab_profile")}, ${t("nav_profile_action_aria")}` : t("nav_tab_profile")
+            profileNeedsAction
+              ? `${t("nav_tab_profile")}, ${t("nav_profile_action_aria")}`
+              : activityProposalsNeedAction
+                ? `${t("nav_tab_profile")}, ${t("to_confirm")}`
+                : t("nav_tab_profile")
           }
           active={isProfile}
           icon={(c) => <ProfileIcon color={c} />}
-          indicator={profileNeedsAction}
-          onActivate={() => navigate("/profile")}
+          indicator={profileNeedsAction || activityProposalsNeedAction}
+          onActivate={() => {
+            if (onProfileActivate) onProfileActivate();
+            else navigate("/profile");
+          }}
         />
       </div>
     </nav>

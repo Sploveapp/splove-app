@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { INBOX_REFRESH_EVENT } from "../constants";
+import { dispatchActivityProposalsRefresh, INBOX_REFRESH_EVENT } from "../constants";
 import { CHAT_MESSAGES_TABLE, logSupabaseTableError, supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { insertBlock, isBlockedWith } from "../services/blocks.service";
@@ -555,6 +555,7 @@ export default function Chat() {
     } else {
       setMyActivityOutcomes({});
     }
+    dispatchActivityProposalsRefresh();
   }, [user?.id]);
 
   const reloadChatMessages = useCallback(

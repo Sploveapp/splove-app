@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
+import { ACTIVITY_PROPOSALS_REFRESH_EVENT } from "../constants";
+import { fetchActivityProposalsPendingActionCount } from "../lib/activityProposalPendingAction";
 import { ACCESSIBILITY_PREF_BOTH_REQUIRED } from "../constants/copy";
 import { VerifiedBadge } from "../components/VerifiedBadge";
 import {
@@ -74,6 +76,7 @@ export default function Profile() {
   const [phraseDraft, setPhraseDraft] = useState("");
   const [phraseSaving, setPhraseSaving] = useState(false);
   const [phraseMessage, setPhraseMessage] = useState<string | null>(null);
+  const [activityPendingCount, setActivityPendingCount] = useState(0);
   const failedProfileImageSourcesRef = useRef<Set<string>>(new Set());
   const profileImageFailureCountRef = useRef(0);
 
@@ -87,6 +90,27 @@ export default function Profile() {
   useEffect(() => {
     syncAccessibilityFromProfile();
   }, [syncAccessibilityFromProfile]);
+
+  const loadActivityPendingCount = useCallback(async () => {
+    if (!user?.id) {
+      setActivityPendingCount(0);
+      return;
+    }
+    const n = await fetchActivityProposalsPendingActionCount(user.id);
+    setActivityPendingCount(n);
+  }, [user?.id]);
+
+  useEffect(() => {
+    void loadActivityPendingCount();
+  }, [loadActivityPendingCount]);
+
+  useEffect(() => {
+    const onRefresh = () => {
+      void loadActivityPendingCount();
+    };
+    window.addEventListener(ACTIVITY_PROPOSALS_REFRESH_EVENT, onRefresh);
+    return () => window.removeEventListener(ACTIVITY_PROPOSALS_REFRESH_EVENT, onRefresh);
+  }, [loadActivityPendingCount]);
 
   useEffect(() => {
     if (!profile) return;
@@ -306,7 +330,11 @@ export default function Profile() {
 
         <button
           type="button"
-          onClick={() => navigate("/mes-rencontres")}
+          onClick={() =>
+            navigate(
+              activityPendingCount > 0 ? "/mes-rencontres?tab=to_confirm" : "/mes-rencontres",
+            )
+          }
           style={{
             width: "100%",
             marginBottom: "20px",
@@ -319,9 +347,24 @@ export default function Profile() {
             fontWeight: 600,
             cursor: "pointer",
             textAlign: "left",
+            position: "relative",
           }}
         >
-          {t("my_meetups")}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            {t("my_meetups")}
+            {activityPendingCount > 0 ? (
+              <span
+                aria-hidden
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  backgroundColor: "#FF3B3B",
+                  flexShrink: 0,
+                }}
+              />
+            ) : null}
+          </span>
         </button>
 
         <button

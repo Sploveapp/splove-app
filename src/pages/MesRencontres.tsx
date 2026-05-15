@@ -31,9 +31,14 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { MeetingCard, type MeetingCardTab } from "../components/MeetingCard";
+import { ProposalComposerModal } from "../components/ProposalComposerModal";
 import { useAuth } from "../contexts/AuthContext";
+import { dispatchActivityProposalsRefresh } from "../constants";
+import { activityProposalNeedsUserAction } from "../lib/activityProposalPendingAction";
+import { toSupabaseScheduledAtIso } from "../lib/activitySchedule";
+import { computeProposalSchedule, type ActivityPayload } from "../lib/chatActivity";
 import { supabase } from "../lib/supabase";
 import {
   ACTIVITY_PROPOSALS_SELECT,
@@ -78,6 +83,13 @@ type ProfileLite = {
 };
 
 type TabKey = "to_confirm" | "confirmed" | "expired" | "cancelled";
+
+const TAB_KEYS: TabKey[] = ["to_confirm", "confirmed", "expired", "cancelled"];
+
+function parseMeetupsTabParam(raw: string | null): TabKey | null {
+  if (raw && TAB_KEYS.includes(raw as TabKey)) return raw as TabKey;
+  return null;
+}
 
 function formatMeetingAgendaLabel(d: Date): string {
   const weekday = new Intl.DateTimeFormat("fr-FR", { weekday: "long" }).format(d);
@@ -142,18 +154,6 @@ function statusBadgeTone(
   return "neutral";
 }
 
-function defaultCounterDateParts(): { date: string; time: string } {
-  const t = new Date();
-  t.setDate(t.getDate() + 1);
-  t.setHours(18, 30, 0, 0);
-  const y = t.getFullYear();
-  const m = String(t.getMonth() + 1).padStart(2, "0");
-  const d = String(t.getDate()).padStart(2, "0");
-  const hh = String(t.getHours()).padStart(2, "0");
-  const mm = String(t.getMinutes()).padStart(2, "0");
-  return { date: `${y}-${m}-${d}`, time: `${hh}:${mm}` };
-}
-
 function parseCreatedMs(iso: string | null | undefined): number {
   if (!iso) return 0;
   const n = new Date(iso).getTime();
@@ -161,8 +161,9 @@ function parseCreatedMs(iso: string | null | undefined): number {
 }
 
 export default function MesRencontres() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const uid = user?.id ?? "";
 
@@ -185,15 +186,29 @@ export default function MesRencontres() {
   const [rows, setRows] = useState<ProposalRow[]>([]);
   const [profilesById, setProfilesById] = useState<Record<string, ProfileLite>>({});
   const [otherByConv, setOtherByConv] = useState<Record<string, string>>({});
-  const [tab, setTab] = useState<TabKey>("to_confirm");
+  const [tab, setTab] = useState<TabKey>(() => parseMeetupsTabParam(searchParams.get("tab")) ?? "to_confirm");
+
+  useEffect(() => {
+    const fromUrl = parseMeetupsTabParam(searchParams.get("tab"));
+    if (fromUrl) setTab(fromUrl);
+  }, [searchParams]);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
 
   const [counterOpen, setCounterOpen] = useState(false);
   const [counterProposal, setCounterProposal] = useState<ProposalRow | null>(null);
-  const [counterDate, setCounterDate] = useState("");
-  const [counterTime, setCounterTime] = useState("");
+
+  const counterSharedSports = useMemo(() => {
+    const s = (counterProposal?.sport ?? "").trim();
+    return s ? [s] : [];
+  }, [counterProposal?.sport]);
+
+  const counterInitialPlace = useMemo(() => {
+    if (!counterProposal) return undefined;
+    const raw = ((counterProposal.place ?? counterProposal.location) ?? "").trim();
+    return raw && raw !== "À définir" ? raw : undefined;
+  }, [counterProposal]);
 
   useEffect(() => {
     const t = window.setInterval(() => setNowTick(Date.now()), 60_000);
@@ -328,6 +343,7 @@ export default function MesRencontres() {
     }
     setProfilesById(pmap);
     setLoading(false);
+    dispatchActivityProposalsRefresh();
   }, [uid]);
 
   useEffect(() => {
@@ -369,6 +385,11 @@ export default function MesRencontres() {
     });
     return { toConfirmList: toConfirm, confirmedList: confirmed, expiredList: expired, cancelledList: cancelled };
   }, [rows, uid, nowTick]);
+
+  const pendingActionCount = useMemo(
+    () => rows.filter((p) => activityProposalNeedsUserAction(uid, p)).length,
+    [rows, uid],
+  );
 
   function partnerForProposal(p: ProposalRow): ProfileLite | null {
     const oid = otherByConv[p.conversation_id];
@@ -455,44 +476,55 @@ export default function MesRencontres() {
   }
 
   function openCounterModal(p: ProposalRow) {
-    const { date, time } = defaultCounterDateParts();
     setCounterProposal(p);
-    setCounterDate(date);
-    setCounterTime(time);
     setCounterOpen(true);
     setPageError(null);
   }
 
-  async function submitCounter() {
+  async function submitCounterFromModal(payload: ActivityPayload) {
     if (!uid || !counterProposal) return;
-    const d = new Date(`${counterDate}T${counterTime}:00`);
-    if (Number.isNaN(d.getTime())) {
-      setPageError(t("invalid_date_or_time"));
-      return;
-    }
-    const timeLabel = formatMeetingAgendaLabel(d);
-    const scheduledAt = d.toISOString();
-    const loc = placeLabel(counterProposal);
     setPageError(null);
-    setActionBusyId(counterProposal.id);
-    const res = await createCounterProposal(supabase, {
-      replaceProposalId: counterProposal.id,
-      conversationId: counterProposal.conversation_id,
-      currentUserId: uid,
-      sport: (counterProposal.sport ?? "").trim() || t("activity"),
-      timeSlot: timeLabel,
-      location: loc === "place_to_define" ? "À définir" : loc,
-      note: null,
-      scheduledAt,
-    });
-    setActionBusyId(null);
-    if ("error" in res) {
-      setPageError(res.error.message);
-      return;
+
+    const fallbackSchedule = computeProposalSchedule(payload.when);
+    const scheduledAtForRpc =
+      toSupabaseScheduledAtIso(payload.scheduledAt) ??
+      toSupabaseScheduledAtIso(fallbackSchedule.scheduledAt);
+    if (!scheduledAtForRpc) {
+      setPageError(t("invalid_date_or_time"));
+      throw new Error("invalid_date_or_time");
     }
-    setCounterOpen(false);
-    setCounterProposal(null);
-    await loadData();
+
+    const dateLocale = language === "en" ? "en-GB" : "fr-FR";
+    const timeLabel = (() => {
+      const d = new Date(scheduledAtForRpc);
+      if (Number.isNaN(d.getTime())) return fallbackSchedule.timeLabel;
+      return d.toLocaleString(dateLocale, { dateStyle: "medium", timeStyle: "short" });
+    })();
+    const loc = payload.place.trim() || t("place_to_define");
+    const replaceProposalId = counterProposal.id;
+
+    setActionBusyId(replaceProposalId);
+    try {
+      const res = await createCounterProposal(supabase, {
+        replaceProposalId,
+        conversationId: counterProposal.conversation_id,
+        currentUserId: uid,
+        sport: payload.sport,
+        timeSlot: timeLabel,
+        location: loc,
+        note: payload.message.trim() || null,
+        scheduledAt: scheduledAtForRpc,
+      });
+      if ("error" in res) {
+        setPageError(res.error.message);
+        throw new Error(res.error.message);
+      }
+      setCounterOpen(false);
+      setCounterProposal(null);
+      await loadData();
+    } finally {
+      setActionBusyId(null);
+    }
   }
 
   const tabToCard: Record<TabKey, MeetingCardTab> = {
@@ -542,18 +574,26 @@ export default function MesRencontres() {
                 { id: "expired" as const, label: t("expired") },
                 { id: "cancelled" as const, label: t("cancelled") },
               ] as const
-            ).map((t) => (
+            ).map((tabDef) => (
               <button
-                key={t.id}
+                key={tabDef.id}
                 type="button"
                 role="tab"
-                aria-selected={tab === t.id}
-                onClick={() => setTab(t.id)}
+                aria-selected={tab === tabDef.id}
+                onClick={() => setTab(tabDef.id)}
                 className={`min-h-[44px] flex-1 rounded-[10px] px-1.5 text-[13px] font-semibold leading-tight transition ${
-                  tab === t.id ? "bg-zinc-900 text-white shadow-sm" : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
+                  tab === tabDef.id ? "bg-zinc-900 text-white shadow-sm" : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
                 }`}
               >
-                {t.label}
+                <span className="inline-flex items-center justify-center gap-1">
+                  {tabDef.label}
+                  {tabDef.id === "to_confirm" && pendingActionCount > 0 ? (
+                    <span
+                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#FF3B3B]"
+                      aria-hidden
+                    />
+                  ) : null}
+                </span>
               </button>
             ))}
           </div>
@@ -640,64 +680,22 @@ export default function MesRencontres() {
         </div>
       </main>
 
-      {counterOpen && counterProposal ? (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
-          role="dialog"
-          aria-modal
-          aria-labelledby="counter-modal-title"
-        >
-          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl">
-            <h2 id="counter-modal-title" className="text-lg font-semibold text-zinc-900">
-              {t("propose_other")}
-            </h2>
-            <p className="mt-1 text-[13px] text-zinc-500">
-              {t("counter_proposal_hint")}
-            </p>
-            <div className="mt-4 flex flex-col gap-3">
-              <label className="text-[13px] font-medium text-zinc-700">
-                {t("date")}
-                <input
-                  type="date"
-                  value={counterDate}
-                  onChange={(e) => setCounterDate(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-[15px] text-zinc-900"
-                />
-              </label>
-              <label className="text-[13px] font-medium text-zinc-700">
-                {t("time")}
-                <input
-                  type="time"
-                  value={counterTime}
-                  onChange={(e) => setCounterTime(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-[15px] text-zinc-900"
-                />
-              </label>
-            </div>
-            <div className="mt-5 flex gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setCounterOpen(false);
-                  setCounterProposal(null);
-                }}
-                className="flex-1 rounded-xl border border-zinc-200 bg-white py-2.5 text-[15px] font-semibold text-zinc-700"
-              >
-                {t("cancel")}
-              </button>
-              <button
-                type="button"
-                disabled={actionBusyId === counterProposal.id}
-                onClick={() => void submitCounter()}
-                className="flex-1 rounded-xl py-2.5 text-[15px] font-semibold text-white disabled:opacity-50"
-                style={{ backgroundColor: "#18181B" }}
-              >
-                {t("send")}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <ProposalComposerModal
+        open={counterOpen && !!counterProposal}
+        onClose={() => {
+          setCounterOpen(false);
+          setCounterProposal(null);
+        }}
+        sharedSports={counterSharedSports}
+        titleOverride={t("proposal_counter_modal_title")}
+        descriptionOverride={t("proposal_counter_modal_desc")}
+        submitLabel={t("proposal_counter_submit")}
+        initialSport={(counterProposal?.sport ?? "").trim() || undefined}
+        initialPlace={counterInitialPlace}
+        initialScheduledAt={counterProposal?.scheduled_at ?? undefined}
+        suggestedSlots={[]}
+        onSubmit={submitCounterFromModal}
+      />
     </div>
   );
 }
