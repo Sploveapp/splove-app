@@ -480,6 +480,7 @@ const fr = {
     "Ici arrivent les échanges après un match — pose une première activité, et le passage au réel devient évident.",
   messages_empty_secondary_cta: "Ajuster mon profil",
   messages_no_message_yet: "Pas encore de message — dis bonjour !",
+  messages_unread_label: "messages non lus",
   open: "Ouvrir",
   checkout_title: "Finaliser SPLove+",
   checkout_soon: "Le paiement sera bientôt disponible.",
@@ -642,16 +643,16 @@ const fr = {
   "in_app_notif.screen_title": "Notifications",
   "in_app_notif.empty": "Aucune notification pour le moment.",
   "in_app_notif.screen_subtitle":
-    "Likes, matchs, messages et activités — pour passer à une vraie sortie.",
+    "Matchs, likes et activités importantes — les messages restent dans l’onglet Messages.",
   "in_app_notif.someone": "Quelqu'un",
 
   "in_app_notif.social.new_like": "{{name}} t'a liké",
   "in_app_notif.social.new_match": "Nouveau match avec {{name}}",
   "in_app_notif.social.new_message": "Nouveau message de {{name}}",
-  "in_app_notif.social.activity_proposed": "{{name}} propose {{sport}} à {{place}}",
+  "in_app_notif.social.activity_proposed": "{{name}} propose {{sport}}",
   "in_app_notif.social.activity_accepted": "{{name}} a accepté votre séance",
   "in_app_notif.social.activity_counter": "{{name}} propose un autre créneau",
-  "in_app_notif.social.meetup_confirmed": "Rendez-vous confirmé avec {{name}}",
+  "in_app_notif.social.meetup_confirmed": "Votre rendez-vous est confirmé",
   "in_app_notif.social.activity_reminder": "Votre activité avec {{name}} approche",
 
   "in_app_notif.invite_link_sent_delay.title": "Invitation envoyée",

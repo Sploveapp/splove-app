@@ -4,6 +4,7 @@ export type SploveNotificationPayload = {
   route?: string;
   actor_id?: string;
   actor_name?: string;
+  actor_avatar?: string;
   conversation_id?: string;
   match_id?: string;
   proposal_id?: string;
@@ -31,6 +32,7 @@ export function parseNotificationPayload(raw: unknown): SploveNotificationPayloa
   if (typeof o.route === "string" && o.route.trim()) out.route = o.route.trim();
   if (typeof o.actor_id === "string") out.actor_id = o.actor_id;
   if (typeof o.actor_name === "string") out.actor_name = o.actor_name.trim();
+  if (typeof o.actor_avatar === "string") out.actor_avatar = o.actor_avatar.trim();
   if (typeof o.conversation_id === "string") out.conversation_id = o.conversation_id;
   if (typeof o.match_id === "string") out.match_id = o.match_id;
   if (typeof o.proposal_id === "string") out.proposal_id = o.proposal_id;
@@ -78,6 +80,8 @@ export type NotificationPresentation = {
   subtitle: string | null;
   route: string;
   isSocial: boolean;
+  actorId: string | null;
+  actorAvatarUrl: string | null;
 };
 
 const KIND_EMOJI: Record<string, string> = {
@@ -115,6 +119,8 @@ export function presentNotification(
       subtitle: null,
       route,
       isSocial: true,
+      actorId: payload.actor_id ?? null,
+      actorAvatarUrl: payload.actor_avatar?.trim() || null,
     };
   }
 
@@ -125,7 +131,14 @@ export function presentNotification(
     subtitle: legacy.message || null,
     route,
     isSocial: false,
+    actorId: payload.actor_id ?? null,
+    actorAvatarUrl: payload.actor_avatar?.trim() || null,
   };
+}
+
+/** Masque les notifs chat (Phase 1 : cloche ≠ Messages). */
+export function isBellCenterNotificationRow(row: { kind: string }): boolean {
+  return row.kind !== "new_message";
 }
 
 function legacyLinesForKind(

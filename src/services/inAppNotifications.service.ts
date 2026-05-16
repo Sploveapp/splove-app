@@ -1,5 +1,15 @@
 import { supabase } from "../lib/supabase";
 
+/** Phase 1 cloche : événements importants (pas les messages chat). */
+export const BELL_NOTIFICATION_KINDS = [
+  "new_like",
+  "new_match",
+  "activity_proposed",
+  "activity_accepted",
+  "activity_counter",
+  "meetup_confirmed",
+] as const;
+
 export type InAppNotificationRow = {
   id: string;
   user_id: string;
@@ -64,11 +74,28 @@ export async function markInAppNotificationRead(id: string): Promise<void> {
   }
 }
 
+/** Ouverture du centre cloche : tout marquer lu (hors messages chat). */
+export async function markAllInAppNotificationsRead(): Promise<void> {
+  const { error } = await supabase.rpc("mark_all_in_app_notifications_read");
+  if (error) {
+    if (isMissingRpcOrTableError(error)) {
+      const { error: updErr } = await supabase
+        .from("in_app_notifications")
+        .update({ read: true })
+        .eq("read", false);
+      if (updErr) console.warn("[inAppNotifications] mark all read fallback", updErr.message);
+      return;
+    }
+    console.warn("[inAppNotifications] mark all read", error.message);
+  }
+}
+
 export async function countUnreadInAppNotifications(): Promise<number> {
   const { count, error } = await supabase
     .from("in_app_notifications")
     .select("id", { count: "exact", head: true })
-    .eq("read", false);
+    .eq("read", false)
+    .in("kind", [...BELL_NOTIFICATION_KINDS]);
   if (error) {
     const low = (error.message ?? "").toLowerCase();
     if (error.code === "42P01" || low.includes("does not exist")) return 0;

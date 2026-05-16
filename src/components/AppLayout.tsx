@@ -14,7 +14,10 @@ import {
 import { fetchActivityProposalsPendingActionCount } from "../lib/activityProposalPendingAction";
 import { CHAT_MESSAGES_TABLE, supabase } from "../lib/supabase";
 import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
-import { pulseInAppNotifications } from "../services/inAppNotifications.service";
+import {
+  countUnreadInAppNotifications,
+  pulseInAppNotifications,
+} from "../services/inAppNotifications.service";
 
 const USER_PROFILE_PATH = "/profile";
 
@@ -31,7 +34,8 @@ export function AppLayout() {
   const isMesRencontres = /^\/mes-rencontres\/?$/.test(location.pathname);
 
   const pulseAppNotifications = useCallback(async () => {
-    const n = await pulseInAppNotifications();
+    await pulseInAppNotifications();
+    const n = await countUnreadInAppNotifications();
     setInAppUnread(n);
   }, []);
 

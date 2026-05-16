@@ -1,4 +1,5 @@
 import { NAV_BADGE_NOTIFICATION } from "../../constants/theme";
+import { useProfilePhotoSignedUrl } from "../../hooks/useProfilePhotoSignedUrl";
 import type { NotificationPresentation } from "../../lib/sploveNotifications";
 
 type Props = {
@@ -9,32 +10,55 @@ type Props = {
 };
 
 export function NotificationListItem({ presentation, relativeTime, unread, onOpen }: Props) {
+  const avatarUrl = useProfilePhotoSignedUrl(presentation.actorAvatarUrl);
+
   return (
     <li>
       <button
         type="button"
         onClick={onOpen}
-        className="w-full rounded-2xl border border-app-border/90 bg-app-card px-4 py-3.5 text-left shadow-sm transition hover:bg-app-border/20 active:bg-app-border/30"
+        className={`w-full rounded-2xl border px-3.5 py-3 text-left transition active:scale-[0.99] ${
+          unread
+            ? "border-white/[0.1] bg-app-card shadow-[0_0_0_1px_rgba(255,30,45,0.08)]"
+            : "border-app-border/50 bg-app-card/50 opacity-[0.9]"
+        }`}
       >
-        <div className="flex gap-3">
-          <span
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-app-bg text-lg"
-            aria-hidden
-          >
-            {presentation.emoji}
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-[15px] font-semibold leading-snug text-app-text">{presentation.line}</p>
+        <div className="flex items-start gap-3">
+          {avatarUrl ? (
+            <img
+              src={avatarUrl}
+              alt=""
+              className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-white/10"
+            />
+          ) : (
+            <span
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-app-bg text-lg ring-1 ring-white/10"
+              aria-hidden
+            >
+              {presentation.emoji}
+            </span>
+          )}
+          <div className="min-w-0 flex-1 pt-0.5">
+            <p
+              className={`text-[14px] leading-snug ${
+                unread ? "font-semibold text-white" : "font-medium text-app-text/70"
+              }`}
+            >
+              <span className="mr-1" aria-hidden>
+                {presentation.emoji}
+              </span>
+              {presentation.line}
+            </p>
             {presentation.subtitle ? (
-              <p className="mt-1 text-[13px] leading-snug text-app-muted">{presentation.subtitle}</p>
+              <p className="mt-0.5 text-[12px] leading-snug text-app-muted/80">{presentation.subtitle}</p>
             ) : null}
             {relativeTime ? (
-              <p className="mt-1.5 text-[11px] text-app-muted opacity-90">{relativeTime}</p>
+              <p className="mt-1 text-[11px] text-app-muted/70">{relativeTime}</p>
             ) : null}
           </div>
           {unread ? (
             <span
-              className="mt-1 h-2 w-2 shrink-0 rounded-full"
+              className="mt-2 h-2 w-2 shrink-0 rounded-full"
               style={{ backgroundColor: NAV_BADGE_NOTIFICATION }}
               aria-hidden
             />

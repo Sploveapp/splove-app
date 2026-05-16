@@ -473,6 +473,7 @@ const en = {
     "Conversations appear after a match — send a concrete activity suggestion and turning it real gets natural.",
   messages_empty_secondary_cta: "Tune my profile",
   messages_no_message_yet: "No message yet — say hello!",
+  messages_unread_label: "unread messages",
   open: "Open",
   checkout_title: "Complete SPLove+",
   checkout_soon: "Payment will be available soon.",
@@ -633,16 +634,16 @@ const en = {
   "in_app_notif.screen_title": "Notifications",
   "in_app_notif.empty": "No notifications yet.",
   "in_app_notif.screen_subtitle":
-    "Likes, matches, messages and activities — built for real meetups.",
+    "Matches, likes and key activities — chat stays in Messages.",
   "in_app_notif.someone": "Someone",
 
   "in_app_notif.social.new_like": "{{name}} liked you",
   "in_app_notif.social.new_match": "New match with {{name}}",
   "in_app_notif.social.new_message": "New message from {{name}}",
-  "in_app_notif.social.activity_proposed": "{{name}} suggests {{sport}} in {{place}}",
+  "in_app_notif.social.activity_proposed": "{{name}} suggests {{sport}}",
   "in_app_notif.social.activity_accepted": "{{name}} accepted your session",
   "in_app_notif.social.activity_counter": "{{name}} suggested another time slot",
-  "in_app_notif.social.meetup_confirmed": "Meetup confirmed with {{name}}",
+  "in_app_notif.social.meetup_confirmed": "Your meetup is confirmed",
   "in_app_notif.social.activity_reminder": "Your activity with {{name}} is coming up",
 
   "in_app_notif.invite_link_sent_delay.title": "Invitation sent",

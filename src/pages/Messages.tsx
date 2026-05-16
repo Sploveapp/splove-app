@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, type NavigateFunction } from "react-router-dom";
 import { CHAT_MESSAGES_TABLE, logSupabaseTableError, supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
+import { fetchUnreadCountByConversation } from "../services/inboxUnread.service";
 import { useTranslation } from "../i18n/useTranslation";
 import { ReferralEmptyState } from "../components/referral/ReferralEmptyState";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { INBOX_REFRESH_EVENT } from "../constants";
 import { countPendingSecondChancesForUser } from "../services/secondChance.service";
+import { formatBadge } from "../lib/formatBadge";
 
 type InboxRow = {
   conversationId: string;
@@ -17,6 +19,7 @@ type InboxRow = {
   otherPhoto: string | null;
   lastMessage: string | null;
   lastAt: string | null;
+  unreadCount: number;
 };
 
 function MessageThreadRowItem(props: {
@@ -26,33 +29,75 @@ function MessageThreadRowItem(props: {
 }) {
   const { row, t, navigate } = props;
   const otherPhotoDisplay = useProfilePhotoSignedUrl(row.otherPhoto);
+  const hasUnread = row.unreadCount > 0;
+
   return (
     <li>
       <button
         type="button"
         onClick={() => navigate(`/chat/${row.conversationId}`)}
-        className="flex w-full items-center gap-3 rounded-2xl border border-app-border/90 bg-app-card px-3 py-3 text-left shadow-sm ring-1 ring-app-border/80 transition hover:bg-app-border/90"
+        aria-label={
+          hasUnread
+            ? `${row.otherName || t("unnamed_profile")}, ${row.unreadCount} ${t("messages_unread_label")}`
+            : `${row.otherName || t("unnamed_profile")}`
+        }
+        className={`flex w-full min-h-[4.25rem] items-center gap-3 rounded-2xl border px-3.5 py-3.5 text-left transition active:scale-[0.99] ${
+          hasUnread
+            ? "border-white/[0.14] bg-app-card shadow-[0_0_0_1px_rgba(255,30,45,0.12),0_8px_28px_rgba(0,0,0,0.28)] active:bg-app-card"
+            : "border-app-border/40 bg-app-card/45 opacity-[0.88] active:bg-app-card/55"
+        }`}
       >
-        {row.otherPhoto ? (
-          otherPhotoDisplay ? (
+        <div className="shrink-0">
+          {row.otherPhoto && otherPhotoDisplay ? (
             <img
               src={otherPhotoDisplay}
               alt=""
-              className="h-12 w-12 shrink-0 rounded-full object-cover ring-2 ring-app-border"
+              className={`h-[3.25rem] w-[3.25rem] rounded-full object-cover ring-2 ${
+                hasUnread ? "ring-white/15" : "ring-app-border/80"
+              }`}
             />
           ) : (
-            <div className="h-12 w-12 shrink-0 rounded-full bg-app-border ring-2 ring-app-border" />
-          )
-        ) : (
-          <div className="h-12 w-12 shrink-0 rounded-full bg-app-border ring-2 ring-app-border" />
-        )}
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-semibold text-app-text">{row.otherName || t("unnamed_profile")}</p>
-          <p className="truncate text-sm text-app-muted">
+            <div
+              className={`h-[3.25rem] w-[3.25rem] rounded-full ring-2 ${
+                hasUnread ? "bg-app-border ring-white/15" : "bg-app-border/80 ring-app-border/60"
+              }`}
+            />
+          )}
+        </div>
+        <div className="min-w-0 flex-1 pr-1">
+          <p
+            className={`truncate text-[15px] leading-snug ${
+              hasUnread ? "font-semibold text-white" : "font-medium text-app-text/55"
+            }`}
+          >
+            {row.otherName || t("unnamed_profile")}
+          </p>
+          <p
+            className={`mt-0.5 truncate text-sm leading-snug ${
+              hasUnread ? "font-medium text-white/90" : "font-normal text-app-muted/75"
+            }`}
+          >
             {row.lastMessage ?? t("messages_no_message_yet")}
           </p>
         </div>
-        <span className="shrink-0 text-[12px] font-medium text-[#FF1E2D]">{t("open")}</span>
+        <div className="flex shrink-0 items-center gap-2 self-center">
+          {hasUnread ? (
+            <span
+              className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#FF1E2D] px-1.5 text-[10px] font-bold leading-none text-white"
+              aria-hidden
+            >
+              {formatBadge(row.unreadCount)}
+            </span>
+          ) : null}
+          <span
+            className={`select-none text-[1.35rem] font-light leading-none ${
+              hasUnread ? "text-white/20" : "text-app-muted/35"
+            }`}
+            aria-hidden
+          >
+            ›
+          </span>
+        </div>
       </button>
     </li>
   );
@@ -66,6 +111,7 @@ export default function Messages() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [secondChanceCount, setSecondChanceCount] = useState(0);
+  const inboxRealtimeRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const load = useCallback(async () => {
     if (!user?.id) return;
@@ -158,6 +204,8 @@ export default function Messages() {
         }
       }
 
+      const unreadByConv = await fetchUnreadCountByConversation(user.id, convIds);
+
       const out: InboxRow[] = convList.map((c) => {
         const m = matchById.get(c.match_id);
         const other = m ? (m.user_a === user.id ? m.user_b : m.user_a) : "";
@@ -171,10 +219,13 @@ export default function Messages() {
           otherPhoto: p?.photo ?? null,
           lastMessage: lm?.body ?? null,
           lastAt: lm?.created_at ?? c.created_at ?? null,
+          unreadCount: unreadByConv.get(c.id) ?? 0,
         };
       });
 
       out.sort((a, b) => {
+        if (a.unreadCount > 0 && b.unreadCount === 0) return -1;
+        if (a.unreadCount === 0 && b.unreadCount > 0) return 1;
         const ta = a.lastAt ? new Date(a.lastAt).getTime() : 0;
         const tb = b.lastAt ? new Date(b.lastAt).getTime() : 0;
         return tb - ta;
@@ -186,7 +237,7 @@ export default function Messages() {
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [user?.id, t]);
 
   useEffect(() => {
     void load();
@@ -194,11 +245,50 @@ export default function Messages() {
 
   useEffect(() => {
     const onRefresh = () => {
-      if (user?.id) void countPendingSecondChancesForUser(user.id).then(setSecondChanceCount);
+      if (user?.id) {
+        void countPendingSecondChancesForUser(user.id).then(setSecondChanceCount);
+        void load();
+      }
     };
     window.addEventListener(INBOX_REFRESH_EVENT, onRefresh);
     return () => window.removeEventListener(INBOX_REFRESH_EVENT, onRefresh);
-  }, [user?.id]);
+  }, [user?.id, load]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+
+    const ch = supabase
+      .channel(`messages-inbox:${user.id}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: CHAT_MESSAGES_TABLE },
+        () => {
+          void load();
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: CHAT_MESSAGES_TABLE },
+        () => {
+          void load();
+        },
+      )
+      .subscribe();
+
+    if (cancelled) {
+      void supabase.removeChannel(ch);
+      return;
+    }
+    inboxRealtimeRef.current = ch;
+
+    return () => {
+      cancelled = true;
+      const existing = inboxRealtimeRef.current;
+      inboxRealtimeRef.current = null;
+      if (existing) void supabase.removeChannel(existing);
+    };
+  }, [user?.id, load]);
 
   if (!user?.id) {
     return (
@@ -239,7 +329,7 @@ export default function Messages() {
         {!loading && !error && rows.length === 0 && <ReferralEmptyState language={language} />}
 
         {!loading && rows.length > 0 && (
-          <ul className="mt-5 space-y-2">
+          <ul className="mt-5 space-y-2.5">
             {rows.map((r) => (
               <MessageThreadRowItem key={r.conversationId} row={r} t={t} navigate={navigate} />
             ))}
