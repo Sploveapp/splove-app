@@ -304,52 +304,77 @@ export async function createConversationProposal(input: {
   return data as ActivityProposal;
 }
 
-export async function acceptConversationProposal(proposalId: string): Promise<ActivityProposal> {
+async function fetchConversationProposalById(proposalId: string): Promise<ActivityProposal | null> {
   const { data, error } = await supabase
     .from("activity_proposals")
-    .update({ status: "accepted", responded_at: new Date().toISOString() })
+    .select(ACTIVITY_PROPOSAL_SELECT)
     .eq("id", proposalId)
-    .eq("status", "pending")
+    .maybeSingle();
+  if (error || !data) return null;
+  return data as ActivityProposal;
+}
+
+export async function acceptConversationProposal(proposalId: string): Promise<ActivityProposal> {
+  const respondedAt = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("activity_proposals")
+    .update({ status: "accepted", responded_at: respondedAt })
+    .eq("id", proposalId)
+    .in("status", ["pending", "proposed"])
     .select(ACTIVITY_PROPOSAL_SELECT)
     .maybeSingle();
   if (isActivityProposalUniqueOrRowShapeError(error)) {
     throw new Error("chat_double_slot_waiting");
   }
   if (error) throw new Error("chat_error_generic");
-  if (!data) throw new Error("chat_error_proposal_not_found");
-  return data as ActivityProposal;
+  if (data) return data as ActivityProposal;
+  const existing = await fetchConversationProposalById(proposalId);
+  if (existing && String(existing.status ?? "").toLowerCase() === "accepted") {
+    return existing;
+  }
+  throw new Error("chat_error_proposal_not_found");
 }
 
 export async function declineConversationProposal(proposalId: string): Promise<ActivityProposal> {
+  const respondedAt = new Date().toISOString();
   const { data, error } = await supabase
     .from("activity_proposals")
-    .update({ status: "declined", responded_at: new Date().toISOString() })
+    .update({ status: "declined", responded_at: respondedAt })
     .eq("id", proposalId)
-    .eq("status", "pending")
+    .in("status", ["pending", "proposed"])
     .select(ACTIVITY_PROPOSAL_SELECT)
     .maybeSingle();
   if (isActivityProposalUniqueOrRowShapeError(error)) {
     throw new Error("chat_double_slot_waiting");
   }
   if (error) throw new Error("chat_error_generic");
-  if (!data) throw new Error("chat_error_proposal_not_found");
-  return data as ActivityProposal;
+  if (data) return data as ActivityProposal;
+  const existing = await fetchConversationProposalById(proposalId);
+  if (existing && String(existing.status ?? "").toLowerCase() === "declined") {
+    return existing;
+  }
+  throw new Error("chat_error_proposal_not_found");
 }
 
 export async function cancelConversationProposal(proposalId: string): Promise<ActivityProposal> {
+  const respondedAt = new Date().toISOString();
   const { data, error } = await supabase
     .from("activity_proposals")
-    .update({ status: "cancelled", responded_at: new Date().toISOString() })
+    .update({ status: "cancelled", responded_at: respondedAt })
     .eq("id", proposalId)
-    .eq("status", "pending")
+    .in("status", ["pending", "proposed"])
     .select(ACTIVITY_PROPOSAL_SELECT)
     .maybeSingle();
   if (isActivityProposalUniqueOrRowShapeError(error)) {
     throw new Error("chat_double_slot_waiting");
   }
   if (error) throw new Error("chat_error_generic");
-  if (!data) throw new Error("chat_error_proposal_not_found");
-  return data as ActivityProposal;
+  if (data) return data as ActivityProposal;
+  const existing = await fetchConversationProposalById(proposalId);
+  if (existing && String(existing.status ?? "").toLowerCase() === "cancelled") {
+    return existing;
+  }
+  throw new Error("chat_error_proposal_not_found");
 }
 
 export async function requestConversationProposalReschedule(input: {

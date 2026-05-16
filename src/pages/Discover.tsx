@@ -42,6 +42,10 @@ import {
 } from "../lib/discoverCardCopy";
 import { buildDiscoverScore, computeReliabilityScore, getReliabilityUiHints } from "../lib/discoverScore";
 import { scoreAndFilterDiscoverCandidates } from "../services/discoverScoring.service";
+import {
+  getDiscoverFeedIntegrityExclusionReasons,
+  isProfileReadyForDiscover,
+} from "../lib/onboardingDiscoverReadiness";
 import { buildDiscoverLocationLines, formatViewerRadiusLabel } from "../utils/geolocation";
 import { formatCityDisplay } from "../lib/formatCityDisplay";
 import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
@@ -1884,6 +1888,30 @@ export default function Discover() {
         );
       }
 
+      const viewerSportsCount = meProfileSportRows.length;
+      const viewerIntegrityRow = meProfile as unknown as Record<string, unknown>;
+      if (!isProfileReadyForDiscover(viewerIntegrityRow, viewerSportsCount)) {
+        const viewerExclusionReasons = getDiscoverFeedIntegrityExclusionReasons(
+          viewerIntegrityRow,
+          viewerSportsCount,
+        );
+        console.warn("[Discover audit] VIEWER_PROFILE_INCOMPLETE — redirection onboarding", {
+          profile_id: viewerAuthId,
+          profile_completed: meProfile.profile_completed ?? null,
+          exclusion_reasons: viewerExclusionReasons,
+        });
+        if (import.meta.env.DEV) {
+          console.info("[Discover diagnostics] early_return", {
+            stage: "viewer_profile_integrity",
+            exclusion_reason: "viewer_profile_incomplete_or_ghost",
+            exclusion_reasons: viewerExclusionReasons,
+          });
+        }
+        navigate("/onboarding", { replace: true });
+        setLoading(false);
+        return;
+      }
+
       if (!viewerHasDiscoverSearchCoords(meProfile)) {
         console.warn(
           "[Discover audit] VIEWER_SEARCH_GEO_BLOCKED — Latitude, longitude ou discovery_radius_km (10 / 25 / 50 / 100) manquant ou invalide. Discover ne charge pas le feed.",
@@ -1977,6 +2005,22 @@ export default function Discover() {
       }
 
       let raw: Profile[] = profilesFromRpc.filter((p) => hasFiniteDiscoverCoordinates(p));
+      {
+        const before = raw;
+        raw = raw.filter((p) => {
+          const reasons = getDiscoverFeedIntegrityExclusionReasons(
+            p as unknown as Record<string, unknown>,
+          );
+          return reasons.length === 0;
+        });
+        discoverDevPipelineDiff(before, raw, "exclude_ghost_inconsistent_profile", (p) => {
+          const reasons = getDiscoverFeedIntegrityExclusionReasons(
+            p as unknown as Record<string, unknown>,
+          );
+          return reasons.length > 0 ? reasons.join(";") : "missing required field";
+        });
+        discoverLogStageCount("after ghost/integrity filter", raw.length);
+      }
       if (BETA_MODE) {
         const before = raw;
         raw = raw.filter((p) => {

@@ -1,12 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  APP_BG,
-  APP_BORDER,
-  APP_CARD,
-  APP_TEXT,
-  APP_TEXT_MUTED,
-} from "../constants/theme";
+import { NotificationListItem } from "../components/notifications/NotificationListItem";
+import { dispatchInAppNotificationsRefresh } from "../constants";
+import { formatRelativeTime } from "../lib/formatRelativeTime";
+import { presentNotification, sortNotifications } from "../lib/sploveNotifications";
 import { useTranslation } from "../i18n/useTranslation";
 import {
   fetchInAppNotifications,
@@ -15,47 +12,22 @@ import {
   type InAppNotificationRow,
 } from "../services/inAppNotifications.service";
 
-function linesForKind(
-  t: (key: string) => string,
-  kind: string,
-): { title: string; message: string } {
-  const map: Record<string, { titleKey: string; messageKey: string }> = {
-    invite_link_sent_delay: {
-      titleKey: "in_app_notif.invite_link_sent_delay.title",
-      messageKey: "in_app_notif.invite_link_sent_delay.message",
-    },
-    invite_followup_day1: {
-      titleKey: "in_app_notif.invite_followup_day1.title",
-      messageKey: "in_app_notif.invite_followup_day1.message",
-    },
-    referrer_zone_unlocked: {
-      titleKey: "in_app_notif.referrer_zone_unlocked.title",
-      messageKey: "in_app_notif.referrer_zone_unlocked.message",
-    },
-    discover_low_engagement_48h: {
-      titleKey: "in_app_notif.discover_low_engagement_48h.title",
-      messageKey: "in_app_notif.discover_low_engagement_48h.message",
-    },
-  };
-  const keys = map[kind];
-  if (!keys) {
-    return { title: kind, message: "" };
-  }
-  return { title: t(keys.titleKey), message: t(keys.messageKey) };
-}
-
 export default function NotificationsPage() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const navigate = useNavigate();
   const [rows, setRows] = useState<InAppNotificationRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  const dateLocale = language === "en" ? "en-GB" : "fr-FR";
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       void pulseInAppNotifications();
-      const list = await fetchInAppNotifications();
-      setRows(list);
+      const list = await fetchInAppNotifications(80);
+      setRows(sortNotifications(list));
+      dispatchInAppNotificationsRefresh();
     } finally {
       setLoading(false);
     }
@@ -65,107 +37,74 @@ export default function NotificationsPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const sorted = useMemo(() => sortNotifications(rows), [rows]);
+
   async function handleOpen(row: InAppNotificationRow) {
-    await markInAppNotificationRead(row.id);
-    void pulseInAppNotifications();
-    navigate("/discover", { replace: false });
+    const presentation = presentNotification(row, t);
+    if (!row.read) {
+      await markInAppNotificationRead(row.id);
+      setRows((prev) =>
+        sortNotifications(prev.map((r) => (r.id === row.id ? { ...r, read: true } : r))),
+      );
+      dispatchInAppNotificationsRefresh();
+    }
+    const route = presentation.route;
+    if (route.includes("?")) {
+      const [path, query] = route.split("?");
+      navigate({ pathname: path, search: `?${query}` });
+    } else {
+      navigate(route);
+    }
   }
 
+  const unreadCount = sorted.filter((r) => !r.read).length;
+
   return (
-    <div
-      style={{
-        minHeight: "100%",
-        background: APP_BG,
-        fontFamily:
-          "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
-      }}
-    >
-      <main style={{ padding: "24px", maxWidth: "420px", margin: "0 auto" }}>
+    <div className="min-h-full bg-app-bg font-sans">
+      <main className="mx-auto max-w-md px-5 pb-8 pt-4">
         <button
           type="button"
-          onClick={() => navigate("/discover")}
-          style={{
-            margin: "0 0 16px 0",
-            padding: 0,
-            border: "none",
-            background: "none",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontWeight: 600,
-            color: APP_TEXT_MUTED,
-          }}
+          onClick={() => navigate(-1)}
+          className="mb-4 text-sm font-semibold text-app-muted transition hover:text-app-text"
         >
           {`← ${t("discover_profiles")}`}
         </button>
 
-        <h1
-          style={{
-            margin: "0 0 16px 0",
-            fontSize: "20px",
-            fontWeight: 700,
-            color: APP_TEXT,
-          }}
-        >
-          {t("in_app_notif.screen_title")}
-        </h1>
+        <div className="mb-5 flex items-end justify-between gap-3">
+          <h1 className="text-xl font-bold text-app-text">{t("in_app_notif.screen_title")}</h1>
+          {unreadCount > 0 ? (
+            <span className="rounded-full bg-[#FF1E2D]/15 px-2.5 py-0.5 text-[12px] font-semibold text-[#FF1E2D]">
+              {unreadCount}
+            </span>
+          ) : null}
+        </div>
+
+        <p className="mb-4 text-[13px] leading-snug text-app-muted">{t("in_app_notif.screen_subtitle")}</p>
 
         {loading ? (
-          <p style={{ margin: 0, fontSize: "14px", color: APP_TEXT_MUTED }}>{t("loading")}</p>
-        ) : rows.length === 0 ? (
-          <p style={{ margin: 0, fontSize: "14px", color: APP_TEXT_MUTED }}>{t("in_app_notif.empty")}</p>
+          <p className="text-sm text-app-muted">{t("loading")}</p>
+        ) : sorted.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-app-border bg-app-card/60 px-4 py-10 text-center">
+            <p className="text-sm text-app-muted">{t("in_app_notif.empty")}</p>
+          </div>
         ) : (
-          <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
-            {rows.map((row) => {
-              const { title, message } = linesForKind(t, row.kind);
+          <ul className="m-0 list-none space-y-2.5 p-0">
+            {sorted.map((row) => {
+              const presentation = presentNotification(row, t);
+              const relativeTime = formatRelativeTime(row.created_at, dateLocale, nowTick);
               return (
-                <li key={row.id} style={{ marginBottom: "12px" }}>
-                  <button
-                    type="button"
-                    onClick={() => void handleOpen(row)}
-                    style={{
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "14px 16px",
-                      borderRadius: "16px",
-                      border: `1px solid ${APP_BORDER}`,
-                      background: APP_CARD,
-                      cursor: "pointer",
-                      display: "block",
-                      boxSizing: "border-box",
-                    }}
-                  >
-                    <span
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "8px",
-                        marginBottom: "6px",
-                      }}
-                    >
-                      {!row.read ? (
-                        <span
-                          style={{
-                            width: "8px",
-                            height: "8px",
-                            borderRadius: "999px",
-                            background: "#FF1E2D",
-                            flexShrink: 0,
-                          }}
-                          aria-hidden
-                        />
-                      ) : (
-                        <span style={{ width: "8px", flexShrink: 0 }} aria-hidden />
-                      )}
-                      <span style={{ fontSize: "15px", fontWeight: 700, color: APP_TEXT }}>{title}</span>
-                    </span>
-                    <p style={{ margin: 0, fontSize: "13px", lineHeight: 1.45, color: APP_TEXT_MUTED }}>
-                      {message}
-                    </p>
-                    <p style={{ margin: "8px 0 0 0", fontSize: "11px", color: APP_TEXT_MUTED, opacity: 0.85 }}>
-                      {new Date(row.created_at).toLocaleString()}
-                    </p>
-                  </button>
-                </li>
+                <NotificationListItem
+                  key={row.id}
+                  presentation={presentation}
+                  relativeTime={relativeTime}
+                  unread={!row.read}
+                  onOpen={() => void handleOpen(row)}
+                />
               );
             })}
           </ul>

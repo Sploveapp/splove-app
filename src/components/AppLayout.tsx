@@ -6,7 +6,11 @@ import { SPLoveBottomNav } from "./navigation/SPLoveBottomNav";
 import { DiscoverUndoNavProvider } from "../contexts/DiscoverUndoNavContext";
 import { useAuth } from "../contexts/AuthContext";
 import { fetchIncomingNonBlockedLikesCount } from "../services/likes.service";
-import { ACTIVITY_PROPOSALS_REFRESH_EVENT, INBOX_REFRESH_EVENT } from "../constants";
+import {
+  ACTIVITY_PROPOSALS_REFRESH_EVENT,
+  INBOX_REFRESH_EVENT,
+  IN_APP_NOTIFICATIONS_REFRESH_EVENT,
+} from "../constants";
 import { fetchActivityProposalsPendingActionCount } from "../lib/activityProposalPendingAction";
 import { CHAT_MESSAGES_TABLE, supabase } from "../lib/supabase";
 import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
@@ -151,7 +155,16 @@ export function AppLayout() {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [pulseAppNotifications]);
 
+  useEffect(() => {
+    const onRefresh = () => {
+      void pulseAppNotifications();
+    };
+    window.addEventListener(IN_APP_NOTIFICATIONS_REFRESH_EVENT, onRefresh);
+    return () => window.removeEventListener(IN_APP_NOTIFICATIONS_REFRESH_EVENT, onRefresh);
+  }, [pulseAppNotifications]);
+
   const inboxRealtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const notifRealtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -192,6 +205,46 @@ export function AppLayout() {
       if (ch) void supabase.removeChannel(ch);
     };
   }, [loadInboxCount]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user?.id) return;
+
+      const ch = supabase
+        .channel(`in-app-notifications:${user.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "in_app_notifications",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            void pulseAppNotifications();
+          },
+        )
+        .subscribe();
+
+      if (cancelled) {
+        void supabase.removeChannel(ch);
+        return;
+      }
+      notifRealtimeChannelRef.current = ch;
+    })();
+
+    return () => {
+      cancelled = true;
+      const ch = notifRealtimeChannelRef.current;
+      notifRealtimeChannelRef.current = null;
+      if (ch) void supabase.removeChannel(ch);
+    };
+  }, [pulseAppNotifications]);
 
   const shellBg = isMesRencontres ? "#F4F6F8" : APP_BG;
 

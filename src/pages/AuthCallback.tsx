@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { replaceWithHashRoute } from "../lib/authRedirect";
+import { isProfileReadyForDiscover } from "../lib/onboardingDiscoverReadiness";
 import { BRAND_BG } from "../constants/theme";
 
 const STEP_TIMEOUT_MS = 8000;
@@ -15,7 +16,7 @@ const ERR_PROFILE_STUCK =
 
 const ERR_NO_SESSION_TITLE = "Session Google non récupérée";
 
-type ProfileStatusRow = {
+type ProfileStatusRow = Record<string, unknown> & {
   profile_completed?: boolean | null;
 };
 
@@ -255,7 +256,9 @@ export default function AuthCallback() {
       const profR = await runStep(async () => {
         return supabase
           .from("profiles")
-          .select("profile_completed")
+          .select(
+            "profile_completed, onboarding_completed, onboarding_done, gender, looking_for, city, latitude, longitude, discovery_radius_km, sport_match_preference, onboarding_sports_count, portrait_url, main_photo_url",
+          )
           .eq("id", uid)
           .maybeSingle<ProfileStatusRow>();
       });
@@ -297,7 +300,7 @@ export default function AuthCallback() {
       }
 
       const profile = profileRow;
-      const done = profile?.profile_completed === true;
+      const done = profile != null && isProfileReadyForDiscover(profile);
       const target = done ? "/discover" : "/onboarding";
       console.log("[ONBOARDING_GUARD] oauth-callback profile status", {
         profile_completed: done,

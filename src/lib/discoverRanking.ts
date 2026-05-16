@@ -2,6 +2,7 @@ import type { DiscoverScoreProfileInput } from "./discoverScore";
 import { buildDiscoverScore, getSharedSportsCount } from "./discoverScore";
 import { getSharedSportLabelsForMatch } from "./sportMatchGroups";
 import { isPreferenceCompatible, type PreferenceCompatFields } from "./matchingPreferences";
+import { collectProfileCriticalDataGaps } from "./onboardingDiscoverReadiness";
 
 type RankedProfileBase = DiscoverScoreProfileInput &
   PreferenceCompatFields & {
@@ -42,6 +43,7 @@ export function applyDiscoverHardExclusions<T extends RankedProfileBase>(
     if (!candidate.first_name?.trim()) return false;
     if (!candidate.gender) return false;
     if (!candidate.birth_date) return false;
+    if (collectProfileCriticalDataGaps(candidate as Record<string, unknown>).length > 0) return false;
     if (candidate.profile_completed !== true) return false;
     if (!hasApprovedPhoto(candidate)) return false;
     if (!isPreferenceCompatible(ctx.viewer, candidate)) return false;

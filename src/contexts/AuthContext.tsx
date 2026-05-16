@@ -18,6 +18,7 @@ import {
 } from "../lib/profileSelect";
 import type { AppProfile } from "../lib/appProfile";
 import { isProfileRecord } from "../lib/appProfile";
+import { isProfileReadyForDiscover } from "../lib/onboardingDiscoverReadiness";
 
 import type { User, Session } from "@supabase/supabase-js";
 
@@ -459,10 +460,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void loadProfile(uid);
   }, [session?.user?.id, loadProfile]);
 
-  /** Garde navigation : une seule source de vérité BDD — `profile_completed` (produit). */
+  /** Garde navigation : audit strict (genre, looking_for, ville, coords, photo, sports, flags). */
   const isProfileComplete =
-    profile != null && typeof profile.id === "string" && profile.id.length > 0 && profile.profile_completed === true;
+    profile != null &&
+    typeof profile.id === "string" &&
+    profile.id.length > 0 &&
+    isProfileReadyForDiscover(profile as unknown as Record<string, unknown>);
   const profileIncompleteReason = isProfileComplete ? null : "profile_not_completed";
+
+  if (
+    import.meta.env.DEV &&
+    profile != null &&
+    profile.profile_completed === true &&
+    !isProfileComplete
+  ) {
+    console.warn("[AuthContext] ghost profile detected — profile_completed true but audit failed", {
+      profile_id: profile.id,
+      gender: profile.gender ?? null,
+      looking_for: (profile as { looking_for?: unknown }).looking_for ?? null,
+      city: (profile as { city?: unknown }).city ?? null,
+      latitude: (profile as { latitude?: unknown }).latitude ?? null,
+      longitude: (profile as { longitude?: unknown }).longitude ?? null,
+    });
+  }
 
   const value: AuthState = {
     user,

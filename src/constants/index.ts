@@ -10,6 +10,13 @@ export const INBOX_REFRESH_EVENT = "splove:inbox-refresh";
 /** Window event to refresh activity proposal pending-action badges (nav, Mes rencontres). */
 export const ACTIVITY_PROPOSALS_REFRESH_EVENT = "splove:activity-proposals-refresh";
 
+/** Window event to refresh the header notification bell (unread count). */
+export const IN_APP_NOTIFICATIONS_REFRESH_EVENT = "splove:in-app-notifications-refresh";
+
+export function dispatchInAppNotificationsRefresh(): void {
+  window.dispatchEvent(new CustomEvent(IN_APP_NOTIFICATIONS_REFRESH_EVENT));
+}
+
 export function dispatchActivityProposalsRefresh(): void {
   window.dispatchEvent(new CustomEvent(ACTIVITY_PROPOSALS_REFRESH_EVENT));
 }

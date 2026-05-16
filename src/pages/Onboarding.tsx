@@ -56,7 +56,13 @@ import {
   normalizePreferredAgeRange,
 } from "../lib/profileAge";
 import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/sportMatchPreference";
-import { auditOnboardingProfileForDiscover } from "../lib/onboardingDiscoverReadiness";
+import {
+  auditOnboardingProfileForDiscover,
+  auditProfileCriticalDataForDiscover,
+  computeStrictCompletionFlags,
+  isProfileReadyForDiscover,
+  messageForDiscoverReadinessGap,
+} from "../lib/onboardingDiscoverReadiness";
 import { computeOnboardingProfileFillPercent } from "../lib/onboardingProfileFillPercent";
 import {
   type EnergyOptionKey,
@@ -270,7 +276,6 @@ function extractFaultyColumnNameFromPostgrestMessage(message: string | undefined
 /** Ordre de retrait défensif + mapping legacy (schéma mixte prod). */
 const PROD_SANITIZE_AGGRESSIVE_STRIP_ORDER = [
   "practice_preferences",
-  "looking_for",
   "sport_time",
   "main_photo_url",
   "portrait_url",
@@ -1097,6 +1102,7 @@ export default function Onboarding() {
     if (!user?.id || authLoading || isProfileLoading) return;
     if (!profile?.id || profile.id !== user.id) return;
     const row = profile as Record<string, unknown>;
+    if (!isProfileReadyForDiscover(row, Number(row.onboarding_sports_count ?? 0))) return;
     if (row.profile_completed !== true || row.onboarding_completed !== true) return;
     if (row.onboarding_done == true) return;
 
@@ -1937,7 +1943,7 @@ export default function Onboarding() {
         obPreferredAgeMinStr,
         obPreferredAgeMaxStr,
       );
-      const profilePayload: Record<string, unknown> = {
+      const profilePayloadBase: Record<string, unknown> = {
         id: authUserId,
         first_name: firstName.trim(),
         birth_date: birthDate,
@@ -1970,13 +1976,35 @@ export default function Onboarding() {
         portrait_url: portraitUrl,
         fullbody_url: fullbodyUrl,
         main_photo_url: portraitUrl || fullbodyUrl,
-        profile_completed: true,
-        onboarding_completed: true,
-        onboarding_done: true,
+        profile_completed: false,
+        onboarding_completed: false,
+        onboarding_done: false,
         accepted_terms_at: acceptTerms ? nowIso : null,
         accepted_privacy_at: acceptTerms ? nowIso : null,
         updated_at: nowIso,
         language,
+      };
+
+      const preSubmitAudit = auditProfileCriticalDataForDiscover(
+        profilePayloadBase,
+        selectedSportIds.length,
+      );
+      if (!preSubmitAudit.ok) {
+        setLoading(false);
+        onboardingSubmitInFlightRef.current = false;
+        setStep(preSubmitAudit.suggestedStep);
+        setStepHint(null);
+        setError(messageForDiscoverReadinessGap(preSubmitAudit.missingFields, t));
+        return;
+      }
+
+      const completionFlags = computeStrictCompletionFlags(
+        profilePayloadBase,
+        selectedSportIds.length,
+      );
+      const profilePayload: Record<string, unknown> = {
+        ...profilePayloadBase,
+        ...completionFlags,
       };
 
       if (PHOTO_VERIFICATION_PLACEHOLDER) {
@@ -2365,8 +2393,17 @@ export default function Onboarding() {
           suggested_step: readiness.suggestedStep,
           context: "submit_final",
         });
+        await supabase
+          .from("profiles")
+          .update({
+            profile_completed: false,
+            onboarding_completed: false,
+            onboarding_done: false,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", authUserId);
         setStep(readiness.suggestedStep);
-        setError(t("onboarding_discover_readiness_blocked"));
+        setError(messageForDiscoverReadinessGap(readiness.missingFields, t));
         return;
       }
 

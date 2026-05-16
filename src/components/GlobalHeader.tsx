@@ -7,7 +7,7 @@ import { HeaderNotificationButton } from "./HeaderNotificationButton";
 type GlobalHeaderProps = {
   /** En-tête plus bas pour parcours longs (ex. onboarding). */
   variant?: "default" | "compact";
-  /** Badge notifications in-app (Discover shell). */
+  /** Compteur notifications in-app (cloche header). */
   inAppUnreadCount?: number;
 };
 
@@ -59,7 +59,7 @@ export function GlobalHeader({ variant = "default", inAppUnreadCount = 0 }: Glob
             </span>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <HeaderNotificationButton hasNotification={inAppUnreadCount > 0} />
+            <HeaderNotificationButton unreadCount={inAppUnreadCount} />
             <button
               type="button"
               onClick={() => void handleLogout()}

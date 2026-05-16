@@ -46,6 +46,7 @@ import {
   isMissingColumnError,
 } from "../lib/activityProposalsQuery";
 import { normalizeActivityProposalStatus } from "../lib/messages/activityProposal";
+import { logActivityFlowState } from "../lib/activityFlowDevLog";
 import {
   acceptActivityProposal,
   cancelActivityProposal,
@@ -441,6 +442,15 @@ export default function MesRencontres() {
     if (!uid) return;
     setPageError(null);
     setActionBusyId(p.id);
+    logActivityFlowState({
+      proposalId: p.id,
+      status: p.status,
+      proposerId: p.proposer_id,
+      currentUserId: uid,
+      action: "accept",
+      isSubmitting: true,
+      source: "MesRencontres.handleConfirm",
+    });
     const res = await acceptActivityProposal(supabase, {
       proposalId: p.id,
       conversationId: p.conversation_id,
@@ -448,9 +458,31 @@ export default function MesRencontres() {
     });
     setActionBusyId(null);
     if ("error" in res) {
+      logActivityFlowState({
+        proposalId: p.id,
+        status: p.status,
+        proposerId: p.proposer_id,
+        currentUserId: uid,
+        action: "accept",
+        isSubmitting: false,
+        source: "MesRencontres.handleConfirm:error",
+      });
       setPageError(res.error.message);
       return;
     }
+    logActivityFlowState({
+      proposalId: res.data.id,
+      status: res.data.status,
+      proposerId: res.data.proposer_id,
+      currentUserId: uid,
+      action: "accept",
+      isSubmitting: false,
+      source: "MesRencontres.handleConfirm:done",
+    });
+    setPageError(null);
+    setPageSuccess(t("chat_activity_confirmed"));
+    setTab("confirmed");
+    dispatchActivityProposalsRefresh();
     await loadData();
   }
 

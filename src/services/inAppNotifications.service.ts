@@ -8,6 +8,8 @@ export type InAppNotificationRow = {
   message: string;
   read: boolean;
   exempt_daily_cap?: boolean | null;
+  payload?: Record<string, unknown> | null;
+  dedupe_key?: string | null;
   created_at: string;
 };
 
@@ -41,7 +43,7 @@ export async function pulseInAppNotifications(): Promise<number> {
 export async function fetchInAppNotifications(limit = 50): Promise<InAppNotificationRow[]> {
   const { data, error } = await supabase
     .from("in_app_notifications")
-    .select("id, user_id, kind, title, message, read, exempt_daily_cap, created_at")
+    .select("id, user_id, kind, title, message, read, exempt_daily_cap, payload, dedupe_key, created_at")
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) {
@@ -60,4 +62,18 @@ export async function markInAppNotificationRead(id: string): Promise<void> {
   if (error) {
     console.warn("[inAppNotifications] mark read", error.message);
   }
+}
+
+export async function countUnreadInAppNotifications(): Promise<number> {
+  const { count, error } = await supabase
+    .from("in_app_notifications")
+    .select("id", { count: "exact", head: true })
+    .eq("read", false);
+  if (error) {
+    const low = (error.message ?? "").toLowerCase();
+    if (error.code === "42P01" || low.includes("does not exist")) return 0;
+    console.warn("[inAppNotifications] count unread", error.message);
+    return 0;
+  }
+  return count ?? 0;
 }

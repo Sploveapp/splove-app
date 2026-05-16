@@ -10,13 +10,12 @@ import { IconSend } from "../components/ui/Icon";
 import { ProposalCard } from "../components/ProposalCard";
 import { ActivityResponseBubble } from "../components/chat/ActivityResponseBubble";
 import { ActivityProposalBubble } from "../components/chat/ActivityProposalBubble";
-import { MeetupEngagementChatBlock } from "../components/MeetupEngagementChatBlock";
+import { ChatConfirmedActivityCard } from "../components/chat/ChatConfirmedActivityCard";
 import { MeetingConfirmationPanel } from "../components/MeetingConfirmationPanel";
 import { ProposalComposerModal } from "../components/ProposalComposerModal";
 import { MatchActivitySuggestionCard } from "../components/MatchActivitySuggestionCard";
 import { ChatEmojiPicker } from "../components/ChatEmojiPicker";
 import { ChatPostMatchPanel } from "../components/ChatPostMatchPanel";
-import { RealLifeSessionPanel } from "../components/RealLifeSessionPanel";
 import { PriorityProposalUpsell } from "../components/PriorityProposalUpsell";
 import type { ActivityPayload } from "../lib/chatActivity";
 import { toSupabaseScheduledAtIso } from "../lib/activitySchedule";
@@ -26,7 +25,16 @@ import {
   getProductState,
   touchMatchOpenedAt,
 } from "../lib/chatActivity";
-import { isPendingProposalStatus, normalizeActivityProposalStatus } from "../lib/messages/activityProposal";
+import {
+  deriveChatActivityFlowPhase,
+  type ChatActivityFlowPhase,
+} from "../lib/chatActivityFlowPhase";
+import {
+  formatCompactConfirmedActivityDetail,
+  isPendingProposalStatus,
+  normalizeActivityProposalStatus,
+} from "../lib/messages/activityProposal";
+import { logActivityFlowState } from "../lib/activityFlowDevLog";
 import { buildActivityProposalRowForRender } from "../lib/messages/activityMessageParser";
 import {
   acceptConversationProposal,
@@ -108,15 +116,8 @@ import {
 import {
   parseMeetupConfirmationFromRow,
   tryParseMeetupFromMessageBody,
-  type MeetupConfirmationPayload,
 } from "../lib/meetupConfirmation";
-import { saveMeetupConfirmation } from "../services/meetupConfirmation.service";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
-import {
-  fetchRealLifeSessionCheckin,
-  type RealLifeSessionCheckin,
-} from "../services/realLifeSessionCheckin.service";
-
 const CHAT_WINDOW_HOURS_MS = 48 * 60 * 60 * 1000;
 /** 1 h après le créneau pour proposer un retour discret (anti-prompt agressif). */
 const ACTIVITY_FEEDBACK_DELAY_MS = 60 * 60 * 1000;
@@ -369,8 +370,6 @@ export default function Chat() {
   const [reportOpen, setReportOpen] = useState(false);
   const [partnerIdentityVerifiedBadge, setPartnerIdentityVerifiedBadge] = useState(false);
   const [chatMatchId, setChatMatchId] = useState<string | null>(null);
-  const [matchPair, setMatchPair] = useState<{ userA: string; userB: string } | null>(null);
-  const [rlCheckin, setRlCheckin] = useState<RealLifeSessionCheckin | null>(null);
   const [suggestedSlots, setSuggestedSlots] = useState<string[]>([]);
   const [chatAccentTheme, setChatAccentTheme] = useState<MessageBubbleTheme>(CHAT_DEFAULT_ACCENT);
   const [chatOptionsOpen, setChatOptionsOpen] = useState(false);
@@ -384,7 +383,6 @@ export default function Chat() {
   /** Retours utilisateur sur une proposition (clé = proposal id). */
   const [myActivityOutcomes, setMyActivityOutcomes] = useState<Record<string, ActivityFeedbackSentiment>>({});
   const [outcomeSubmitting, setOutcomeSubmitting] = useState(false);
-  const [meetupEngageBusy, setMeetupEngageBusy] = useState(false);
   /** Genres + intentions des deux profils — règle du premier message texte. */
   const [pairChatMeta, setPairChatMeta] = useState<{
     myGender: string | null;
@@ -646,8 +644,6 @@ export default function Chat() {
         setChatMessages([]);
         setPairBlocked(false);
         setPartnerUserId(null);
-        setMatchPair(null);
-        setRlCheckin(null);
         setPartnerIdentityVerifiedBadge(false);
         setPairChatMeta(null);
         setMatchInitiatorUserId(null);
@@ -729,7 +725,6 @@ export default function Chat() {
         const other = user.id === ua ? ub : ua;
         if (!cancelled) {
           setPartnerUserId(other);
-          setMatchPair({ userA: ua, userB: ub });
         }
 
         const blocked = await isBlockedWith(other);
@@ -1068,54 +1063,27 @@ export default function Chat() {
 
   const effectiveMeetupPayload = meetupFromProposal ?? meetupFromMessageFallback;
 
-  const confirmedMeetingCardProposalId =
-    acceptedProposalForRl?.id ??
-    (effectiveMeetupPayload ? `msg-${effectiveMeetupPayload.confirmed_at}` : "");
+  const meetupConfirmed = effectiveMeetupPayload?.status === "confirmed";
+
+  const chatActivityPhase = useMemo(
+    (): ChatActivityFlowPhase =>
+      deriveChatActivityFlowPhase({
+        meetupConfirmed,
+        hasAcceptedProposal,
+        hasPendingProposal,
+      }),
+    [meetupConfirmed, hasAcceptedProposal, hasPendingProposal],
+  );
+
+  const isPostMatchNoActivity = chatActivityPhase === "post_match_no_activity";
+  const isActivityPending = chatActivityPhase === "activity_pending";
+  const isActivityAcceptedConfirming = chatActivityPhase === "activity_accepted_confirming";
+  const isActivityConfirmed = chatActivityPhase === "activity_confirmed";
 
   const modifyMeetupOpen = Boolean(effectiveMeetupPayload?.engagement?.modify_flow_open);
 
-  const persistMeetupConfirmation = useCallback(
-    async (next: MeetupConfirmationPayload) => {
-      if (!conversationId || !user?.id) return;
-      const pid = acceptedProposalForRl?.id;
-      if (!pid || String(pid).startsWith("msg-")) {
-        console.warn("[Chat] meetup engagement persist skipped (no proposal id)");
-        return;
-      }
-      setMeetupEngageBusy(true);
-      try {
-        await saveMeetupConfirmation({
-          proposalId: pid,
-          conversationId,
-          senderId: user.id,
-          payload: next,
-        });
-        await reloadProposals(conversationId);
-        await reloadChatMessages(conversationId);
-      } finally {
-        setMeetupEngageBusy(false);
-      }
-    },
-    [
-      acceptedProposalForRl?.id,
-      conversationId,
-      reloadChatMessages,
-      reloadProposals,
-      user?.id,
-    ],
-  );
-
   const latestProposal = latestProposalTop ?? sortedProposalsDesc[0] ?? null;
   const productState = getProductState({ hasProposal: hasPendingProposal });
-
-  useEffect(() => {
-    const id = acceptedProposalForRl?.id;
-    if (!id || !matchPair || !user?.id) {
-      if (!id) setRlCheckin(null);
-      return;
-    }
-    void fetchRealLifeSessionCheckin(id).then((row) => setRlCheckin(row));
-  }, [acceptedProposalForRl?.id, matchPair, user?.id, proposals]);
 
   useEffect(() => {
     if (pendingProposal?.id) console.log("[Chat] active proposal id", pendingProposal.id);
@@ -1153,9 +1121,8 @@ export default function Chat() {
 
   const showMatchActivitySuggestion =
     Boolean(sharedSportLead) &&
+    isPostMatchNoActivity &&
     chatSessionPhase === "new_match" &&
-    !hasPendingProposal &&
-    !hasAcceptedProposal &&
     !pairBlocked &&
     !suggestionDismissed;
 
@@ -1278,13 +1245,13 @@ export default function Chat() {
   const [showConversationOpenBanner, setShowConversationOpenBanner] = useState(false);
 
   useEffect(() => {
-    if (!conversationStarted || !conversationOpenBannerKey) {
+    if (!isPostMatchNoActivity || !conversationStarted || !conversationOpenBannerKey) {
       setShowConversationOpenBanner(false);
       return;
     }
     const seen = sessionStorage.getItem(conversationOpenBannerKey) === "1";
     setShowConversationOpenBanner(!seen);
-  }, [conversationStarted, conversationOpenBannerKey]);
+  }, [isPostMatchNoActivity, conversationStarted, conversationOpenBannerKey]);
 
   function dismissConversationOpenBanner() {
     if (conversationOpenBannerKey) {
@@ -1343,7 +1310,7 @@ export default function Chat() {
     for (const p of proposals) m.set(p.id, p);
     if (proposalMutation) {
       const cur = m.get(proposalMutation.proposalId);
-      m.set(proposalMutation.proposalId, { ...(cur ?? proposalMutation.snapshot), ...proposalMutation.snapshot });
+      if (!cur) m.set(proposalMutation.proposalId, proposalMutation.snapshot);
     }
     return m;
   }, [proposals, proposalMutation]);
@@ -1355,8 +1322,19 @@ export default function Chat() {
     if (proposalMutation && isPendingProposalStatus(proposalMutation.snapshot.status)) {
       return proposalsById.get(proposalMutation.proposalId) ?? proposalMutation.snapshot;
     }
-    return latestProposal;
+    return null;
   }, [latestProposal, proposalMutation, proposalsById]);
+
+  const compactConfirmedDetailLine = useMemo(() => {
+    if (!meetupConfirmed || !acceptedProposalForRl) return null;
+    const dateLocale = language === "en" ? "en-GB" : "fr-FR";
+    return formatCompactConfirmedActivityDetail(
+      acceptedProposalForRl,
+      dateLocale,
+      t("date_to_confirm"),
+      effectiveMeetupPayload,
+    );
+  }, [meetupConfirmed, acceptedProposalForRl, effectiveMeetupPayload, language, t]);
 
   const proposalDetailActions = useMemo(() => {
     if (!proposalDetail || !user?.id) return null;
@@ -1395,6 +1373,9 @@ export default function Chat() {
         if (bubbleIdsRendered.has(proposal.id)) {
           return { kind: "message" as const, sortKey, createdMs, message: msg };
         }
+        if (hasAcceptedProposal && !isPendingProposalStatus(proposal.status)) {
+          return { kind: "message" as const, sortKey, createdMs, message: msg };
+        }
         const isActiveSlot = isPendingProposalStatus(proposal.status);
         const staleExtraActive =
           canonicalActiveId != null && isActiveSlot && proposal.id !== canonicalActiveId;
@@ -1408,6 +1389,7 @@ export default function Chat() {
     });
     const orphanProposals: ChatTimelineItem[] = proposals
       .filter((p) => {
+        if (hasAcceptedProposal && !isPendingProposalStatus(p.status ?? "")) return false;
         if (bubbleIdsRendered.has(p.id)) return false;
         if (linkedIds.has(p.id)) return false;
         if (latestProposalId && p.id !== latestProposalId) return false;
@@ -1441,6 +1423,7 @@ export default function Chat() {
     sortedProposalsDesc,
     pendingProposal?.id,
     latestProposal,
+    hasAcceptedProposal,
   ]);
 
   function blockFirstMessagePolicy(): boolean {
@@ -1533,6 +1516,15 @@ export default function Chat() {
 
     const lockId = replaceProposalId ?? "__create__";
     setProposalActionInFlightId(lockId);
+    logActivityFlowState({
+      proposalId: replaceProposalId,
+      status: counterPrev?.status ?? null,
+      proposerId: counterPrev?.proposer_id ?? user.id,
+      currentUserId: user.id,
+      action: replaceProposalId ? "counter" : "create",
+      isSubmitting: true,
+      source: "Chat.sendActivity",
+    });
     try {
       if (replaceProposalId) {
         if (import.meta.env.DEV) {
@@ -1566,8 +1558,18 @@ export default function Chat() {
       }
 
       setProposalOutcomeNotice(null);
+      setModalOpen(false);
+      setCounterReplaceProposalId(null);
+      setCounterPrefill(null);
       await reloadProposals(conversationId);
       await reloadChatMessages(conversationId);
+      logActivityFlowState({
+        proposalId: replaceProposalId,
+        currentUserId: user.id,
+        action: replaceProposalId ? "counter" : "create",
+        isSubmitting: false,
+        source: "Chat.sendActivity:done",
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (import.meta.env.DEV) {
@@ -1582,6 +1584,13 @@ export default function Chat() {
     } finally {
       setProposalActionInFlightId(null);
       setProposalMutation(null);
+      logActivityFlowState({
+        proposalId: replaceProposalId,
+        currentUserId: user.id,
+        action: replaceProposalId ? "counter" : "create",
+        isSubmitting: false,
+        source: "Chat.sendActivity:finally",
+      });
     }
   }
 
@@ -1706,9 +1715,24 @@ export default function Chat() {
     const action = status === "accepted" ? "accept" : status === "declined" ? "decline" : "cancel";
     const gate = assertProposalActionAllowed(action, ctx);
     if (!gate.ok) {
+      logActivityFlowState({
+        proposalId,
+        status: p.status,
+        proposerId: p.proposer_id,
+        currentUserId: user.id,
+        action,
+        isSubmitting: false,
+        source: `Chat.respondToProposal:blocked:${gate.reason}`,
+      });
       if (import.meta.env.DEV) console.debug("[Chat] respondToProposal blocked", gate.reason);
-      if (gate.reason !== "chat_error_proposal_not_found") {
+      if (
+        gate.reason !== "chat_error_proposal_not_found" &&
+        gate.reason !== "proposal_error_no_longer_editable"
+      ) {
         setMessagePolicyError(t(gate.reason));
+      } else if (gate.reason === "proposal_error_no_longer_editable") {
+        void reloadProposals(conversationId);
+        void reloadChatMessages(conversationId);
       }
       return;
     }
@@ -1720,6 +1744,15 @@ export default function Chat() {
 
     setProposalMutation({ proposalId, action: mutationAction, snapshot: p });
     setProposalActionInFlightId(proposalId);
+    logActivityFlowState({
+      proposalId,
+      status: optimistic.status,
+      proposerId: p.proposer_id,
+      currentUserId: user.id,
+      action: mutationAction,
+      isSubmitting: true,
+      source: "Chat.respondToProposal",
+    });
     setProposals((prev) => prev.map((row) => (row.id === proposalId ? optimistic : row)));
     if (proposalDetail?.id === proposalId) setProposalDetail(optimistic);
 
@@ -1736,6 +1769,15 @@ export default function Chat() {
       setMessagePolicyError(null);
       await reloadProposals(conversationId);
       await reloadChatMessages(conversationId);
+      logActivityFlowState({
+        proposalId,
+        status,
+        proposerId: p.proposer_id,
+        currentUserId: user.id,
+        action: mutationAction,
+        isSubmitting: false,
+        source: "Chat.respondToProposal:done",
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (import.meta.env.DEV) console.warn("[Chat] respondToProposal error", msg);
@@ -1754,6 +1796,14 @@ export default function Chat() {
     } finally {
       setProposalActionInFlightId(null);
       setProposalMutation(null);
+      logActivityFlowState({
+        proposalId,
+        status,
+        currentUserId: user.id,
+        action: mutationAction,
+        isSubmitting: false,
+        source: "Chat.respondToProposal:finally",
+      });
     }
   }
 
@@ -1966,11 +2016,11 @@ export default function Chat() {
               <p className="mt-0.5 text-[11px] font-medium text-app-muted">{proposalWindowRemainingLabel}</p>
             ) : null}
           </div>
-          {!hasAcceptedProposal ? (
+          {isPostMatchNoActivity ? (
             <button
               type="button"
               onClick={handleProposeActivityClick}
-              disabled={pairBlocked || hasPendingProposal}
+              disabled={pairBlocked}
               className="rounded-xl px-3 py-2 text-[12px] font-semibold transition disabled:opacity-60"
               style={{ backgroundColor: BRAND_BG, color: TEXT_ON_BRAND }}
             >
@@ -2006,7 +2056,7 @@ export default function Chat() {
             {t("chat_blocked_organize")}
           </p>
         ) : null}
-        {!pairBlocked ? (
+        {!pairBlocked && isPostMatchNoActivity ? (
           <div className="mb-3 rounded-2xl border border-app-border/90 bg-app-bg/90 px-4 py-3 shadow-sm ring-1 ring-white/[0.05]">
             {chatSessionPhase === "new_match" ? (
               <>
@@ -2014,7 +2064,7 @@ export default function Chat() {
                 <p className="mt-1 text-[12px] leading-relaxed text-app-muted">
                   {t("chat_match_intro")}
                 </p>
-                {canSendActivity && !hasAcceptedProposal && !hasPendingProposal ? (
+                {canSendActivity ? (
                   <button
                     type="button"
                     onClick={handleProposeActivityClick}
@@ -2057,7 +2107,7 @@ export default function Chat() {
             />
           </div>
         ) : null}
-        {!pairBlocked && chatSessionPhase === "new_match" && !hasPlus ? (
+        {!pairBlocked && isPostMatchNoActivity && chatSessionPhase === "new_match" && !hasPlus ? (
           <PriorityProposalUpsell
             onActivate={() => navigate("/splove-plus")}
             onStayFree={() => {
@@ -2065,7 +2115,7 @@ export default function Chat() {
             }}
           />
         ) : null}
-        {!pairBlocked && pendingWithoutResponse ? (
+        {!pairBlocked && isActivityPending && pendingWithoutResponse ? (
           <div className="mb-3 rounded-2xl border border-app-border/80 bg-app-card px-4 py-3 shadow-sm">
             <p className="text-[12px] leading-snug text-app-muted">
               {t("chat_pending_nudge")} {hasPlus ? t("chat_pending_nudge_cta_plus") : t("chat_pending_nudge_cta_free")}
@@ -2090,8 +2140,14 @@ export default function Chat() {
             )}
           </div>
         ) : null}
+        {!pairBlocked && isActivityConfirmed && compactConfirmedDetailLine ? (
+          <ChatConfirmedActivityCard
+            detailLine={compactConfirmedDetailLine}
+            onViewMeetup={() => navigate("/mes-rencontres?tab=confirmed")}
+          />
+        ) : null}
         {!pairBlocked &&
-        hasAcceptedProposal &&
+        isActivityAcceptedConfirming &&
         acceptedProposalForRl &&
         conversationId &&
         user?.id &&
@@ -2115,31 +2171,7 @@ export default function Chat() {
             />
           </div>
         ) : null}
-        {!pairBlocked &&
-        effectiveMeetupPayload &&
-        confirmedMeetingCardProposalId &&
-        user?.id &&
-        !modifyMeetupOpen ? (
-          <MeetupEngagementChatBlock
-            payload={effectiveMeetupPayload}
-            proposalId={confirmedMeetingCardProposalId}
-            currentUserId={user.id}
-            partnerUserId={partnerUserId}
-            nowMs={nowTick}
-            persistBusy={meetupEngageBusy}
-            onPersistPayload={persistMeetupConfirmation}
-          />
-        ) : null}
-        {!pairBlocked && hasAcceptedProposal && acceptedProposalForRl && matchPair && user?.id ? (
-          <RealLifeSessionPanel
-            activityProposalId={acceptedProposalForRl.id}
-            userA={matchPair.userA}
-            userB={matchPair.userB}
-            checkin={rlCheckin}
-            onCheckinUpdate={setRlCheckin}
-            busy={proposalActionBusy}
-          />
-        ) : null}
+        {!pairBlocked && isPostMatchNoActivity ? (
         <ChatPostMatchPanel
           productState={productState}
           matchOpenedAt={matchOpenedAt}
@@ -2167,6 +2199,7 @@ export default function Chat() {
               : undefined
           }
         />
+        ) : null}
 
         {feedbackEligibleProposal && !pairBlocked ? (
           <div className="mb-3 rounded-2xl border border-app-border/70 bg-app-card/90 px-3 py-2.5 shadow-sm ring-1 ring-white/[0.04]">
@@ -2195,7 +2228,7 @@ export default function Chat() {
           </div>
         ) : null}
 
-        {proposalOutcomeNotice ? (
+        {proposalOutcomeNotice && !hasAcceptedProposal ? (
           <div className="mb-3 rounded-2xl border border-app-border/90 bg-app-card px-4 py-3 text-center text-[13px] font-semibold leading-snug text-app-text shadow-sm">
             {proposalOutcomeNotice.status === "accepted"
               ? t("chat_proposal_outcome_accepted")
@@ -2214,7 +2247,7 @@ export default function Chat() {
           </div>
         ) : null}
 
-        {headerProposal?.id && isPendingProposalStatus(headerProposal.status) ? (
+        {isActivityPending && headerProposal?.id && isPendingProposalStatus(headerProposal.status) ? (
           <div className="mb-3">
             <ProposalCard
               proposal={headerProposal}
@@ -2244,11 +2277,7 @@ export default function Chat() {
               onCancel={() => void respondToProposal(headerProposal.id, "cancelled")}
             />
           </div>
-        ) : hasAcceptedProposal ? (
-          <p className="mb-3 rounded-xl border border-app-border/80 bg-app-card/80 px-3 py-2.5 text-center text-[12px] leading-snug text-app-muted">
-            {t("chat_activity_already_planned")}
-          </p>
-        ) : hasPendingProposal ? null : !proposalOutcomeNotice && conversationStarted ? (
+        ) : isPostMatchNoActivity && !proposalOutcomeNotice ? (
           <button
             type="button"
             onClick={() => {
@@ -2273,6 +2302,9 @@ export default function Chat() {
                   const m = item.message;
                   const mine = m.sender_id === user?.id;
                   const mt = m.message_type ?? "text";
+                  if (hasAcceptedProposal && (mt === "activity_proposal" || mt === "activity_proposal_response")) {
+                    return null;
+                  }
                   if (mt === "activity_proposal_response") {
                     return <ActivityResponseBubble key={item.sortKey} message={m} />;
                   }
@@ -2433,21 +2465,20 @@ export default function Chat() {
               {messagePolicyError}
             </p>
           ) : null}
-          {!pairBlocked && canSendActivity ? (
-            hasPendingProposal || hasAcceptedProposal ? (
-              <p className="rounded-xl border border-app-border/80 bg-app-card/80 px-3 py-2.5 text-center text-[12px] leading-snug text-app-muted">
-                {hasAcceptedProposal ? t("chat_activity_already_planned") : t("chat_double_slot_waiting")}
-              </p>
-            ) : (
-              <button
-                type="button"
-                onClick={() => openActivityComposer()}
-                disabled={pairBlocked || !canSendActivity}
-                className="w-full rounded-xl border border-app-border bg-app-card py-3 text-sm font-semibold text-app-text shadow-sm transition hover:bg-app-border disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {t("chat_propose_activity_cta")}
-              </button>
-            )
+          {!pairBlocked && canSendActivity && isPostMatchNoActivity ? (
+            <button
+              type="button"
+              onClick={() => openActivityComposer()}
+              disabled={pairBlocked || !canSendActivity}
+              className="w-full rounded-xl border border-app-border bg-app-card py-3 text-sm font-semibold text-app-text shadow-sm transition hover:bg-app-border disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t("chat_propose_activity_cta")}
+            </button>
+          ) : null}
+          {!pairBlocked && isActivityPending ? (
+            <p className="rounded-xl border border-app-border/80 bg-app-card/80 px-3 py-2.5 text-center text-[12px] leading-snug text-app-muted">
+              {t("chat_double_slot_waiting")}
+            </p>
           ) : null}
         </div>
       </main>

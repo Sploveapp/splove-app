@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { toSupabaseScheduledAtIso } from "../activitySchedule";
 import { CHAT_MESSAGES_TABLE } from "../supabase";
 import { buildInitialActivityProposalPayload, buildUpdatedActivityProposalPayload } from "./activityPayload";
-import { buildMetadataPayloadForInsert } from "./activityProposal";
+import { buildMetadataPayloadForInsert, normalizeActivityProposalStatus } from "./activityProposal";
 import type { ActivityProposalRowLike } from "./messageTypes";
 
 export type ActivityMutationError = {
@@ -78,6 +78,36 @@ function normalizeRpcProposalRow(data: unknown): ActivityProposalRowLike | null 
     return row as ActivityProposalRowLike;
   }
   return null;
+}
+
+const PROPOSAL_ROW_FETCH_SELECT =
+  "id, conversation_id, proposer_id, sport, place, time_slot, location, note, created_at, status, scheduled_at, supersedes_proposal_id, counter_of, responded_by, responded_at";
+
+/** PostgREST peut renvoyer `data: null` alors que la mutation a réussi (RLS sur le retour RPC). */
+async function fetchProposalRowById(
+  client: SupabaseClient,
+  proposalId: string,
+): Promise<ActivityProposalRowLike | null> {
+  const { data, error } = await client
+    .from("activity_proposals")
+    .select(PROPOSAL_ROW_FETCH_SELECT)
+    .eq("id", proposalId)
+    .maybeSingle();
+  if (error) {
+    console.warn("[activityProposalMutations] fetch proposal by id", error);
+    return null;
+  }
+  return normalizeRpcProposalRow(data);
+}
+
+function rowMatchesRespondAction(
+  row: ActivityProposalRowLike,
+  action: "accepted" | "declined" | "cancelled",
+): boolean {
+  const st = normalizeActivityProposalStatus(row.status);
+  if (action === "accepted") return st === "accepted";
+  if (action === "declined") return st === "declined";
+  return st === "cancelled";
 }
 
 /** PostgREST peut renvoyer `data: null` alors que la ligne existe (RLS sur le retour RPC). */
@@ -185,14 +215,19 @@ export async function acceptActivityProposal(
   if (error) {
     return { error: { code: "rpc", message: error.message ?? "Réponse impossible." } };
   }
-  const row = data as ActivityProposalRowLike | null;
+  let row = normalizeRpcProposalRow(data);
   if (!row) {
-    return {
-      error: {
-        code: "forbidden",
-        message: "Cette proposition n’est plus modifiable ou a déjà été traitée.",
-      },
-    };
+    const fetched = await fetchProposalRowById(client, args.proposalId);
+    if (fetched && rowMatchesRespondAction(fetched, "accepted")) {
+      row = fetched;
+    } else {
+      return {
+        error: {
+          code: "forbidden",
+          message: "Cette proposition n’est plus modifiable ou a déjà été traitée.",
+        },
+      };
+    }
   }
   await syncProposalMessageMetadata(client, args.proposalId);
 
@@ -232,14 +267,19 @@ export async function declineActivityProposal(
   if (error) {
     return { error: { code: "rpc", message: error.message ?? "Réponse impossible." } };
   }
-  const row = data as ActivityProposalRowLike | null;
+  let row = normalizeRpcProposalRow(data);
   if (!row) {
-    return {
-      error: {
-        code: "forbidden",
-        message: "Cette proposition n’est plus modifiable ou a déjà été traitée.",
-      },
-    };
+    const fetched = await fetchProposalRowById(client, args.proposalId);
+    if (fetched && rowMatchesRespondAction(fetched, "declined")) {
+      row = fetched;
+    } else {
+      return {
+        error: {
+          code: "forbidden",
+          message: "Cette proposition n’est plus modifiable ou a déjà été traitée.",
+        },
+      };
+    }
   }
   await syncProposalMessageMetadata(client, args.proposalId);
 

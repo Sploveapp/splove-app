@@ -10,6 +10,7 @@ import { BETA_MODE } from "../constants/beta";
 import { hasFiniteDiscoverCoordinates, isValidDiscoveryRadiusKm } from "../constants/discoverGeo";
 import { asAgePreferenceScalar, isReciprocalAgeDiscoverMatch } from "../lib/profileAge";
 import { normalizePrimaryLocalityLabel } from "../lib/formatCityDisplay";
+import { getDiscoverFeedIntegrityExclusionReasons } from "../lib/onboardingDiscoverReadiness";
 
 type DiscoverProfile = {
   id: string;
@@ -411,8 +412,18 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const excludedReasons: string[] = [];
     const diagExtra: Record<string, unknown> = {};
     if (!candidate?.id || candidate.id === ctx.viewerId) excludedReasons.push("self");
-    if (ctx.viewer.profile_completed !== true) excludedReasons.push("viewer incomplete");
-    if (candidate.profile_completed !== true) excludedReasons.push("incomplete");
+    const viewerIntegrity = getDiscoverFeedIntegrityExclusionReasons(
+      ctx.viewer as Record<string, unknown>,
+    );
+    if (viewerIntegrity.length > 0) excludedReasons.push("viewer_incomplete", ...viewerIntegrity);
+    const candidateIntegrity = getDiscoverFeedIntegrityExclusionReasons(
+      candidate as Record<string, unknown>,
+    );
+    if (candidateIntegrity.length > 0) {
+      excludedReasons.push("ghost_profile", ...candidateIntegrity);
+    } else if (candidate.profile_completed !== true) {
+      excludedReasons.push("incomplete");
+    }
     if (isBanned(candidate)) {
       excludedReasons.push("missing required field");
       diagExtra.banned = true;

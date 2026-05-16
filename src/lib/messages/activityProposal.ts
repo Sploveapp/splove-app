@@ -135,6 +135,66 @@ export function proposalPayloadFromRow(row: ActivityProposalRowLike): ActivityPr
   };
 }
 
+/** Ligne courte « Sport • Lieu • Dim. 18h30 » pour la carte rendez-vous confirmé. */
+export function formatCompactConfirmedActivityDetail(
+  row: ActivityProposalRowLike,
+  locale: string,
+  slotPendingLabel: string,
+  meetup?: { sport?: string; location?: string; date?: string; time?: string } | null,
+): string {
+  const sport = meetup?.sport?.trim() || row.sport?.trim() || "—";
+  const place =
+    meetup?.location?.trim() ||
+    row.location?.trim() ||
+    (row as { place?: string | null }).place?.trim() ||
+    "—";
+
+  let when = "";
+  if (meetup?.date && meetup?.time) {
+    const d = new Date(`${meetup.date}T${meetup.time}`);
+    if (!Number.isNaN(d.getTime())) {
+      when = d.toLocaleString(locale, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+    } else {
+      when = `${meetup.date} ${meetup.time}`;
+    }
+  }
+  if (!when) {
+    const full = formatPlannedActivityWhen(row, locale, slotPendingLabel);
+    const comma = full.indexOf(",");
+    when =
+      comma > 0
+        ? full.slice(0, comma).trim() +
+          " " +
+          full
+            .slice(comma + 1)
+            .replace(/^[\s,]+/, "")
+            .trim()
+        : full;
+  }
+
+  return `${sport} • ${place} • ${when}`;
+}
+
+/** Libellé date/heure pour une activité confirmée (chat, bannière unique). */
+export function formatPlannedActivityWhen(
+  row: ActivityProposalRowLike,
+  locale: string,
+  slotPendingLabel: string,
+): string {
+  if (row.scheduled_at) {
+    try {
+      const d = new Date(row.scheduled_at);
+      if (!Number.isNaN(d.getTime())) {
+        return d.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  const slot = row.time_slot?.trim();
+  return slot && slot.length > 0 ? slot : slotPendingLabel;
+}
+
 export function statusBadgeLabel(
   status: string,
   tr: (key: string) => string,
