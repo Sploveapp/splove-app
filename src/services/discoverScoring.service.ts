@@ -301,7 +301,16 @@ function lookingForAcceptsGender(lookingFor: Set<string>, gender: string | null)
 }
 
 function hasMainPhoto(candidate: DiscoverProfile): boolean {
-  return typeof candidate.main_photo_url === "string" && candidate.main_photo_url.trim().length > 0;
+  const main =
+    typeof candidate.main_photo_url === "string" && candidate.main_photo_url.trim().length > 0;
+  const portrait =
+    typeof candidate.portrait_url === "string" && candidate.portrait_url.trim().length > 0;
+  if (main || portrait) return true;
+  if (BETA_MODE) {
+    const st = String(candidate.photo_status ?? "").trim().toLowerCase();
+    if (st === "pending" || st === "review") return true;
+  }
+  return false;
 }
 
 function isBanned(candidate: DiscoverProfile): boolean {

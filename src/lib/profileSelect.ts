@@ -6,7 +6,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 /** Noyau auth / routing : sans colonnes optionnelles parfois absentes (accessibilité, créneau). */
 const PROFILE_COLUMNS_CORE =
-  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, onboarding_done, sport_match_preference, is_photo_verified, photo_status, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_intensity, meet_vibe, sport_motivation, sport_phrase, photo1_status, photo2_status, photo_moderation_overall, is_under_review, moderation_strikes_count";
+  "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed, onboarding_done, is_photo_verified, photo_status, onboarding_sports_count, onboarding_sports_with_level_count, city, latitude, longitude, discovery_radius_km, location_updated_at, sport_intensity, meet_vibe, sport_motivation, sport_phrase, photo1_status, photo2_status, photo_moderation_overall, is_under_review, moderation_strikes_count";
 
 export const PROFILE_SELECT_CORE = PROFILE_COLUMNS_CORE;
 
@@ -208,11 +208,11 @@ export async function mergeOptionalProfileFields(
       const msg = error.message ?? "";
       const m = msg.match(/column\s+["']?([a-zA-Z0-9_]+)["']?/i);
       const miss = m?.[1] ?? null;
-      if (import.meta.env.DEV) {
-        console.log("[PROFILE_OPTIONAL_FIELDS_SKIPPED]", {
+      if (import.meta.env.DEV && attempt === 0) {
+        console.debug("[PROFILE_OPTIONAL_FIELDS_SKIPPED]", {
           reason: "missing_column_retry",
           column: miss,
-          message: msg.slice(0, 200),
+          message: msg.slice(0, 120),
         });
       }
       if (miss && cols.some((x) => x === miss)) {

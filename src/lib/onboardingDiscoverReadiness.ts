@@ -10,12 +10,6 @@ import { isValidDiscoveryRadiusKm } from "../constants/discoverGeo";
  * La fonction ci-dessous reflète la garde technique actuelle (flags + audit) — ne pas confondre avec le pourcentage décoratif `computeOnboardingProfileFillPercent`.
  */
 
-const SPORT_PREF_ALLOWED = ["same_sports", "open_to_different_sports", "both"] as const;
-
-function isValidSportMatchPreference(raw: unknown): boolean {
-  return typeof raw === "string" && (SPORT_PREF_ALLOWED as readonly string[]).includes(raw.trim());
-}
-
 function hasPortraitOrMainPhoto(row: Record<string, unknown>): boolean {
   const rawP = row.portrait_url;
   const rawM = row.main_photo_url;
@@ -104,9 +98,6 @@ export function collectProfileCriticalDataGaps(
   if (!isValidDiscoveryRadiusKm(profileRow.discovery_radius_km)) {
     missing.push("discovery_radius_km");
   }
-  if (!isValidSportMatchPreference(profileRow.sport_match_preference)) {
-    missing.push("sport_match_preference");
-  }
   if (sportsCount < 1) missing.push("profile_sports_rows");
   if (!hasPortraitOrMainPhoto(profileRow)) missing.push("portrait_or_main_photo");
 
@@ -154,12 +145,18 @@ export function auditOnboardingProfileForDiscover(
   return auditResultFromGaps(missing);
 }
 
-/** Source de vérité : profil réellement prêt pour Discover (pas seulement le flag BDD). */
+/**
+ * Garde session / Discover : champs bloquants uniquement + `profile_completed`.
+ * Les préférences optionnelles (âge, sport_match_preference, vérif identité) ne bloquent pas.
+ */
 export function isProfileReadyForDiscover(
   profileRow: Record<string, unknown>,
   profileSportsRowCount = 0,
 ): boolean {
-  return auditOnboardingProfileForDiscover(profileRow, profileSportsRowCount).ok;
+  if (collectProfileCriticalDataGaps(profileRow, profileSportsRowCount).length > 0) {
+    return false;
+  }
+  return profileRow.profile_completed === true;
 }
 
 export function computeStrictCompletionFlags(

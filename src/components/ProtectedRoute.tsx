@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { SplashScreen } from "./SplashScreen";
@@ -22,22 +23,7 @@ export function ProtectedRoute({ children }: Props) {
     pathname.startsWith("/chat/");
   const authUserId = session?.user?.id ?? null;
   const profileFetchResult = profile ? "ok" : "null";
-
-  if (import.meta.env.DEV) {
-    const pr = profile as Record<string, unknown> | null | undefined;
-    console.info("[ProtectedRoute diagnostics] decision_input", {
-      current_route: pathname,
-      auth_user_id: authUserId,
-      profile_fetch_result: profileFetchResult,
-      profile_completed: profile?.profile_completed ?? null,
-      onboarding_completed: pr?.onboarding_completed ?? null,
-      onboarding_done: pr?.onboarding_done ?? null,
-      is_profile_complete: isProfileComplete,
-      is_auth_initialized: isAuthInitialized,
-      is_loading: isLoading,
-      is_profile_loading: isProfileLoading,
-    });
-  }
+  const routeDiagKeyRef = useRef<string | null>(null);
 
   if (!isAuthInitialized || isLoading) {
     if (import.meta.env.DEV) {
@@ -142,25 +128,15 @@ export function ProtectedRoute({ children }: Props) {
     return <Navigate to="/onboarding" replace />;
   }
 
-  if (isMainFeaturePath) {
-    console.log("[ONBOARDING_GUARD] access_granted", {
-      pathname,
-      profile_completed: profile?.profile_completed === true,
-      is_profile_complete: isProfileComplete,
-    });
-  }
   if (import.meta.env.DEV) {
-    const pr = profile as Record<string, unknown> | null | undefined;
-    console.info("[ProtectedRoute diagnostics] redirect_decision", {
-      current_route: pathname,
-      auth_user_id: authUserId,
-      profile_fetch_result: profileFetchResult,
-      profile_completed: profile?.profile_completed ?? null,
-      onboarding_completed: pr?.onboarding_completed ?? null,
-      onboarding_done: pr?.onboarding_done ?? null,
-      is_profile_complete: isProfileComplete,
-      redirect_reason: "allow_route",
-    });
+    const diagKey = `${pathname}|allow|${isProfileComplete}`;
+    if (routeDiagKeyRef.current !== diagKey) {
+      routeDiagKeyRef.current = diagKey;
+      console.info("[ProtectedRoute diagnostics] allow_route", {
+        current_route: pathname,
+        is_profile_complete: isProfileComplete,
+      });
+    }
   }
 
   return <>{children}</>;

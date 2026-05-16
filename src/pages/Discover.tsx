@@ -25,7 +25,6 @@ import {
   IconProfileAvatarPlaceholder,
 } from "../components/ui/Icon";
 import { BETA_MODE } from "../constants/beta";
-import { parseProfileIntent } from "../lib/profileIntent";
 import { fetchBlockExclusionDetail, isBlockedWith } from "../services/blocks.service";
 import { VerifiedBadge } from "../components/VerifiedBadge";
 import { isIdentityVerified } from "../lib/profileVerification";
@@ -42,10 +41,7 @@ import {
 } from "../lib/discoverCardCopy";
 import { buildDiscoverScore, computeReliabilityScore, getReliabilityUiHints } from "../lib/discoverScore";
 import { scoreAndFilterDiscoverCandidates } from "../services/discoverScoring.service";
-import {
-  getDiscoverFeedIntegrityExclusionReasons,
-  isProfileReadyForDiscover,
-} from "../lib/onboardingDiscoverReadiness";
+import { getDiscoverFeedIntegrityExclusionReasons } from "../lib/onboardingDiscoverReadiness";
 import { buildDiscoverLocationLines, formatViewerRadiusLabel } from "../utils/geolocation";
 import { formatCityDisplay } from "../lib/formatCityDisplay";
 import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
@@ -924,13 +920,16 @@ function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremiu
   return Date.now() - ts <= maxHours * 60 * 60 * 1000;
 }
 
-/** Colonnes Discover depuis `public.profiles` uniquement — pas de colonnes optionnelles absentes en prod. */
+/** Colonnes stables sur `profiles` — pas de champs optionnels / premium (voir mergeOptionalProfileFields). */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, preferred_age_min, preferred_age_max, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, height_cm, portrait_url, fullbody_url, avatar_url, main_photo_url, city, latitude, longitude, profile_completed, is_photo_verified, photo_status, identity_verified, veriff_status, is_active_mode, sport_practice_type, sport_match_preference, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, height_cm, portrait_url, fullbody_url, avatar_url, main_photo_url, city, latitude, longitude, profile_completed, is_photo_verified, photo_status, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
 
-/** Profil viewer Discover : uniquement colonnes plates sur `profiles` (sports chargés séparément sur `profile_sports`). */
+/** Profil viewer Discover : colonnes plates stables (sports via `profile_sports`, optionnels via merge). */
 const DISCOVER_VIEWER_ME_SELECT =
-  "id, first_name, city, latitude, longitude, discovery_radius_km, birth_date, preferred_age_min, preferred_age_max, gender, looking_for, intent, profile_completed, photo_status, portrait_url, fullbody_url, main_photo_url, sport_match_preference";
+  "id, first_name, city, latitude, longitude, discovery_radius_km, birth_date, gender, looking_for, intent, profile_completed, onboarding_completed, onboarding_done, onboarding_sports_count, photo_status, portrait_url, fullbody_url, main_photo_url";
+
+const DISCOVER_CANDIDATE_HYDRATE_SELECT =
+  "id, birth_date, gender, looking_for, intent, height_cm, profile_sports(sport_id, sports(id, slug, label))";
 
 /** Reconstruit une carte Discover après rewind (hors re-score filtre feed). */
 async function buildAffinityProfileForRewind(input: {
@@ -1258,19 +1257,17 @@ export default function Discover() {
   const location = useLocation();
   const setDiscoverUndoNav = useDiscoverUndoNavRegistration();
   const handledPreviewNavKeyRef = useRef<string | null>(null);
+  const loadProfilesInFlightRef = useRef(false);
   const { user, session, isLoading: authLoading, profile, isProfileLoading, refetchProfile } = useAuth();
   const viewerMeetActive =
     Boolean(profile) &&
     (profile as { is_active_mode?: boolean | null }).is_active_mode === true;
   /** Recharge Discover après changement des préférences d’âge (profil auth `refetchProfile`). */
-  const discoverPreferredAgeFingerprint = [
-    profile && typeof profile === "object"
-      ? (profile as { preferred_age_min?: unknown }).preferred_age_min ?? "ø"
-      : "ø",
-    profile && typeof profile === "object"
-      ? (profile as { preferred_age_max?: unknown }).preferred_age_max ?? "ø"
-      : "ø",
-  ].join(":");
+  const discoverPreferredAgeFingerprint = useMemo(() => {
+    if (!profile || typeof profile !== "object") return "ø:ø";
+    const pr = profile as { preferred_age_min?: unknown; preferred_age_max?: unknown };
+    return `${pr.preferred_age_min ?? "ø"}:${pr.preferred_age_max ?? "ø"}`;
+  }, [profile]);
   const currentUserId = user?.id ?? "";
   const { hasPlus } = usePremium(currentUserId || null);
   const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
@@ -1717,11 +1714,7 @@ export default function Discover() {
       setErrorMessage((prev) => prev || "Impossible de charger votre session. Reconnectez-vous.");
       return;
     }
-    console.debug("[Discover debug] lancement loadProfiles", {
-      currentUserId: user.id,
-      profile_completed: profile?.profile_completed,
-      photo_status: profile?.photo_status,
-    });
+    if (loadProfilesInFlightRef.current) return;
     void loadProfiles().catch((e) => {
       console.error("[Discover diagnostics] loadProfiles rejected", e);
     });
@@ -1735,6 +1728,8 @@ export default function Discover() {
   }, [hasPlus]);
 
   async function loadProfiles() {
+    if (loadProfilesInFlightRef.current) return;
+    loadProfilesInFlightRef.current = true;
     if (!currentUserId) {
       if (import.meta.env.DEV) {
         console.info("[Discover diagnostics] early_return", {
@@ -1744,6 +1739,7 @@ export default function Discover() {
       }
       setViewerGeoBlocked(false);
       setLoading(false);
+      loadProfilesInFlightRef.current = false;
       return;
     }
     setLoading(true);
@@ -1860,56 +1856,6 @@ export default function Discover() {
 
       if (blockDetail.errors.length > 0) {
         console.warn("[Discover feed] blocks exclusion RPC errors:", blockDetail.errors);
-      }
-
-      const safeMeProfile = {
-        ...meProfile,
-        intent: meProfile?.intent ?? (meRes.data as { intent?: string | null })?.intent ?? null,
-      };
-      if (import.meta.env.DEV) {
-        const vl =
-          typeof meProfile?.latitude === "number" && typeof meProfile?.longitude === "number"
-            ? Number.isFinite(meProfile.latitude) && Number.isFinite(meProfile.longitude)
-            : false;
-        console.info("[Discover diagnostics] viewer_gps_status", {
-          has_finite_coords: vl,
-          city: typeof meProfile?.city === "string" ? meProfile.city : null,
-          discovery_radius_km:
-            typeof meProfile?.discovery_radius_km === "number" ? meProfile.discovery_radius_km : null,
-        });
-        console.log("[Discover] meProfile raw =", meProfile);
-        console.log("[Discover] meProfile.intent raw =", meProfile?.intent);
-        console.log("[Discover] parseProfileIntent result =", parseProfileIntent(meProfile?.intent));
-        console.log("[Discover] safeMeProfile raw =", safeMeProfile);
-        console.log("[Discover] safeMeProfile.intent raw =", safeMeProfile?.intent);
-        console.log(
-          "[Discover] parseProfileIntent result =",
-          parseProfileIntent(safeMeProfile?.intent),
-        );
-      }
-
-      const viewerSportsCount = meProfileSportRows.length;
-      const viewerIntegrityRow = meProfile as unknown as Record<string, unknown>;
-      if (!isProfileReadyForDiscover(viewerIntegrityRow, viewerSportsCount)) {
-        const viewerExclusionReasons = getDiscoverFeedIntegrityExclusionReasons(
-          viewerIntegrityRow,
-          viewerSportsCount,
-        );
-        console.warn("[Discover audit] VIEWER_PROFILE_INCOMPLETE — redirection onboarding", {
-          profile_id: viewerAuthId,
-          profile_completed: meProfile.profile_completed ?? null,
-          exclusion_reasons: viewerExclusionReasons,
-        });
-        if (import.meta.env.DEV) {
-          console.info("[Discover diagnostics] early_return", {
-            stage: "viewer_profile_integrity",
-            exclusion_reason: "viewer_profile_incomplete_or_ghost",
-            exclusion_reasons: viewerExclusionReasons,
-          });
-        }
-        navigate("/onboarding", { replace: true });
-        setLoading(false);
-        return;
       }
 
       if (!viewerHasDiscoverSearchCoords(meProfile)) {
@@ -2209,9 +2155,7 @@ export default function Discover() {
         const hydrationIds = stage.map((p) => p.id).filter(Boolean);
         const { data: hydrationRows, error: hydrationErr } = await supabase
           .from("profiles")
-          .select(
-            "id, birth_date, preferred_age_min, preferred_age_max, gender, looking_for, intent, sport_match_preference, height_cm, profile_sports(sport_id, sports(id, slug, label))",
-          )
+          .select(DISCOVER_CANDIDATE_HYDRATE_SELECT)
           .in("id", hydrationIds);
         if (hydrationErr) {
           console.warn("[Discover feed] candidate hydration batch:", hydrationErr.message);
@@ -2523,13 +2467,8 @@ export default function Discover() {
       setViewerGeoBlocked(false);
       setErrorMessage(discoverFetchFailedMsg(language));
     } finally {
+      loadProfilesInFlightRef.current = false;
       setLoading(false);
-      console.debug("[Discover debug] loadProfiles terminé", {
-        discoverLoading: false,
-        currentUserId,
-        profile_completed: profile?.profile_completed,
-        profilesCount: resultCount,
-      });
     }
   }
 

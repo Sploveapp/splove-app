@@ -2,6 +2,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useCallback,
@@ -460,20 +461,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void loadProfile(uid);
   }, [session?.user?.id, loadProfile]);
 
-  /** Garde navigation : audit strict (genre, looking_for, ville, coords, photo, sports, flags). */
-  const isProfileComplete =
-    profile != null &&
-    typeof profile.id === "string" &&
-    profile.id.length > 0 &&
-    isProfileReadyForDiscover(profile as unknown as Record<string, unknown>);
+  const ghostProfileLoggedRef = useRef<string | null>(null);
+
+  /** Garde navigation : champs bloquants + profile_completed (pas les colonnes optionnelles). */
+  const isProfileComplete = useMemo(() => {
+    if (profile == null || typeof profile.id !== "string" || profile.id.length === 0) {
+      return false;
+    }
+    const sportsCount = Number(
+      (profile as { onboarding_sports_count?: unknown }).onboarding_sports_count ?? 0,
+    );
+    return isProfileReadyForDiscover(
+      profile as unknown as Record<string, unknown>,
+      Number.isFinite(sportsCount) ? sportsCount : 0,
+    );
+  }, [profile]);
+
   const profileIncompleteReason = isProfileComplete ? null : "profile_not_completed";
 
-  if (
-    import.meta.env.DEV &&
-    profile != null &&
-    profile.profile_completed === true &&
-    !isProfileComplete
-  ) {
+  useEffect(() => {
+    if (!import.meta.env.DEV || profile == null) return;
+    if (profile.profile_completed !== true || isProfileComplete) return;
+    if (ghostProfileLoggedRef.current === profile.id) return;
+    ghostProfileLoggedRef.current = profile.id;
     console.warn("[AuthContext] ghost profile detected — profile_completed true but audit failed", {
       profile_id: profile.id,
       gender: profile.gender ?? null,
@@ -482,7 +492,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       latitude: (profile as { latitude?: unknown }).latitude ?? null,
       longitude: (profile as { longitude?: unknown }).longitude ?? null,
     });
-  }
+  }, [profile, isProfileComplete]);
 
   const value: AuthState = {
     user,
