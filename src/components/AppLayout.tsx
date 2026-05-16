@@ -12,6 +12,8 @@ import { CHAT_MESSAGES_TABLE, supabase } from "../lib/supabase";
 import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
 import { pulseInAppNotifications } from "../services/inAppNotifications.service";
 
+const USER_PROFILE_PATH = "/profile";
+
 export function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -193,6 +195,21 @@ export function AppLayout() {
 
   const shellBg = isMesRencontres ? "#F4F6F8" : APP_BG;
 
+  const handleProfileTabClick = useCallback(() => {
+    const currentPath = location.pathname;
+    const targetPath = USER_PROFILE_PATH;
+    console.log("[REAL_PROFILE_CLICK]", {
+      currentPath,
+      targetPath,
+      activityPendingCount,
+      activityProposalsNeedAction: activityPendingCount > 0,
+      handler: "AppLayout.handleProfileTabClick",
+    });
+    const leavingMeetups =
+      currentPath === "/mes-rencontres" || currentPath.startsWith("/mes-rencontres/");
+    navigate(targetPath, { replace: leavingMeetups });
+  }, [activityPendingCount, location.pathname, navigate]);
+
   return (
     <DiscoverUndoNavProvider>
       <div
@@ -216,13 +233,7 @@ export function AppLayout() {
             likesCount={likesCount}
             profileNeedsAction={!isProfileLoading && !isProfileComplete}
             activityProposalsNeedAction={activityPendingCount > 0}
-            onProfileActivate={() => {
-              if (activityPendingCount > 0) {
-                navigate("/mes-rencontres?tab=to_confirm");
-              } else {
-                navigate("/profile");
-              }
-            }}
+            onProfileTabClick={handleProfileTabClick}
           />
         </div>
       </div>

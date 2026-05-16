@@ -330,11 +330,7 @@ export default function Profile() {
 
         <button
           type="button"
-          onClick={() =>
-            navigate(
-              activityPendingCount > 0 ? "/mes-rencontres?tab=to_confirm" : "/mes-rencontres",
-            )
-          }
+          onClick={() => navigate("/mes-rencontres")}
           style={{
             width: "100%",
             marginBottom: "20px",

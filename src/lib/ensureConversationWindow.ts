@@ -1,6 +1,6 @@
 import { supabase } from "./supabase";
 import { parseProfileIntent, PROFILE_INTENT_AMOUR } from "./profileIntent";
-import { isStrictFemmeHommePair } from "./chatFirstMessagePolicy";
+import { findFemmeProfileIdInPair, isStrictFemmeHommePair } from "./chatFirstMessagePolicy";
 
 export type EnsureConversationWindowParams = {
   conversationId: string;
@@ -67,10 +67,7 @@ export async function ensureConversationWindow(params: EnsureConversationWindowP
 
     let allowedFirstSenderId: string | null = null;
     if (bothAmour && isStrictFemmeHommePair(pSelf.gender, pPartner.gender)) {
-      const femme = profiles.find((p: { gender?: string | null }) =>
-        String(p.gender ?? "").trim().toLowerCase() === "femme",
-      );
-      allowedFirstSenderId = femme?.id ?? null;
+      allowedFirstSenderId = findFemmeProfileIdInPair(profiles);
     }
 
     const now = new Date();

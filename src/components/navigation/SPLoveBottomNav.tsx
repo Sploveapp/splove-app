@@ -28,7 +28,7 @@ export type SPLoveBottomNavProps = {
   likesCount: number;
   profileNeedsAction: boolean;
   activityProposalsNeedAction?: boolean;
-  onProfileActivate?: () => void;
+  onProfileTabClick: () => void;
 };
 
 function matchActiveDiscover(pathname: string): boolean {
@@ -53,7 +53,7 @@ export function SPLoveBottomNav({
   likesCount,
   profileNeedsAction,
   activityProposalsNeedAction = false,
-  onProfileActivate,
+  onProfileTabClick,
 }: SPLoveBottomNavProps) {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -134,8 +134,13 @@ export function SPLoveBottomNav({
           icon={(c) => <ProfileIcon color={c} />}
           indicator={profileNeedsAction || activityProposalsNeedAction}
           onActivate={() => {
-            if (onProfileActivate) onProfileActivate();
-            else navigate("/profile");
+            console.log("[REAL_PROFILE_CLICK]", {
+              currentPath: path,
+              targetPath: "/profile",
+              activityProposalsNeedAction,
+              handler: "SPLoveBottomNav.profileTab",
+            });
+            onProfileTabClick();
           }}
         />
       </div>

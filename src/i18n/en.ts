@@ -306,6 +306,7 @@ const en = {
   accepted: "Accepted",
   refused: "Declined",
   counter_proposal_sent: "Counter-proposal sent",
+  counter_proposal_success_banner: "New proposal sent.",
   premium_price_month: "€9.99 / month",
   premium_cancel_anytime: "Cancelable anytime",
   premium_maybe_paid_after_beta: "Some features may become paid after beta",
@@ -955,6 +956,13 @@ const en = {
   sending: "Sending…",
   safety_content_refusal:
     "For your safety, keep your conversations on SPLove before you meet in person.",
+  chat_first_message_policy_wait_activity:
+    "In this match, {{name}} needs to open the conversation. You can suggest an activity.",
+  chat_first_message_policy_partner: "In this match, {{name}} needs to start the conversation.",
+  chat_first_message_policy_generic: "In this match, your match needs to start the conversation.",
+  chat_conversation_open_banner:
+    "The conversation is open. You can now suggest an activity.",
+  chat_propose_activity_cta: "+ Suggest an activity",
   chat_first_message_policy_homme:
     "On SPLove, your match goes first. You can still suggest an activity slot below.",
   block_profile_confirm: "This person will no longer appear for you, and you will not be able to message each other. Continue?",
@@ -1019,6 +1027,7 @@ const en = {
   chat_empty_thread_hint: "Add a line to get things moving — you can still send a real time slot whenever you are ready.",
   chat_typing: "{{name}} is typing…",
   chat_double_meetup: "A meetup is already planned — you cannot add another time slot here.",
+  chat_activity_already_planned: "Activity already planned",
   chat_double_slot_waiting: "A time slot is already waiting for a response.",
   proposal_detail_title: "Proposal details",
   proposal_counter_badge: "Counter-proposal",

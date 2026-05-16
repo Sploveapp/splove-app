@@ -71,6 +71,45 @@ async function rpcRespondToActivityProposal(
   return client.rpc("respond_to_activity_proposal", final);
 }
 
+function normalizeRpcProposalRow(data: unknown): ActivityProposalRowLike | null {
+  if (data == null) return null;
+  const row = Array.isArray(data) ? data[0] : data;
+  if (row && typeof row === "object" && typeof (row as { id?: unknown }).id === "string") {
+    return row as ActivityProposalRowLike;
+  }
+  return null;
+}
+
+/** PostgREST peut renvoyer `data: null` alors que la ligne existe (RLS sur le retour RPC). */
+async function fetchNewCounterProposalAfterRpc(
+  client: SupabaseClient,
+  args: {
+    replaceProposalId: string;
+    conversationId: string;
+    currentUserId: string;
+  },
+): Promise<ActivityProposalRowLike | null> {
+  const { data, error } = await client
+    .from("activity_proposals")
+    .select(
+      "id, conversation_id, proposer_id, match_id, sport, place, time_slot, location, note, created_at, status, scheduled_at, supersedes_proposal_id, counter_of",
+    )
+    .eq("conversation_id", args.conversationId)
+    .eq("proposer_id", args.currentUserId)
+    .or(
+      `supersedes_proposal_id.eq.${args.replaceProposalId},counter_of.eq.${args.replaceProposalId}`,
+    )
+    .in("status", ["pending", "proposed"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.warn("[createCounterProposal] fetch fallback after RPC", error);
+    return null;
+  }
+  return normalizeRpcProposalRow(data);
+}
+
 /**
  * Payload pour `supabase.rpc("create_activity_proposal", …)` — aligné sur les migrations repo :
  * `051` : (p_conversation_id, p_sport, p_time_slot, p_location, p_note default null)
@@ -318,8 +357,14 @@ export async function createCounterProposal(
   if (error) {
     return { error: { code: "rpc", message: error.message ?? "Contre-proposition impossible." } };
   }
-  const row = data as ActivityProposalRowLike | null;
-  if (!row) {
+  let row =
+    normalizeRpcProposalRow(data) ??
+    (await fetchNewCounterProposalAfterRpc(client, {
+      replaceProposalId: args.replaceProposalId,
+      conversationId: args.conversationId,
+      currentUserId: args.currentUserId,
+    }));
+  if (!row?.id) {
     return {
       error: {
         code: "forbidden",
@@ -369,7 +414,7 @@ export async function createCounterProposal(
     payload: initialPayload,
   });
   if (insErr) {
-    return { error: { code: "message", message: insErr.message ?? "Message non enregistré." } };
+    console.warn("[createCounterProposal] chat message insert (non bloquant)", insErr);
   }
 
   await syncProposalMessageMetadata(client, row.id);

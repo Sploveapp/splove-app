@@ -312,6 +312,7 @@ const fr = {
   accepted: "Accepte",
   refused: "Refuse",
   counter_proposal_sent: "Contre-proposition envoyée",
+  counter_proposal_success_banner: "Nouvelle proposition envoyée.",
   premium_price_month: "9,99 € / mois",
   premium_cancel_anytime: "Annulable à tout moment",
   premium_maybe_paid_after_beta: "Certaines fonctionnalités pourraient devenir payantes après la bêta",
@@ -971,6 +972,14 @@ const fr = {
     "Pour ta sécurité, les échanges doivent rester sur SPLove avant la rencontre.",
   chat_first_message_policy_homme:
     "Ici, le premier message écrit revient à votre correspondante. Vous pouvez lui proposer un créneau d'activité ci-dessous.",
+  chat_first_message_policy_wait_activity:
+    "Dans ce match, {{name}} doit ouvrir la conversation. Vous pouvez proposer une activité.",
+  chat_first_message_policy_partner: "Dans ce match, {{name}} doit lancer la conversation.",
+  chat_first_message_policy_generic:
+    "Dans ce match, votre correspondant·e doit lancer la conversation.",
+  chat_conversation_open_banner:
+    "La conversation est ouverte. Vous pouvez maintenant proposer une activité.",
+  chat_propose_activity_cta: "+ Proposer une activité",
   block_profile_confirm: "Cette personne ne vous sera plus proposée et vous ne pourrez plus échanger. Continuer ?",
   chat_placeholder: "Ajoutez un détail pour la session…",
   chat_quick_suggestions_aria: "Suggestions de messages",
@@ -1036,6 +1045,7 @@ const fr = {
     "Ajoutez un détail pour lancer la sortie — proposer un vrai créneau reste possible quand vous voulez.",
   chat_typing: "{{name}} est en train d'écrire…",
   chat_double_meetup: "Une rencontre est déjà planifiée — vous ne pouvez pas proposer un autre créneau ici.",
+  chat_activity_already_planned: "Activité déjà planifiée",
   chat_double_slot_waiting: "Un créneau est déjà en attente de réponse.",
   proposal_detail_title: "Détail de la proposition",
   proposal_counter_badge: "Contre-proposition",

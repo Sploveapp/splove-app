@@ -9,7 +9,7 @@ import App from "./App.tsx";
 import "./styles/globals.css";
 import { initTheme } from "./lib/theme";
 
-console.log("[main bootstrap]");
+console.log("[main bootstrap]", "profile-tab-fix-v2");
 
 initTheme();
 

@@ -186,15 +186,17 @@ export default function MesRencontres() {
   const [rows, setRows] = useState<ProposalRow[]>([]);
   const [profilesById, setProfilesById] = useState<Record<string, ProfileLite>>({});
   const [otherByConv, setOtherByConv] = useState<Record<string, string>>({});
-  const [tab, setTab] = useState<TabKey>(() => parseMeetupsTabParam(searchParams.get("tab")) ?? "to_confirm");
+  const [tab, setTab] = useState<TabKey>(() => parseMeetupsTabParam(searchParams.get("tab")) ?? "confirmed");
 
   useEffect(() => {
     const fromUrl = parseMeetupsTabParam(searchParams.get("tab"));
     if (fromUrl) setTab(fromUrl);
   }, [searchParams]);
+
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [pageSuccess, setPageSuccess] = useState<string | null>(null);
 
   const [counterOpen, setCounterOpen] = useState(false);
   const [counterProposal, setCounterProposal] = useState<ProposalRow | null>(null);
@@ -350,6 +352,12 @@ export default function MesRencontres() {
     void loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    if (!pageSuccess) return;
+    const timer = window.setTimeout(() => setPageSuccess(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [pageSuccess]);
+
   const { toConfirmList, confirmedList, expiredList, cancelledList } = useMemo(() => {
     const toConfirm: ProposalRow[] = [];
     const confirmed: ProposalRow[] = [];
@@ -479,6 +487,7 @@ export default function MesRencontres() {
     setCounterProposal(p);
     setCounterOpen(true);
     setPageError(null);
+    setPageSuccess(null);
   }
 
   async function submitCounterFromModal(payload: ActivityPayload) {
@@ -516,9 +525,12 @@ export default function MesRencontres() {
         scheduledAt: scheduledAtForRpc,
       });
       if ("error" in res) {
+        setPageSuccess(null);
         setPageError(res.error.message);
         throw new Error(res.error.message);
       }
+      setPageError(null);
+      setPageSuccess(t("counter_proposal_success_banner"));
       setCounterOpen(false);
       setCounterProposal(null);
       await loadData();
@@ -553,6 +565,13 @@ export default function MesRencontres() {
     >
       <main className="mx-auto flex w-full max-w-md flex-1 flex-col">
         <div className="sticky top-0 z-30 border-b border-zinc-200/90 bg-[#F4F6F8]/95 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={() => navigate("/profile")}
+            className="mb-2 text-[14px] font-semibold text-zinc-600 transition hover:text-zinc-900"
+          >
+            {`← ${t("profile_title")}`}
+          </button>
           <header>
             <h1 className="text-[22px] font-semibold leading-tight tracking-tight text-zinc-900">
               {t("my_meetups")}
@@ -612,6 +631,15 @@ export default function MesRencontres() {
               role="alert"
             >
               {pageError}
+            </p>
+          ) : null}
+
+          {pageSuccess ? (
+            <p
+              className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[13px] text-emerald-900"
+              role="status"
+            >
+              {pageSuccess}
             </p>
           ) : null}
 
