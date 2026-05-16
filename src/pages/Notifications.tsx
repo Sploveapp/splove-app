@@ -155,7 +155,8 @@ export default function NotificationsPage() {
             className="flex flex-1 flex-col items-center justify-center px-4 py-10"
             aria-label={t("in_app_notif.empty")}
           >
-            <div className="relative mb-5 flex h-16 w-16 items-center justify-center">
+            <div className="flex flex-col items-center translate-y-6">
+              <div className="relative mb-5 flex h-16 w-16 items-center justify-center">
               <img
                 src={sploveMark}
                 alt=""
@@ -164,9 +165,10 @@ export default function NotificationsPage() {
               />
               <Bell size={22} strokeWidth={1.5} className="relative text-white/35" aria-hidden />
             </div>
-            <p className="max-w-[17rem] text-center text-[14px] leading-relaxed text-app-muted/90">
-              {t("in_app_notif.empty_body")}
-            </p>
+              <p className="max-w-[17rem] text-center text-[14px] leading-relaxed text-app-muted/90">
+                {t("in_app_notif.empty_body")}
+              </p>
+            </div>
           </div>
         ) : (
           <ul className="m-0 mt-5 list-none space-y-2 p-0">
