@@ -633,6 +633,7 @@ const en = {
   "in_app_notif.badge_aria": "Notifications",
   "in_app_notif.screen_title": "Notifications",
   "in_app_notif.empty": "No notifications yet.",
+  "in_app_notif.empty_body": "Your matches and important activities will show up here.",
   "in_app_notif.screen_subtitle":
     "Matches, likes and key activities — chat stays in Messages.",
   "in_app_notif.someone": "Someone",

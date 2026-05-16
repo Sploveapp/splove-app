@@ -642,6 +642,7 @@ const fr = {
   "in_app_notif.badge_aria": "Notifications",
   "in_app_notif.screen_title": "Notifications",
   "in_app_notif.empty": "Aucune notification pour le moment.",
+  "in_app_notif.empty_body": "Vos matchs et activités importantes apparaîtront ici.",
   "in_app_notif.screen_subtitle":
     "Matchs, likes et activités importantes — les messages restent dans l’onglet Messages.",
   "in_app_notif.someone": "Quelqu'un",

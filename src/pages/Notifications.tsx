@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Bell } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import sploveMark from "../assets/welcome/splove-mark.png";
 import { NotificationListItem } from "../components/notifications/NotificationListItem";
 import { dispatchInAppNotificationsRefresh } from "../constants";
 import { formatRelativeTime } from "../lib/formatRelativeTime";
@@ -133,27 +135,41 @@ export default function NotificationsPage() {
   }
 
   return (
-    <div className="min-h-full bg-app-bg font-sans">
-      <main className="mx-auto max-w-md px-4 pb-8 pt-3">
+    <div className="flex min-h-full flex-col bg-app-bg font-sans">
+      <main className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 pb-8 pt-3">
         <button
           type="button"
           onClick={() => navigate(-1)}
           className="mb-3 text-sm font-medium text-app-muted transition hover:text-app-text"
         >
-          {`← ${t("discover_profiles")}`}
+          {`← ${t("back")}`}
         </button>
 
         <h1 className="text-xl font-bold tracking-tight text-app-text">{t("in_app_notif.screen_title")}</h1>
-        <p className="mt-1 mb-5 text-[13px] leading-snug text-app-muted">{t("in_app_notif.screen_subtitle")}</p>
+        <p className="mt-1 text-[13px] leading-snug text-app-muted">{t("in_app_notif.screen_subtitle")}</p>
 
         {loading ? (
-          <p className="text-sm text-app-muted">{t("loading")}</p>
+          <p className="mt-8 text-sm text-app-muted">{t("loading")}</p>
         ) : sorted.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-app-border/80 bg-app-card/40 px-4 py-12 text-center">
-            <p className="text-sm text-app-muted">{t("in_app_notif.empty")}</p>
+          <div
+            className="flex flex-1 flex-col items-center justify-center px-4 py-10"
+            aria-label={t("in_app_notif.empty")}
+          >
+            <div className="relative mb-5 flex h-16 w-16 items-center justify-center">
+              <img
+                src={sploveMark}
+                alt=""
+                className="absolute h-14 w-14 object-contain opacity-[0.18]"
+                aria-hidden
+              />
+              <Bell size={22} strokeWidth={1.5} className="relative text-white/35" aria-hidden />
+            </div>
+            <p className="max-w-[17rem] text-center text-[14px] leading-relaxed text-app-muted/90">
+              {t("in_app_notif.empty_body")}
+            </p>
           </div>
         ) : (
-          <ul className="m-0 list-none space-y-2 p-0">
+          <ul className="m-0 mt-5 list-none space-y-2 p-0">
             {sorted.map((row) => {
               const presentation = presentNotification(row, t);
               const relativeTime = formatRelativeTime(row.created_at, dateLocale, nowTick);
