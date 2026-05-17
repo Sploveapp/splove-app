@@ -72,6 +72,13 @@ import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilitySco
 import ReferralCard from "../components/referral/ReferralCard";
 import ReferralModal from "../components/referral/ReferralModal";
 import { DiscoverLocalImpactCard } from "../components/discover/DiscoverLocalImpactCard";
+import { MatchIntroModal } from "../components/match/MatchIntroModal";
+import { hasSeenMatchIntro, markMatchIntroSeen } from "../lib/matchIntroStorage";
+import {
+  matchIntroPrimaryOpensActivity,
+  resolveMatchIntroVariant,
+  type MatchIntroVariant,
+} from "../lib/matchIntroVariant";
 import {
   getOrCreateReferralCode,
   getReferralVariant,
@@ -1320,6 +1327,16 @@ export default function Discover() {
   const [secondChanceTarget, setSecondChanceTarget] = useState<ProfileWithAffinity | null>(null);
   const [secondChanceModalOpen, setSecondChanceModalOpen] = useState(false);
   const [secondChanceToast, setSecondChanceToast] = useState<string | null>(null);
+  const [pendingMatchIntro, setPendingMatchIntro] = useState<{
+    conversationId: string;
+    partnerFirstName: string | null;
+    partnerMainPhotoUrl: string | null;
+    partnerGender: string | null;
+    partnerIntent: unknown;
+    partnerSportPracticeType: string | null;
+    sharedSports: string[];
+    matchedByUserId: string;
+  } | null>(null);
   useEffect(() => {
     swipeHistoryRef.current = swipeHistory;
   }, [swipeHistory]);
@@ -2563,6 +2580,44 @@ export default function Discover() {
     setPreviewProfile(p);
   }
 
+  const pendingMatchIntroVariant: MatchIntroVariant = useMemo(() => {
+    if (!pendingMatchIntro || !currentUserId) return "generic";
+    const myProfile = profile && typeof profile === "object" ? profile : null;
+    return resolveMatchIntroVariant({
+      myUserId: currentUserId,
+      matchedByUserId: pendingMatchIntro.matchedByUserId,
+      myGender: myProfile ? (myProfile as { gender?: string | null }).gender : null,
+      myIntent: myProfile ? (myProfile as { intent?: unknown }).intent : null,
+      partnerGender: pendingMatchIntro.partnerGender,
+      partnerIntent: pendingMatchIntro.partnerIntent,
+    });
+  }, [pendingMatchIntro, currentUserId, profile]);
+
+  function dismissMatchIntro(markSeen: boolean) {
+    if (markSeen && pendingMatchIntro) {
+      markMatchIntroSeen(pendingMatchIntro.conversationId);
+    }
+    setPendingMatchIntro(null);
+  }
+
+  function handleMatchIntroPrimary() {
+    const p = pendingMatchIntro;
+    if (!p) return;
+    markMatchIntroSeen(p.conversationId);
+    const openActivity = matchIntroPrimaryOpensActivity(pendingMatchIntroVariant);
+    setPendingMatchIntro(null);
+    navigate(`/chat/${p.conversationId}`, {
+      state: {
+        partnerFirstName: p.partnerFirstName,
+        partnerMainPhotoUrl: p.partnerMainPhotoUrl,
+        matchedByUserId: p.matchedByUserId,
+        sharedSports: p.sharedSports,
+        partnerSportPracticeType: p.partnerSportPracticeType,
+        ...(openActivity ? { openActivityComposer: true } : {}),
+      },
+    });
+  }
+
   async function handleLike(profile: ProfileWithAffinity, decisionTimeMs = 0) {
     if (!currentUserId) {
       console.error("[Discover] handleLike: no authenticated user");
@@ -2666,6 +2721,19 @@ export default function Discover() {
         /* quota */
       }
       removeFromFeed();
+      if (!hasSeenMatchIntro(conversation_id)) {
+        setPendingMatchIntro({
+          conversationId: conversation_id,
+          partnerFirstName: profile.first_name,
+          partnerMainPhotoUrl: getProfileDisplayPhotoUrl(profile),
+          partnerGender: profile.gender ?? null,
+          partnerIntent: profile.intent ?? null,
+          partnerSportPracticeType: profile.sport_practice_type ?? null,
+          sharedSports: shared,
+          matchedByUserId: currentUserId,
+        });
+        return;
+      }
       navigate(`/match/${conversation_id}`, {
         replace: true,
         state: {
@@ -3328,6 +3396,14 @@ export default function Discover() {
         onClose={() => setReferralModalOpen(false)}
         referralCode={referralCodeState}
         variant={referralVariant}
+      />
+
+      <MatchIntroModal
+        open={pendingMatchIntro != null}
+        variant={pendingMatchIntroVariant}
+        onClose={() => dismissMatchIntro(true)}
+        onPrimary={handleMatchIntroPrimary}
+        onSecondary={() => dismissMatchIntro(true)}
       />
 
       <SecondChanceMessageModal

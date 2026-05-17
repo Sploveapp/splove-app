@@ -141,6 +141,7 @@ type ChatLocationState = {
   sharedSports?: string[];
   matchedByUserId?: string | null;
   partnerSportPracticeType?: string | null;
+  openActivityComposer?: boolean;
 };
 
 type ProposalStatus = "pending" | "accepted" | "declined" | "expired" | "reschedule_requested" | "cancelled";
@@ -375,6 +376,10 @@ export default function Chat() {
   const [chatOptionsOpen, setChatOptionsOpen] = useState(false);
   const [chatStyleOpen, setChatStyleOpen] = useState(false);
   const chatMessageInputRef = useRef<HTMLTextAreaElement>(null);
+  const openedActivityFromNavRef = useRef(false);
+  useEffect(() => {
+    openedActivityFromNavRef.current = false;
+  }, [conversationId]);
   const chatLoadSeqRef = useRef(0);
   const chatLoadWatchdogRef = useRef<number | null>(null);
   const authWatchdogRef = useRef<number | null>(null);
@@ -1446,6 +1451,15 @@ export default function Chat() {
     if (blockActivityProposalPolicy()) return;
     setModalOpen(true);
   }
+
+  useEffect(() => {
+    if (!navState?.openActivityComposer || loading || pairBlocked || openedActivityFromNavRef.current) {
+      return;
+    }
+    if (!pairChatMeta) return;
+    openedActivityFromNavRef.current = true;
+    openActivityComposer();
+  }, [navState?.openActivityComposer, loading, pairBlocked, pairChatMeta]);
 
   async function sendActivity(payload: ActivityPayload, replaceProposalId: string | null = null) {
     if (!user?.id || !conversationId || !chatMatchId) throw new Error("chat_error_not_connected");
