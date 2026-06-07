@@ -13,6 +13,8 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
+import { isAppAuthReady } from "../lib/isAppAuthReady";
+import { isColdStartSplashActive } from "../lib/coldStartSplash";
 import { ReportModal } from "../components/ReportModal";
 import { ReportPhotoModal } from "../components/ReportPhotoModal";
 import { BLOCK_PROFILE_CONFIRM, BLOCK_PROFILE_LINK_LABEL } from "../constants/copy";
@@ -25,7 +27,20 @@ import {
   IconProfileAvatarPlaceholder,
 } from "../components/ui/Icon";
 import { BETA_MODE } from "../constants/beta";
-import { fetchBlockExclusionDetail, isBlockedWith } from "../services/blocks.service";
+import {
+  fetchBlockExclusionDetail,
+  isBlockedWith,
+  type BlockExclusionDetail,
+} from "../services/blocks.service";
+import { fetchDiscoverFeedAlive } from "../lib/discoverFeedFetch";
+import {
+  discoverPipelineExclusions,
+  discoverPipelineStage,
+  DISCOVER_PIPELINE_AUDIT,
+  DISCOVER_SCORING_FALLBACK_AFTER_COMPLETENESS,
+  logProfileExcludedAudits,
+} from "../lib/discoverPipelineAudit";
+import { fetchConversationIdForUserPair } from "../lib/matchConversationId";
 import { VerifiedBadge } from "../components/VerifiedBadge";
 import { isIdentityVerified } from "../lib/profileVerification";
 import {
@@ -33,6 +48,7 @@ import {
   getDiscoverSportChips,
   getSharedSportLabelsForMatch,
 } from "../lib/sportMatchGroups";
+import { logSportMatchPreferenceScoringTrace } from "../lib/sportMatchPreference";
 import {
   filterDiscoverReasonsForDisplay,
   guidedProfileSentence,
@@ -40,7 +56,7 @@ import {
   softAreaHint,
 } from "../lib/discoverCardCopy";
 import { buildDiscoverScore, computeReliabilityScore, getReliabilityUiHints } from "../lib/discoverScore";
-import { scoreAndFilterDiscoverCandidates } from "../services/discoverScoring.service";
+import { runDiscoverScoring } from "../services/discoverScoring.service";
 import { getDiscoverFeedIntegrityExclusionReasons } from "../lib/onboardingDiscoverReadiness";
 import { buildDiscoverLocationLines, formatViewerRadiusLabel } from "../utils/geolocation";
 import { formatCityDisplay } from "../lib/formatCityDisplay";
@@ -48,13 +64,40 @@ import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
 import { usePremium } from "../hooks/usePremium";
 import { useSplovePlus } from "../hooks/useSplovePlus";
 import { useTranslation } from "../i18n/useTranslation";
-import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import { useProfilePhotoResolvedDisplay, resolveProfilePhotoFieldFromStoredRef } from "../hooks/useProfilePhotoSignedUrl";
+import {
+  logProfilePhotoUiDecision,
+  pickPrimaryProfilePhotoStoredRef,
+  pickSecondaryProfilePhotoStoredRef,
+  resolveProfilePhotoUiSrc,
+} from "../lib/profilePhotoDisplayUrl";
 import { DiscoverProfileCard } from "../components/discover/DiscoverProfileCard";
+import { MoveProfileSkeleton } from "../components/discover/MoveProfileSkeleton";
 import { EmptyDiscoverState } from "../components/discover/EmptyDiscoverState";
 import { SplovePinIcon } from "../components/splovePlus/SplovePlusIcons";
 import { ProfilePhotoViewerModal } from "../components/ProfilePhotoViewerModal";
 import { useDiscoverUndoNavRegistration } from "../contexts/DiscoverUndoNavContext";
 import { IS_BETA_UNDO_FREE } from "../constants/discoverUndo";
+import {
+  consumeDiscoverUndoCredit,
+  DISCOVER_UNDO_CREDIT_EVENT,
+  type DiscoverUndoCreditEventDetail,
+  getDiscoverUndoCreditCount,
+  hasDiscoverUndoCredit,
+} from "../lib/discoverUndoCredits";
+import {
+  applyLocalProfileViewActionTaken,
+  applyLocalProfileViewWithoutAction,
+  createEmptyProfileViewOrderingState,
+  orderDiscoverProfilesByProfileViews,
+  rotateProfileToEndOfStack,
+  type DiscoverProfileViewOrderingState,
+} from "../lib/discoverProfileViewOrdering";
+import {
+  fetchDiscoverProfileViewOrderingState,
+  markProfileViewActionTaken,
+  recordProfileViewWithoutAction,
+} from "../services/profileViews.service";
 import { SecondChancePassCard } from "../components/SecondChancePassCard";
 import { SecondChanceMessageModal } from "../components/SecondChanceMessageModal";
 import { createSecondChanceRequest } from "../services/secondChance.service";
@@ -66,7 +109,23 @@ import {
   rewindLastDiscoverSwipe,
   type DiscoverRewindStatus,
 } from "../services/discoverSwipes.service";
-import { mergeOptionalProfileFields } from "../lib/profileSelect";
+import {
+  mergeOptionalProfileFields,
+  POST_LOGIN_BOOT_MAX_MS,
+} from "../lib/profileSelect";
+import { mergeDiscoverViewerOptionalFields } from "../lib/profileAdaptedOpenness";
+import { fetchProfileDistancesOptional } from "../lib/optionalSupabase";
+import {
+  buildClientDiscoverDistanceById,
+  DISCOVER_BETA_SIMPLE_PIPELINE,
+  filterDiscoverVisibilityWindow,
+} from "../lib/discoverBetaPipeline";
+import {
+  logDiscoverEmptyStateVisible,
+  logDiscoverFirstCardVisible,
+  logDiscoverShellVisible,
+  runPostLoginOptionalBatch,
+} from "../lib/postLoginPerf";
 import { asAgePreferenceScalar } from "../lib/profileAge";
 import { practiceCompatibilityScore } from "../lib/sportPracticeCompatibilityScore";
 import ReferralCard from "../components/referral/ReferralCard";
@@ -85,6 +144,10 @@ import {
   trackReferralEvent,
 } from "../lib/referral";
 import {
+  applyMoveProfileRotationForFeedCommit,
+  reapplyColdLaunchMoveProfileRotation,
+} from "../lib/moveFirstProfileRotation";
+import {
   countReferralsAsReferrer,
   countReferralsRowsByReferrer,
   fetchGrowthProfileFields,
@@ -96,6 +159,9 @@ import {
   viewerHasDiscoverSearchCoords,
 } from "../constants/discoverGeo";
 import { coerceProfileHeightCm, formatHeightCmForDisplay } from "../lib/profileHeightCm";
+import { deferSecondaryWork } from "../lib/deferSecondaryWork";
+import { usesNativeBottomNavigation, modalSheetHostClass, profileSheetClass } from "../lib/nativeBottomNav";
+import { clearOauthProcessingLock, isOauthProcessingLocked } from "../lib/oauthCallbackLock";
 
 type Profile = {
   id: string;
@@ -156,20 +222,14 @@ type Profile = {
 
 /** Resolve photo URL from whatever columns the feed view row actually includes. */
 function getProfileDisplayPhotoUrl(p: Profile): string | null {
-  for (const u of [p.main_photo_url, p.portrait_url, p.avatar_url, p.fullbody_url]) {
-    const t = typeof u === "string" ? u.trim() : "";
-    if (t) return t;
-  }
-  return null;
+  return pickPrimaryProfilePhotoStoredRef(p);
 }
 
 /** Deuxième visuel pour l’aperçu (évite le doublon de la photo principale). */
 function getSecondaryPhotoUrl(p: Profile): string | null {
   const main = getProfileDisplayPhotoUrl(p);
-  for (const u of [p.fullbody_url, p.portrait_url, p.main_photo_url, p.avatar_url]) {
-    const t = typeof u === "string" ? u.trim() : "";
-    if (t && t !== main) return t;
-  }
+  const secondary = pickSecondaryProfilePhotoStoredRef(p);
+  if (secondary && secondary !== main) return secondary;
   return null;
 }
 
@@ -229,8 +289,22 @@ function DiscoverProfileDetailPreview({
 }: DiscoverProfileDetailPreviewProps) {
   const photoMainRaw = getProfileDisplayPhotoUrl(profile);
   const photoSecondRaw = getSecondaryPhotoUrl(profile);
-  const photoMain = useProfilePhotoSignedUrl(photoMainRaw) ?? "";
-  const photoSecond = useProfilePhotoSignedUrl(photoSecondRaw) ?? "";
+  const photoMainDisplay = useProfilePhotoResolvedDisplay(photoMainRaw, {
+    deferMs: DISCOVER_PHOTO_SIGN_DEFER_MS,
+    discoverContext: {
+      profileId: profile.id,
+      photoField: resolveProfilePhotoFieldFromStoredRef(profile, photoMainRaw),
+    },
+  });
+  const photoSecondDisplay = useProfilePhotoResolvedDisplay(photoSecondRaw, {
+    deferMs: DISCOVER_PHOTO_SIGN_DEFER_MS,
+    discoverContext: {
+      profileId: profile.id,
+      photoField: resolveProfilePhotoFieldFromStoredRef(profile, photoSecondRaw),
+    },
+  });
+  const photoMain = resolveProfilePhotoUiSrc(photoMainRaw, photoMainDisplay.src) ?? "";
+  const photoSecond = resolveProfilePhotoUiSrc(photoSecondRaw, photoSecondDisplay.src) ?? "";
   const galleryRawRefs = useMemo(
     () => uniqueProfilePhotoRefsOrdered(profile),
     [
@@ -258,7 +332,7 @@ function DiscoverProfileDetailPreview({
   return (
     <>
     <div
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/45 p-4 sm:items-center"
+      className={`fixed inset-0 z-[60] flex items-end justify-center bg-black/45 px-4 pt-4 sm:items-center ${modalSheetHostClass()}`}
       role="presentation"
       onClick={onBackdropClick}
     >
@@ -266,24 +340,25 @@ function DiscoverProfileDetailPreview({
         role="dialog"
         aria-modal="true"
         aria-labelledby="discover-preview-title"
-        className="w-full max-w-md overflow-hidden rounded-3xl bg-app-card shadow-xl"
+        className={`flex w-full max-w-md flex-col overflow-hidden rounded-3xl bg-app-card shadow-xl ${profileSheetClass()}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="grid h-44 grid-cols-2 gap-0.5 bg-app-border sm:h-52">
+        <div className="grid h-44 shrink-0 grid-cols-2 gap-0.5 bg-app-border sm:h-52">
           <div className="relative min-h-0 bg-app-border">
             {photoMain ? (
               <img
                 src={photoMain}
                 alt={profile.first_name ? `Photo de ${profile.first_name}` : "Photo du profil"}
                 className="absolute inset-0 h-full w-full cursor-pointer object-cover"
+                onError={photoMainDisplay.onImageError}
                 onClick={(e) => {
                   e.stopPropagation();
                   openPhotoViewerFromRaw(photoMainRaw);
                 }}
               />
             ) : (
-              <div className="absolute inset-0 flex items-center justify-center bg-app-border">
-                <IconProfileAvatarPlaceholder className="text-app-muted/80" size={56} />
+              <div className="absolute inset-0 flex items-center justify-center bg-zinc-900">
+                <img src="/logo.png" alt="" aria-hidden className="h-10 w-10 object-contain opacity-70" />
               </div>
             )}
             <div className="absolute right-1.5 top-1.5 z-20" data-discover-menu-root>
@@ -334,6 +409,7 @@ function DiscoverProfileDetailPreview({
                 src={photoSecond}
                 alt=""
                 className="absolute inset-0 h-full w-full cursor-pointer object-cover"
+                onError={photoSecondDisplay.onImageError}
                 onClick={(e) => {
                   e.stopPropagation();
                   openPhotoViewerFromRaw(photoSecondRaw);
@@ -346,7 +422,8 @@ function DiscoverProfileDetailPreview({
             )}
           </div>
         </div>
-        <div className="space-y-2.5 overflow-hidden px-4 pb-4 pt-3 sm:px-5 sm:pb-5">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-3 sm:px-5 [-webkit-overflow-scrolling:touch]">
+          <div className="space-y-2.5">
           <div className="flex flex-wrap items-center gap-2">
             <h2 id="discover-preview-title" className="text-lg font-bold leading-tight text-app-text">
               {profile.first_name ?? t("unnamed_profile")}
@@ -455,15 +532,18 @@ function DiscoverProfileDetailPreview({
               </div>
             );
           })()}
+          </div>
+        </div>
+        <div className="shrink-0 space-y-2 border-t border-app-border/80 bg-app-card px-4 pb-4 pt-3 sm:px-5">
           <button
             type="button"
-            className="mt-1 w-full rounded-2xl py-4 text-base font-bold shadow-lg transition hover:opacity-95 sm:py-4 sm:text-[17px]"
+            className="w-full rounded-2xl py-4 text-base font-bold shadow-lg transition hover:opacity-95 sm:text-[17px]"
             style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
             onClick={() => void onPreviewLike()}
           >
             {t("propose_activity")}
           </button>
-          <div className="flex flex-wrap items-center justify-center gap-2 pt-0.5">
+          <div className="flex flex-wrap items-center justify-center gap-2">
             <button
               type="button"
               className="rounded-full px-2 py-1.5 text-xs font-medium text-app-muted hover:bg-app-border hover:text-app-muted"
@@ -640,24 +720,6 @@ function parseLikeRpcResult(data: unknown): LikeRpcParsed | null {
   return { is_match, conversation_id };
 }
 
-async function fetchConversationIdForPair(userA: string, userB: string): Promise<string | null> {
-  const { data: row1 } = await supabase
-    .from("matches")
-    .select("conversation_id")
-    .eq("user_a", userA)
-    .eq("user_b", userB)
-    .maybeSingle();
-  const c1 = (row1 as { conversation_id?: string | null } | null)?.conversation_id;
-  if (c1) return c1;
-  const { data: row2 } = await supabase
-    .from("matches")
-    .select("conversation_id")
-    .eq("user_a", userB)
-    .eq("user_b", userA)
-    .maybeSingle();
-  return (row2 as { conversation_id?: string | null } | null)?.conversation_id ?? null;
-}
-
 function getSharedSportsFromProfile(myMatchKeys: Set<string>, profile: Profile): string[] {
   return getSharedSportLabelsForMatch(myMatchKeys, profile);
 }
@@ -711,6 +773,7 @@ function discoverDevPipelineDiff(
   reasonFor: (p: Profile) => string,
   pipelineDetail?: string,
 ): void {
+  discoverPipelineExclusions(step, prev, next, reasonFor, pipelineDetail);
   if (!import.meta.env.DEV) return;
   const nextIds = new Set(next.map((x) => x.id).filter((id): id is string => Boolean(id)));
   for (const p of prev) {
@@ -802,6 +865,9 @@ function discoverExtractProfileSportIds(profile: Pick<Profile, "profile_sports">
 }
 
 function discoverLogStageCount(stage: string, count: number, extra?: Record<string, unknown>): void {
+  if (DISCOVER_PIPELINE_AUDIT) {
+    console.log("[Discover pipeline] count", { stage, count, ...(extra ?? {}) });
+  }
   if (!import.meta.env.DEV) return;
   console.info("[Discover diagnostics] stage_count", {
     stage,
@@ -811,6 +877,8 @@ function discoverLogStageCount(stage: string, count: number, extra?: Record<stri
 }
 
 const DISCOVER_DISPLAY_LIMIT = 10;
+/** Signatures storage Discover : après le premier paint (skeleton / carte sans photo bloquante). */
+const DISCOVER_PHOTO_SIGN_DEFER_MS = 400;
 /** Sonde navigation externe (profil hors pile) — pas le flux principal Discover. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
 
@@ -829,7 +897,14 @@ const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
   layer: "mid" | "back";
 }) {
   const photoRaw = getProfileDisplayPhotoUrl(profile);
-  const photoUrl = useProfilePhotoSignedUrl(photoRaw) ?? "";
+  const photoDisplay = useProfilePhotoResolvedDisplay(photoRaw, {
+    deferMs: DISCOVER_PHOTO_SIGN_DEFER_MS,
+    discoverContext: {
+      profileId: profile.id,
+      photoField: resolveProfilePhotoFieldFromStoredRef(profile, photoRaw),
+    },
+  });
+  const photoUrl = resolveProfilePhotoUiSrc(photoRaw, photoDisplay.src) ?? "";
   const isBack = layer === "back";
   if (!hasFiniteDiscoverCoordinates(profile)) {
     if (import.meta.env.DEV) {
@@ -858,7 +933,7 @@ const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
       <div className="flex h-full flex-col overflow-hidden rounded-[26px] bg-zinc-950 shadow-[0_24px_55px_rgba(0,0,0,0.5)] ring-1 ring-white/[0.06]">
         <div className="relative min-h-0 flex-1 overflow-hidden">
           {photoUrl ? (
-            <img src={photoUrl} alt="" className="h-full w-full object-cover" />
+            <img src={photoUrl} alt="" className="h-full w-full object-cover" onError={photoDisplay.onImageError} />
           ) : (
             <div className="flex h-full min-h-[240px] items-center justify-center bg-zinc-900">
               <IconProfileAvatarPlaceholder className="text-app-muted/45" size={56} />
@@ -872,71 +947,37 @@ const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
   );
 });
 
-function DiscoverProfileCardSkeleton({ immersive = false }: { immersive?: boolean }) {
-  return (
-    <article
-      className={`flex flex-col overflow-hidden rounded-[26px] bg-app-card ring-1 ring-white/[0.06] ${
-        immersive
-          ? "min-h-[min(76dvh,calc(100dvh-10rem))] max-h-[calc(100dvh-5.5rem)] w-full flex-1 shadow-[0_20px_50px_rgba(0,0,0,0.45)]"
-          : "mb-8 max-h-[min(92vh,840px)] min-h-[min(560px,88svh)] shadow-lg ring-app-border/90"
-      }`}
-      aria-hidden
-    >
-      <div
-        className={`relative w-full flex-1 basis-0 overflow-hidden bg-zinc-950 ${
-          immersive ? "min-h-[min(68dvh,600px)]" : "min-h-[min(58vh,420px)] sm:min-h-[min(52vh,480px)]"
-        }`}
-      >
-        <div className="absolute inset-0 bg-gradient-to-br from-zinc-800/95 via-zinc-700/45 to-zinc-900/95 splove-skeleton-breathe" />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[10] pb-28 pt-12">
-          <div className="flex flex-wrap gap-1.5 px-4">
-            <div className="h-5 w-[4.25rem] rounded-full bg-white/12" />
-            <div className="h-5 w-[5.5rem] rounded-full bg-white/10" />
-          </div>
-          <div className="mt-3 space-y-2 px-4">
-            <div className="h-10 w-[65%] max-w-[13rem] rounded-lg bg-white/14" />
-            <div className="h-4 w-[72%] max-w-[14rem] rounded-md bg-emerald-400/25" />
-            <div className="h-3.5 w-[88%] max-w-[18rem] rounded-md bg-white/10" />
-          </div>
-        </div>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[11] flex items-center justify-between px-8 pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <div className="h-14 w-14 shrink-0 rounded-full bg-white/12 splove-skeleton-breathe" />
-          <div className="h-12 w-12 shrink-0 rounded-full bg-white/10 splove-skeleton-breathe" />
-          <div className="h-[3.65rem] w-[3.65rem] shrink-0 rounded-full bg-white/14 splove-skeleton-breathe" />
-        </div>
-      </div>
-      <div className="border-t border-app-border/85 bg-app-card px-3 py-2.5">
-        <div className="mx-auto h-3 w-28 rounded-md bg-app-border/80 splove-skeleton-breathe" />
-      </div>
-    </article>
-  );
-}
-
 const SWIPE_COMMIT_PX = 72;
 const TAP_MAX_PX = 15;
 const SWIPE_DAMP = 0.55;
-const DISCOVER_FREE_VISIBILITY_HOURS = 24;
-const DISCOVER_PREMIUM_VISIBILITY_HOURS = 72;
-
-function isWithinVisibilityWindow(createdAt: string | null | undefined, isPremium: boolean): boolean {
-  const raw = typeof createdAt === "string" ? createdAt.trim() : "";
-  if (!raw) return false;
-  const ts = Date.parse(raw);
-  if (!Number.isFinite(ts)) return false;
-  const maxHours = isPremium ? DISCOVER_PREMIUM_VISIBILITY_HOURS : DISCOVER_FREE_VISIBILITY_HOURS;
-  return Date.now() - ts <= maxHours * 60 * 60 * 1000;
-}
-
 /** Colonnes stables sur `profiles` — pas de champs optionnels / premium (voir mergeOptionalProfileFields). */
 const DISCOVER_PROFILES_DETAIL_SELECT =
   "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, height_cm, portrait_url, fullbody_url, avatar_url, main_photo_url, city, latitude, longitude, profile_completed, is_photo_verified, photo_status, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
 
 /** Profil viewer Discover : colonnes plates stables (sports via `profile_sports`, optionnels via merge). */
 const DISCOVER_VIEWER_ME_SELECT =
-  "id, first_name, city, latitude, longitude, discovery_radius_km, birth_date, gender, looking_for, intent, profile_completed, onboarding_completed, onboarding_done, onboarding_sports_count, photo_status, portrait_url, fullbody_url, main_photo_url";
+  "id, first_name, city, latitude, longitude, discovery_radius_km, birth_date, gender, looking_for, intent, profile_completed, onboarding_completed, onboarding_done, onboarding_sports_count, photo_status, portrait_url, fullbody_url, main_photo_url, sport_match_preference";
 
 const DISCOVER_CANDIDATE_HYDRATE_SELECT =
-  "id, birth_date, gender, looking_for, intent, height_cm, profile_sports(sport_id, sports(id, slug, label))";
+  "id, birth_date, gender, looking_for, intent, height_cm, sport_match_preference, profile_sports(sport_id, sports(id, slug, label))";
+
+/** Auth gate profile omet souvent les colonnes optionnelles — relecture ciblée si absent. */
+async function ensureViewerSportMatchPreferenceLoaded(
+  profile: Profile,
+  viewerId: string,
+): Promise<Profile> {
+  const existing = profile.sport_match_preference;
+  if (typeof existing === "string" && existing.trim().length > 0) return profile;
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("sport_match_preference")
+    .eq("id", viewerId)
+    .maybeSingle();
+  if (error || !data) return profile;
+  const raw = (data as { sport_match_preference?: unknown }).sport_match_preference;
+  if (typeof raw !== "string" || !raw.trim()) return profile;
+  return { ...profile, sport_match_preference: raw.trim() };
+}
 
 /** Reconstruit une carte Discover après rewind (hors re-score filtre feed). */
 async function buildAffinityProfileForRewind(input: {
@@ -952,16 +993,12 @@ async function buildAffinityProfileForRewind(input: {
     .maybeSingle();
   if (error || !p) return null;
   const pRow = p as unknown as Profile;
-  const { data: distRes } = await supabase.rpc("profile_distances_from_viewer", {
-    p_candidate_ids: [input.targetId],
-  });
-  let distanceKm: number | null = null;
-  for (const row of (distRes ?? []) as { profile_id?: string; distance_km?: number | null }[]) {
-    if (row.profile_id === input.targetId) {
-      distanceKm = row.distance_km ?? null;
-      break;
-    }
-  }
+  const distById = DISCOVER_BETA_SIMPLE_PIPELINE
+    ? buildClientDiscoverDistanceById(input.meProfile, [
+        { id: input.targetId, latitude: pRow.latitude, longitude: pRow.longitude },
+      ])
+    : await fetchProfileDistancesOptional([input.targetId]);
+  const distanceKm = distById.get(input.targetId) ?? null;
   const discover = buildDiscoverScore(pRow, {
     mySportMatchKeys: input.mySportMatchKeys,
     myProfile: input.meProfile,
@@ -1094,8 +1131,19 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   immersive = false,
 }: DiscoverSwipeCardProps) {
   const photoRaw = getProfileDisplayPhotoUrl(profile);
-  const photo = useProfilePhotoSignedUrl(photoRaw) ?? "";
+  const photoField = resolveProfilePhotoFieldFromStoredRef(profile, photoRaw);
+  const photoDisplay = useProfilePhotoResolvedDisplay(photoRaw, {
+    deferMs: DISCOVER_PHOTO_SIGN_DEFER_MS,
+    discoverContext: { profileId: profile.id, photoField },
+  });
+  const photo = resolveProfilePhotoUiSrc(photoRaw, photoDisplay.src) ?? "";
   const strongAffinity = profile.commonSportsCount >= 2;
+  const nativeBottomNav = usesNativeBottomNavigation();
+
+  useEffect(() => {
+    if (!photoRaw) return;
+    logProfilePhotoUiDecision("discover.swipe_card", profile, photo || null, "primary");
+  }, [profile.id, photoRaw, photo, profile]);
 
   const [dx, setDx] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -1206,7 +1254,11 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
         profile.is_boost_active
           ? "ring-2 ring-fuchsia-400/45 shadow-[0_0_28px_rgba(217,70,239,0.25)] animate-[pulse_2.8s_ease-in-out_infinite]"
           : ""
-      } min-h-[min(76dvh,calc(100dvh-10rem))] max-h-[calc(100dvh-5.25rem)]`
+      } ${
+        nativeBottomNav
+          ? "min-h-0 max-h-[calc(100dvh-11.5rem)]"
+          : "min-h-[min(76dvh,calc(100dvh-10rem))] max-h-[calc(100dvh-5.25rem)]"
+      }`
     : `splove-content-reveal splove-card-premium mb-8 flex max-h-[min(94vh,880px)] min-h-[min(580px,90svh)] flex-col overflow-hidden rounded-[26px] bg-app-card ring-1 ring-white/[0.07] ${
         strongAffinity ? "ring-2 ring-[#FF1E2D]/35" : ""
       } ${
@@ -1241,6 +1293,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
         onPass={(decisionTimeMs) => onPass(profile.id, decisionTimeMs)}
         onLike={(decisionTimeMs) => void onLike(profile, decisionTimeMs)}
         onReport={() => onReport(profile.id)}
+        onPhotoError={photoDisplay.onImageError}
         immersive={immersive}
       />
     </article>
@@ -1262,10 +1315,25 @@ export default function Discover() {
   };
   const navigate = useNavigate();
   const location = useLocation();
+  const nativeBottomNav = usesNativeBottomNavigation();
+  const isMoveRoute =
+    location.pathname === "/move" ||
+    location.pathname === "/discover" ||
+    location.pathname === "/";
   const setDiscoverUndoNav = useDiscoverUndoNavRegistration();
   const handledPreviewNavKeyRef = useRef<string | null>(null);
   const loadProfilesInFlightRef = useRef(false);
-  const { user, session, isLoading: authLoading, profile, isProfileLoading, refetchProfile } = useAuth();
+  const loadProfilesPendingReloadRef = useRef(false);
+  const reapplyRotationOnNextCommitRef = useRef(false);
+  const {
+    user,
+    session,
+    isLoading: authLoading,
+    isAuthInitialized,
+    profile,
+    isProfileLoading,
+    refetchProfile,
+  } = useAuth();
   const viewerMeetActive =
     Boolean(profile) &&
     (profile as { is_active_mode?: boolean | null }).is_active_mode === true;
@@ -1275,9 +1343,12 @@ export default function Discover() {
     const pr = profile as { preferred_age_min?: unknown; preferred_age_max?: unknown };
     return `${pr.preferred_age_min ?? "ø"}:${pr.preferred_age_max ?? "ø"}`;
   }, [profile]);
-  const currentUserId = user?.id ?? "";
+  const currentUserId = user?.id ?? session?.user?.id ?? "";
   const { hasPlus } = usePremium(currentUserId || null);
   const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
+  /** Pile affichée — remplie une seule fois à MOVE_FEED_READY (évite flash profils intermédiaires). */
+  const [stableProfiles, setStableProfiles] = useState<ProfileWithAffinity[]>([]);
+  const [feedReady, setFeedReady] = useState(false);
   const [mySportMatchKeys, setMySportMatchKeys] = useState<Set<string>>(new Set());
   const myCity = useMemo(() => {
     const raw = profile && typeof profile === "object" ? (profile as { city?: string | null }).city : null;
@@ -1287,6 +1358,7 @@ export default function Discover() {
   }, [profile]);
   const [myDiscoveryRadiusKm] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingTimedOut, setLoadingTimedOut] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   /** Viewer sans lat/lng valides : aucun candidat, état vide dédié (pas d’erreur réseau). */
   const [viewerGeoBlocked, setViewerGeoBlocked] = useState(false);
@@ -1308,7 +1380,7 @@ export default function Discover() {
   const prevBoostActiveRef = useRef(false);
   const { boostStats } = useSplovePlus(currentUserId || null);
   const [rewindStatus, setRewindStatus] = useState<DiscoverRewindStatus | null>(null);
-  const [rewindBusy, setRewindBusy] = useState(false);
+  const rewindBusy = false;
   const [rewindError, setRewindError] = useState<string | null>(null);
   const [rewindToast, setRewindToast] = useState<string | null>(null);
   const [rewindRestoredId, setRewindRestoredId] = useState<string | null>(null);
@@ -1317,11 +1389,126 @@ export default function Discover() {
   const [lastRestoredProfileId, setLastRestoredProfileId] = useState<string | null>(null);
   const [swipeHistory, setSwipeHistory] = useState<DiscoverSwipeHistoryEntry[]>([]);
   const swipeHistoryRef = useRef<DiscoverSwipeHistoryEntry[]>([]);
+  /** Pile locale des profils passés (non vidée au rechargement feed). */
+  const undoStackRef = useRef<ProfileWithAffinity[]>([]);
+  const currentUserIdRef = useRef(currentUserId);
+  currentUserIdRef.current = currentUserId;
+  const [undoStackTick, setUndoStackTick] = useState(0);
+  const [undoCreditTick, setUndoCreditTick] = useState(0);
+  const [localUndoCredits, setLocalUndoCredits] = useState(0);
+  /** Profils passés localement (évite réapparition immédiate si le feed recharge). */
+  const passedProfileIdsRef = useRef<Set<string>>(new Set());
+  const [passedFilterTick, setPassedFilterTick] = useState(0);
+  /** Like/pass explicite en cours — ne pas traiter comme « vu sans action ». */
+  const explicitSwipeProfileIdRef = useRef<string | null>(null);
+  const topProfileIdRef = useRef<string | null>(null);
+  const previewProfileIdRef = useRef<string | null>(null);
+  previewProfileIdRef.current = previewProfile?.id ?? null;
+  const profileViewOrderingRef = useRef<DiscoverProfileViewOrderingState>(
+    createEmptyProfileViewOrderingState(),
+  );
+  const [profileViewOrderTick, setProfileViewOrderTick] = useState(0);
+  const skeletonLogKeyRef = useRef<string | null>(null);
+  const neutralSkeletonLogKeyRef = useRef<string | null>(null);
+  const firstStableProfileLoggedRef = useRef(false);
+
+  const patchDiscoverStackProfiles = useCallback(
+    (updater: (prev: ProfileWithAffinity[]) => ProfileWithAffinity[]) => {
+      setProfiles((prev) => {
+        const next = takeDiscoverProfilesWithValidGps(updater(prev));
+        setStableProfiles(next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const feedReadyRef = useRef(feedReady);
+  feedReadyRef.current = feedReady;
+
+  /** Vide la pile affichée — skeleton immédiat (avant le async loadProfiles). */
+  const beginMoveFeedLoad = useCallback(() => {
+    setFeedReady(false);
+    setStableProfiles([]);
+    setProfiles([]);
+    setLoading(true);
+    firstStableProfileLoggedRef.current = false;
+    skeletonLogKeyRef.current = null;
+  }, []);
+
   /** Liste utilisée pour le rendu des cartes — exclusion absolue sans lat/lng valides (doublon de sécurité). */
   const profilesCardStack = useMemo(
-    () => takeDiscoverProfilesWithValidGps(profiles),
-    [profiles],
+    () => {
+      if (!feedReady) return [];
+      return orderDiscoverProfilesByProfileViews(
+        takeDiscoverProfilesWithValidGps(
+          stableProfiles.filter((p) => !passedProfileIdsRef.current.has(p.id)),
+        ),
+        profileViewOrderingRef.current,
+      );
+    },
+    [feedReady, stableProfiles, passedFilterTick, profileViewOrderTick],
   );
+
+  const moveFeedLoading = loading;
+  /** Bloque tout rendu de profil réel (cartes, preview, ids UI). */
+  const blockProfileUi =
+    !feedReady || moveFeedLoading || isProfileLoading;
+  /** Skeleton neutre — aucune donnée utilisateur tant que le feed n’est pas prêt. */
+  const showMoveSkeleton =
+    !errorMessage && !loadingTimedOut && blockProfileUi;
+
+  /** Cartes réelles — jamais avant MOVE_FEED_READY ni pendant chargement. */
+  const canRenderFeedCards =
+    !blockProfileUi &&
+    !errorMessage &&
+    !viewerGeoBlocked &&
+    profilesCardStack.length > 0;
+
+  useEffect(() => {
+    topProfileIdRef.current = profilesCardStack[0]?.id ?? null;
+  }, [profilesCardStack]);
+
+  const rotateCurrentProfileWithoutAction = useCallback(() => {
+    const uid = currentUserIdRef.current;
+    const profileId = previewProfileIdRef.current ?? topProfileIdRef.current;
+    if (!uid || !profileId) return;
+    if (explicitSwipeProfileIdRef.current === profileId) return;
+    if (passedProfileIdsRef.current.has(profileId)) return;
+
+    profileViewOrderingRef.current = applyLocalProfileViewWithoutAction(
+      profileViewOrderingRef.current,
+      profileId,
+    );
+    setProfileViewOrderTick((n) => n + 1);
+    void recordProfileViewWithoutAction(uid, profileId);
+    setProfiles((prev) => {
+      if (!feedReadyRef.current) return prev;
+      const rotated = rotateProfileToEndOfStack(prev, profileId);
+      if (!rotated) return prev;
+      console.log("[Discover] profile rotated without action", { profileId });
+      setStableProfiles(rotated);
+      return rotated;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isMoveRoute) return;
+    return () => {
+      rotateCurrentProfileWithoutAction();
+    };
+  }, [isMoveRoute, rotateCurrentProfileWithoutAction]);
+
+  useEffect(() => {
+    if (!isMoveRoute) return;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        rotateCurrentProfileWithoutAction();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [isMoveRoute, rotateCurrentProfileWithoutAction]);
   /** Dernière implémentation de handleUndoTap (hoisted) pour la nav basse sans dépendances instables. */
   const undoTapLatestRef = useRef<() => Promise<void>>(async () => {});
   const [secondChanceTarget, setSecondChanceTarget] = useState<ProfileWithAffinity | null>(null);
@@ -1341,13 +1528,76 @@ export default function Discover() {
     swipeHistoryRef.current = swipeHistory;
   }, [swipeHistory]);
 
-  /** Dernière interaction annulable côté serveur : passe ou like, pas match. */
-  const canUndo = useMemo(() => {
+  const syncLocalUndoCredits = useCallback(() => {
+    const uid = currentUserIdRef.current;
+    const next = uid ? getDiscoverUndoCreditCount(uid) : 0;
+    setLocalUndoCredits(next);
+    return next;
+  }, []);
+
+  useEffect(() => {
+    syncLocalUndoCredits();
+  }, [currentUserId, syncLocalUndoCredits]);
+
+  useEffect(() => {
+    const onUndoCreditChange = (ev: Event) => {
+      const detail = (ev as CustomEvent<DiscoverUndoCreditEventDetail>).detail;
+      const uid = currentUserIdRef.current;
+      if (detail?.userId && uid && detail.userId !== uid) return;
+      syncLocalUndoCredits();
+      setUndoCreditTick((n) => n + 1);
+    };
+    window.addEventListener(DISCOVER_UNDO_CREDIT_EVENT, onUndoCreditChange);
+    return () => window.removeEventListener(DISCOVER_UNDO_CREDIT_EVENT, onUndoCreditChange);
+  }, [syncLocalUndoCredits]);
+
+  const serverRewindAvailable = useMemo(() => {
     if (!rewindStatus) return false;
     if (rewindStatus.last_is_match) return false;
     if (!rewindStatus.last_swipe_at) return false;
     return isLastSwipeRewindable(rewindStatus.last_action);
   }, [rewindStatus]);
+
+  const profileUndoFlags = useMemo(() => {
+    const row = (profile as Record<string, unknown> | null) ?? null;
+    return {
+      hasUndoFeature: row?.has_undo_feature === true,
+      profileUndoCredits:
+        typeof row?.undo_credits === "number" ? Math.max(0, Math.floor(row.undo_credits)) : 0,
+      profileCanRewind: row?.can_rewind === true,
+      packSplovePlusIncludesUndo:
+        row?.pack_splove_plus_includes_undo === true ||
+        row?.splove_plus_pack_includes_undo === true ||
+        row?.has_splove_plus_pack === true,
+    };
+  }, [profile]);
+
+  /** Undo autorisé seulement si un profil local est disponible ET un droit produit existe. */
+  const canUndo = useMemo(() => {
+    const hasLocalStack = undoStackRef.current.length > 0;
+    if (!hasLocalStack) return false;
+    const hasUndoRight =
+      localUndoCredits > 0 ||
+      hasDiscoverUndoCredit(currentUserId) ||
+      profileUndoFlags.hasUndoFeature ||
+      profileUndoFlags.profileUndoCredits > 0 ||
+      profileUndoFlags.profileCanRewind ||
+      profileUndoFlags.packSplovePlusIncludesUndo;
+    return hasUndoRight;
+  }, [undoStackTick, undoCreditTick, localUndoCredits, currentUserId, profileUndoFlags]);
+
+  useEffect(() => {
+    if (!isMoveRoute) return;
+    console.log("[Discover] undo state", {
+      stackSize: undoStackRef.current.length,
+      localCredit: localUndoCredits,
+      serverCanUndo: serverRewindAvailable,
+      hasUndoFeature: profileUndoFlags.hasUndoFeature,
+      profileUndoCredits: profileUndoFlags.profileUndoCredits,
+      profileCanRewind: profileUndoFlags.profileCanRewind,
+      packSplovePlusIncludesUndo: profileUndoFlags.packSplovePlusIncludesUndo,
+    });
+  }, [isMoveRoute, undoStackTick, undoCreditTick, localUndoCredits, serverRewindAvailable, profileUndoFlags]);
   const [crossingsOpen, setCrossingsOpen] = useState(false);
   const [crossingsLoading, setCrossingsLoading] = useState(false);
   const [crossingList, setCrossingList] = useState<
@@ -1395,15 +1645,128 @@ export default function Discover() {
   }, []);
 
   useEffect(() => {
+    if (!import.meta.env.DEV) return;
     console.log("[Discover] session", session);
     console.log("[Discover] profile", profile);
     console.log("[Discover] isProfileLoading", isProfileLoading);
   }, [session, profile, isProfileLoading]);
 
+  const discoverShellVisibleLoggedRef = useRef(false);
+  const firstCardVisibleLoggedRef = useRef(false);
+  const emptyStateVisibleLoggedRef = useRef(false);
+  const [shellForceVisible, setShellForceVisible] = useState(false);
+
   useEffect(() => {
-    if (!currentUserId) return;
-    void refreshRewindStatus();
-  }, [currentUserId, refreshRewindStatus]);
+    if (!isOauthProcessingLocked()) return;
+    clearOauthProcessingLock();
+    console.warn("[Discover] cleared stale oauth processing lock");
+  }, []);
+
+  const hasSessionUser = Boolean(session?.user?.id ?? user?.id);
+  const appAuthReady = isAppAuthReady({ isAuthInitialized, session, profile });
+  const profileCompletedReady =
+    Boolean(currentUserId) &&
+    profile?.id === currentUserId &&
+    profile.profile_completed === true;
+  const showDiscoverShell =
+    hasSessionUser ||
+    (isMoveRoute && isAuthInitialized && !authLoading) ||
+    shellForceVisible ||
+    profileCompletedReady ||
+    appAuthReady;
+
+  useEffect(() => {
+    if (profileCompletedReady) {
+      setShellForceVisible(true);
+    }
+  }, [profileCompletedReady]);
+
+  useEffect(() => {
+    if (showDiscoverShell) return;
+    const timer = window.setTimeout(() => {
+      if (hasSessionUser || profileCompletedReady || session?.user?.id) {
+        setShellForceVisible(true);
+      }
+    }, POST_LOGIN_BOOT_MAX_MS);
+    return () => window.clearTimeout(timer);
+  }, [showDiscoverShell, hasSessionUser, profileCompletedReady, session?.user?.id]);
+
+  useEffect(() => {
+    firstStableProfileLoggedRef.current = false;
+    skeletonLogKeyRef.current = null;
+    neutralSkeletonLogKeyRef.current = null;
+    setFeedReady(false);
+    setStableProfiles([]);
+    setProfiles([]);
+    setLoading(true);
+  }, [currentUserId]);
+
+  useEffect(() => {
+    if (!showMoveSkeleton) {
+      skeletonLogKeyRef.current = null;
+      return;
+    }
+    setPreviewProfile(null);
+    setDiscoverMenuProfileId(null);
+    setSecondChanceTarget(null);
+    setSecondChanceModalOpen(false);
+    const reason = !feedReady
+      ? "feed_not_ready"
+      : isProfileLoading
+        ? "profile_loading"
+        : "feed_loading";
+    const logKey = `${reason}:${isProfileLoading}:${feedReady}:${moveFeedLoading}`;
+    if (skeletonLogKeyRef.current === logKey) return;
+    skeletonLogKeyRef.current = logKey;
+    console.log("MOVE_SKELETON_VISIBLE", { reason, isProfileLoading, feedReady, moveFeedLoading });
+  }, [showMoveSkeleton, feedReady, isProfileLoading, moveFeedLoading]);
+
+  useEffect(() => {
+    if (!showMoveSkeleton) {
+      neutralSkeletonLogKeyRef.current = null;
+      return;
+    }
+    const logKey = `${feedReady}:${isProfileLoading}:${moveFeedLoading}`;
+    if (neutralSkeletonLogKeyRef.current === logKey) return;
+    neutralSkeletonLogKeyRef.current = logKey;
+    console.log("MOVE_SKELETON_NEUTRAL_RENDERED", {
+      feedReady,
+      isProfileLoading,
+      moveFeedLoading,
+    });
+  }, [showMoveSkeleton, feedReady, isProfileLoading, moveFeedLoading]);
+
+  useEffect(() => {
+    if (!feedReady || stableProfiles.length === 0) return;
+    if (firstStableProfileLoggedRef.current) return;
+    firstStableProfileLoggedRef.current = true;
+    console.log("MOVE_FIRST_STABLE_PROFILE_RENDERED", {
+      profileId: stableProfiles[0]?.id,
+      count: stableProfiles.length,
+    });
+  }, [feedReady, stableProfiles]);
+
+  useEffect(() => {
+    if (!showDiscoverShell || discoverShellVisibleLoggedRef.current) return;
+    discoverShellVisibleLoggedRef.current = true;
+    console.log("MOVE_RENDER_START");
+    console.log("[Discover] visible");
+    logDiscoverShellVisible(shellForceVisible);
+  }, [showDiscoverShell, shellForceVisible]);
+
+  useEffect(() => {
+    if (loading || !feedReady) return;
+    if (profilesCardStack.length > 0) {
+      if (firstCardVisibleLoggedRef.current) return;
+      firstCardVisibleLoggedRef.current = true;
+      logDiscoverFirstCardVisible();
+      return;
+    }
+    if (!viewerGeoBlocked && !errorMessage) return;
+    if (emptyStateVisibleLoggedRef.current) return;
+    emptyStateVisibleLoggedRef.current = true;
+    logDiscoverEmptyStateVisible();
+  }, [loading, feedReady, errorMessage, viewerGeoBlocked, profilesCardStack.length]);
 
   useEffect(() => {
     inviteViewTrackedRef.current = false;
@@ -1412,24 +1775,34 @@ export default function Discover() {
   useEffect(() => {
     if (!currentUserId) return;
     let cancelled = false;
-    void getOrCreateReferralCode(currentUserId, profile?.first_name ?? null)
-      .then((c) => {
-        if (!cancelled) setReferralCodeState(c);
-      })
-      .catch((e) => {
-        console.warn("[Discover diagnostics] getOrCreateReferralCode rejected", e);
+    const cancelDefer = deferSecondaryWork(() => {
+      void runPostLoginOptionalBatch("discover", async () => {
+        refreshRewindStatus();
+        const code = await getOrCreateReferralCode(
+          currentUserId,
+          profile?.first_name ?? null,
+        ).catch((e) => {
+          console.warn("[Discover] getOrCreateReferralCode skipped", e);
+          return null;
+        });
+        if (!cancelled && code) setReferralCodeState(code);
+        await loadLocalImpact().catch((e) => {
+          console.warn("[Discover] loadLocalImpact skipped", e);
+        });
+        if (!DISCOVER_BETA_SIMPLE_PIPELINE) {
+          await mergeDiscoverViewerOptionalFields(
+            supabase,
+            currentUserId,
+            mergeOptionalProfileFields,
+          ).catch(() => undefined);
+        }
       });
+    }, 3_000);
     return () => {
       cancelled = true;
+      cancelDefer();
     };
-  }, [currentUserId, profile?.first_name]);
-
-  useEffect(() => {
-    if (!currentUserId) return;
-    void loadLocalImpact().catch((e) => {
-      console.warn("[Discover diagnostics] loadLocalImpact rejected", e);
-    });
-  }, [currentUserId, loadLocalImpact]);
+  }, [currentUserId, profile?.first_name, refreshRewindStatus, loadLocalImpact]);
 
   useEffect(() => {
     if (referralModalWasOpenRef.current && !referralModalOpen && currentUserId) {
@@ -1443,16 +1816,22 @@ export default function Discover() {
   useEffect(() => {
     const eligible =
       Boolean(currentUserId) &&
+        feedReady &&
         !loading &&
         !errorMessage &&
         !viewerGeoBlocked &&
         profilesCardStack.length <= 3;
     if (!eligible || inviteViewTrackedRef.current) return;
     inviteViewTrackedRef.current = true;
-    void trackReferralEvent("invite_view", { variant: referralVariant, source: "discover" }).catch((e) => {
-      console.warn("[Discover diagnostics] trackReferralEvent rejected", e);
-    });
-  }, [currentUserId, loading, errorMessage, viewerGeoBlocked, profilesCardStack.length, referralVariant]);
+    const cancelDefer = deferSecondaryWork(() => {
+      void trackReferralEvent("invite_view", { variant: referralVariant, source: "discover" }).catch(
+        (e) => {
+          console.warn("[Discover] referral_events skipped", e);
+        },
+      );
+    }, 2_200);
+    return () => cancelDefer();
+  }, [currentUserId, feedReady, loading, errorMessage, viewerGeoBlocked, profilesCardStack.length, referralVariant]);
 
   function openReportPhotoFromDiscover(p: ProfileWithAffinity) {
     setDiscoverMenuProfileId(null);
@@ -1570,19 +1949,20 @@ export default function Discover() {
     void (async () => {
       try {
         const viewerAuthId = user?.id ?? currentUserId;
-        const [meRes, meSportsRes, candRes, distRes] = await Promise.all([
+        const [meRes, meSportsRes, candRes] = await Promise.all([
           supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
           supabase.from("profile_sports").select("sports(slug, label)").eq("profile_id", viewerAuthId),
           supabase.from("profiles").select(DISCOVER_PROFILES_DETAIL_SELECT).eq("id", requestedProfileId).maybeSingle(),
-          supabase.rpc("profile_distances_from_viewer", { p_candidate_ids: [requestedProfileId] }),
         ]);
         if (cancelled) return;
 
         const meProfileSportRows = Array.isArray(meSportsRes.data) ? meSportsRes.data : [];
-        const meProfileOptional = (await mergeOptionalProfileFields(
+        const meProfileOptional = {} as Partial<Profile>;
+        void mergeDiscoverViewerOptionalFields(
           supabase,
           viewerAuthId,
-        )) as Partial<Profile>;
+          mergeOptionalProfileFields,
+        ).catch(() => undefined);
         const meProfile: Profile =
           meRes.data != null
             ? {
@@ -1649,13 +2029,12 @@ export default function Discover() {
         }
 
         const sportsSet = collectSportMatchKeysFromProfile(meProfile);
-        let distanceKm: number | null = null;
-        for (const row of (distRes.data ?? []) as { profile_id?: string; distance_km?: number | null }[]) {
-          if (row.profile_id === requestedProfileId) {
-            distanceKm = row.distance_km ?? null;
-            break;
-          }
-        }
+        const distById = DISCOVER_BETA_SIMPLE_PIPELINE
+          ? buildClientDiscoverDistanceById(meProfile, [
+              { id: requestedProfileId, latitude: p.latitude, longitude: p.longitude },
+            ])
+          : await fetchProfileDistancesOptional([requestedProfileId]);
+        const distanceKm = distById.get(requestedProfileId) ?? null;
 
         const discover = buildDiscoverScore(p, {
           mySportMatchKeys: sportsSet,
@@ -1717,36 +2096,72 @@ export default function Discover() {
     };
   }, [location.state, navigate]);
 
+  const authUserIdRef = useRef(user?.id);
+  authUserIdRef.current = user?.id;
+
   useEffect(() => {
     if (authLoading) {
       console.debug("[Discover debug] authLoading=true — attente AuthContext");
       return;
     }
     if (!user?.id) {
-      console.error("[Discover debug] BLOCKER: pas de user.id après auth — loading forcé à false", {
-        authLoading,
-        hasUser: Boolean(user),
-      });
-      setLoading(false);
-      setErrorMessage((prev) => prev || "Impossible de charger votre session. Reconnectez-vous.");
-      return;
+      const cancelDefer = deferSecondaryWork(() => {
+        if (authUserIdRef.current) return;
+        console.error("[Discover debug] BLOCKER: pas de user.id après auth — session absente", {
+          authLoading,
+        });
+        setLoading(false);
+        setFeedReady(true);
+        setErrorMessage((prev) => prev || "Impossible de charger votre session. Reconnectez-vous.");
+      }, 700);
+      return () => cancelDefer();
     }
-    if (loadProfilesInFlightRef.current) return;
-    void loadProfiles().catch((e) => {
-      console.error("[Discover diagnostics] loadProfiles rejected", e);
+    beginMoveFeedLoad();
+    let cancelled = false;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        if (cancelled) return;
+        void loadProfiles().catch((e) => {
+          console.warn("[Discover diagnostics] loadProfiles rejected", e);
+        });
+      });
     });
-  }, [authLoading, user?.id, discoverPreferredAgeFingerprint]);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
+  }, [authLoading, user?.id, profile, discoverPreferredAgeFingerprint, beginMoveFeedLoad]);
 
   useEffect(() => {
-    if (!hasPlus) return;
-    setProfiles((prev) =>
-      takeDiscoverProfilesWithValidGps([...prev].sort((a, b) => sortDiscoverProfileStack(a, b, true))),
-    );
-  }, [hasPlus]);
+    if (!user?.id || !loading) return;
+    const timer = window.setTimeout(() => {
+      loadProfilesInFlightRef.current = false;
+      setLoading(false);
+      setLoadingTimedOut(true);
+    }, POST_LOGIN_BOOT_MAX_MS);
+    return () => window.clearTimeout(timer);
+  }, [user?.id, loading]);
+
+  useEffect(() => {
+    if (!hasPlus || !feedReady) return;
+    patchDiscoverStackProfiles((prev) => {
+      if (prev.length === 0) return prev;
+      const sorted = [...prev].sort((a, b) => sortDiscoverProfileStack(a, b, true));
+      return reapplyColdLaunchMoveProfileRotation(currentUserId, sorted);
+    });
+  }, [hasPlus, feedReady, patchDiscoverStackProfiles, currentUserId]);
 
   async function loadProfiles() {
-    if (loadProfilesInFlightRef.current) return;
+    if (loadProfilesInFlightRef.current) {
+      loadProfilesPendingReloadRef.current = true;
+      beginMoveFeedLoad();
+      return;
+    }
     loadProfilesInFlightRef.current = true;
+    console.log("MOVE_FEED_LOADING");
+    beginMoveFeedLoad();
     if (!currentUserId) {
       if (import.meta.env.DEV) {
         console.info("[Discover diagnostics] early_return", {
@@ -1755,14 +2170,16 @@ export default function Discover() {
         });
       }
       setViewerGeoBlocked(false);
+      setFeedReady(true);
       setLoading(false);
       loadProfilesInFlightRef.current = false;
       return;
     }
-    setLoading(true);
+    setLoadingTimedOut(false);
     setErrorMessage("");
     setViewerGeoBlocked(false);
     let resultCount = 0;
+    const profileViewsOrderingPromise = fetchDiscoverProfileViewOrderingState(currentUserId);
     try {
       console.log("[Discover feed] currentUserId:", currentUserId);
       void (async () => {
@@ -1774,30 +2191,76 @@ export default function Discover() {
       })();
 
       const viewerAuthId = user?.id ?? currentUserId;
-      const [likedIds, matchedIds, meRes, meSportsRes, blockDetail] = await Promise.all([
-        fetchOutgoingLikedUserIds(currentUserId),
-        fetchMatchedUserIds(currentUserId),
-        supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
-        supabase.from("profile_sports").select("sport_id, sports(id, slug, label)").eq("profile_id", viewerAuthId),
-        fetchBlockExclusionDetail(currentUserId),
-      ]);
+      const authViewer =
+        profile?.id === viewerAuthId && viewerHasDiscoverSearchCoords(profile as Profile)
+          ? (profile as Profile)
+          : null;
+
+      let likedIds = new Set<string>();
+      let matchedIds = new Set<string>();
+      let blockDetail: BlockExclusionDetail = {
+        excluded: new Set<string>(),
+        rowsWhereIAmBlocker: [],
+        rowsWhereIAmBlocked: [],
+        errors: [],
+      };
+      let feedResultEarly: Awaited<ReturnType<typeof fetchDiscoverFeedAlive>> | null = null;
+
+      let meRes: { data: unknown; error: { code?: string; message?: string } | null };
+      let meSportsRes: { data: unknown; error: { message?: string } | null };
+
+      if (DISCOVER_BETA_SIMPLE_PIPELINE) {
+        let feedLocal: Awaited<ReturnType<typeof fetchDiscoverFeedAlive>>;
+        try {
+          const [meResLocal, meSportsResLocal, feedFetched] = await Promise.all([
+            authViewer
+              ? Promise.resolve({ data: authViewer, error: null })
+              : supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
+            supabase.from("profile_sports").select("sport_id, sports(id, slug, label)").eq("profile_id", viewerAuthId),
+            fetchDiscoverFeedAlive(12, currentUserId),
+          ]);
+          meRes = meResLocal;
+          meSportsRes = meSportsResLocal;
+          feedLocal = feedFetched;
+        } catch (e) {
+          console.warn("[Discover] loadProfiles beta bootstrap", e);
+          throw e;
+        }
+        feedResultEarly = feedLocal;
+      } else {
+        const [likedLocal, matchedLocal, meResLocal, meSportsResLocal, blockLocal] = await Promise.all([
+          fetchOutgoingLikedUserIds(currentUserId),
+          fetchMatchedUserIds(currentUserId),
+          authViewer
+            ? Promise.resolve({ data: authViewer, error: null })
+            : supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
+          supabase.from("profile_sports").select("sport_id, sports(id, slug, label)").eq("profile_id", viewerAuthId),
+          fetchBlockExclusionDetail(currentUserId),
+        ]);
+        likedIds = likedLocal;
+        matchedIds = matchedLocal;
+        meRes = meResLocal;
+        meSportsRes = meSportsResLocal;
+        blockDetail = blockLocal;
+      }
 
       const meProfileSportRows = Array.isArray(meSportsRes.data) ? meSportsRes.data : [];
-      const meProfileOptionalMerge = await mergeOptionalProfileFields(supabase, viewerAuthId);
-      const meProfileOptional = meProfileOptionalMerge as Partial<Profile>;
-      const meProfile: Profile =
+      let meProfile: Profile =
         meRes.data != null
           ? {
               ...(meRes.data as unknown as Profile),
-              ...meProfileOptional,
               profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
             }
           : {
               id: viewerAuthId,
               first_name: null,
-              ...meProfileOptional,
               profile_sports: meProfileSportRows as unknown as NonNullable<Profile["profile_sports"]>,
             };
+      const sportPrefRaw = meProfile.sport_match_preference;
+      if (!(typeof sportPrefRaw === "string" && sportPrefRaw.trim().length > 0)) {
+        meProfile = await ensureViewerSportMatchPreferenceLoaded(meProfile, viewerAuthId);
+      }
+      logSportMatchPreferenceScoringTrace("viewer_after_profile_load", meProfile.sport_match_preference);
 
       if (meSportsRes.error) {
         console.warn("[Discover] viewer profile_sports query failed:", meSportsRes.error.message);
@@ -1813,7 +2276,7 @@ export default function Discover() {
           auth_user_id: viewerAuthId,
           current_profile_fetch_error: meRes.error ?? null,
           current_profile_fetch_result: meRes.data ?? null,
-          current_profile_optional_merge_keys: Object.keys(meProfileOptionalMerge),
+          current_profile_optional_merge_keys: [],
           current_profile_profile_sports_error: meSportsRes.error ?? null,
           current_profile_id_used: meRes.data ? viewerAuthId : null,
           current_profile_sports_match_keys: [...sportsSet],
@@ -1825,11 +2288,9 @@ export default function Discover() {
         });
       }
       if (meRes.error) {
-        console.error("[Discover] profil courant query failed", {
+        console.warn("[Discover] profil courant query failed", {
           code: meRes.error.code,
           message: meRes.error.message,
-          details: meRes.error.details,
-          hint: meRes.error.hint,
           error: meRes.error,
         });
       }
@@ -1849,8 +2310,11 @@ export default function Discover() {
         setErrorMessage("Impossible de charger ton profil courant.");
         setViewerGeoBlocked(false);
         setProfiles([]);
+        setStableProfiles([]);
         swipeHistoryRef.current = [];
         setSwipeHistory([]);
+        setLoading(false);
+        setFeedReady(true);
         return;
       }
 
@@ -1889,8 +2353,11 @@ export default function Discover() {
         setSwipeHistory([]);
         swipeHistoryRef.current = [];
         setProfiles([]);
+        setStableProfiles([]);
         setErrorMessage("");
         discoverLogStageCount("viewer geo/radius incomplete — skip feed", 0);
+        setLoading(false);
+        setFeedReady(true);
         return;
       }
       if (typeof meProfile.city !== "string" || !meProfile.city.trim()) {
@@ -1898,28 +2365,43 @@ export default function Discover() {
           "[Discover audit] VIEWER_CITY_EMPTY — Coordonnées OK mais city vide (données profil incomplet pour l’affichage lieu).",
         );
       }
-      
-      const { data, error } = await supabase.rpc("get_discover_feed_alive", { p_limit: 12 });
 
-      if (error) {
-        console.error("[Discover feed] get_discover_feed_alive query failed", {
-          code: error.code,
-          message: error.message,
-        });
+      let feedResult: Awaited<ReturnType<typeof fetchDiscoverFeedAlive>>;
+      if (feedResultEarly) {
+        feedResult = feedResultEarly;
+      } else {
+        try {
+          feedResult = await fetchDiscoverFeedAlive(12, currentUserId);
+        } catch (e) {
+          console.warn("[Discover] loadProfiles feed fetch", e);
+          throw e;
+        }
+      }
+      if (feedResult.error && feedResult.rows.length === 0) {
+        console.warn("[Discover feed] feed load failed", { message: feedResult.error });
         if (import.meta.env.DEV) {
           console.info("[Discover diagnostics] early_return", {
             stage: "get_discover_feed_alive",
-            exclusion_reason: "feed RPC query failed",
-            error_code: error.code ?? null,
-            error_message: error.message ?? null,
+            exclusion_reason: "feed RPC and feed_profiles fallback failed",
+            error_message: feedResult.error,
           });
         }
         setErrorMessage(discoverFetchFailedMsg(language));
         setViewerGeoBlocked(false);
+        setStableProfiles([]);
+        setProfiles([]);
+        setLoading(false);
+        setFeedReady(true);
         return;
       }
+      if (DISCOVER_PIPELINE_AUDIT) {
+        console.log("[Discover pipeline] feed source", {
+          source: feedResult.source,
+          row_count: feedResult.rows.length,
+        });
+      }
 
-      let profilesFromRpc: Profile[] = ((data ?? []) as DiscoverAliveRow[])
+      let profilesFromRpc: Profile[] = (feedResult.rows as DiscoverAliveRow[])
         .filter((row): row is DiscoverAliveRow & { profile: Profile } =>
           isValidProfileId(row.profile?.id),
         )
@@ -1968,7 +2450,7 @@ export default function Discover() {
       }
 
       let raw: Profile[] = profilesFromRpc.filter((p) => hasFiniteDiscoverCoordinates(p));
-      {
+      if (!DISCOVER_BETA_SIMPLE_PIPELINE) {
         const before = raw;
         raw = raw.filter((p) => {
           const reasons = getDiscoverFeedIntegrityExclusionReasons(
@@ -1984,7 +2466,7 @@ export default function Discover() {
         });
         discoverLogStageCount("after ghost/integrity filter", raw.length);
       }
-      if (BETA_MODE) {
+      if (BETA_MODE && !DISCOVER_BETA_SIMPLE_PIPELINE) {
         const before = raw;
         raw = raw.filter((p) => {
           const st = String(p.photo_status ?? "").toLowerCase().trim();
@@ -2041,6 +2523,7 @@ export default function Discover() {
         ids: raw.map((r) => r.id).filter(Boolean),
       });
       console.log("[Discover feed] profiles after completeness filter:", raw.length);
+      const profilesAfterCompletenessFilter = [...raw];
 
       if (import.meta.env.DEV) {
         const loadedIds = new Set(raw.map((r) => r.id));
@@ -2052,30 +2535,12 @@ export default function Discover() {
 
       const candidatesAfterQueryBeforeClientFilters = raw.length;
 
-      const distById = new Map<string, number | null>();
-      if (raw.length > 0) {
-        const { data: distData, error: distErr } = await supabase.rpc("profile_distances_from_viewer", {
-          p_candidate_ids: raw.map((p) => p.id),
-        });
-        if (distErr) {
-          console.warn("[Discover feed] profile_distances_from_viewer:", distErr.message);
-          if (import.meta.env.DEV) {
-            console.info("[Discover diagnostics] distance_rpc", {
-              error: distErr.message,
-              exclusion_note:
-                "distance/GPS rows may be missing — scoring may treat distance as unknown (see distance/GPS exclusions).",
-            });
-          }
-        } else {
-          for (const row of (distData ?? []) as {
-            profile_id?: string;
-            distance_km?: number | null;
-          }[]) {
-            const pid = typeof row?.profile_id === "string" ? row.profile_id : "";
-            if (pid) distById.set(pid, row.distance_km ?? null);
-          }
-        }
-      }
+      const distById =
+        raw.length > 0
+          ? DISCOVER_BETA_SIMPLE_PIPELINE
+            ? buildClientDiscoverDistanceById(meProfile, raw)
+            : await fetchProfileDistancesOptional(raw.map((p) => p.id))
+          : new Map<string, number | null>();
 
       {
         const before = raw;
@@ -2094,46 +2559,73 @@ export default function Discover() {
         const before = raw;
         raw = raw.filter((p) => !likedIds.has(p.id));
         discoverDevPipelineDiff(before, raw, "exclude_outgoing_likes", () => "already liked");
+        discoverPipelineStage("exclude_outgoing_likes", before.length, raw.length, {
+          liked_set_size: likedIds.size,
+        });
       }
       if (blockExclude.size > 0) {
         const before = raw;
         raw = raw.filter((p) => !blockExclude.has(p.id));
         discoverDevPipelineDiff(before, raw, "exclude_blocks", () => "blocked");
+        discoverPipelineStage("exclude_blocks", before.length, raw.length, {
+          blocked_set_size: blockExclude.size,
+        });
       }
       if (matchedIds.size > 0) {
         const before = raw;
         raw = raw.filter((p) => !matchedIds.has(p.id));
         discoverDevPipelineDiff(before, raw, "exclude_matches", () => "already matched");
+        discoverPipelineStage("exclude_matches", before.length, raw.length, {
+          matched_set_size: matchedIds.size,
+        });
       }
       discoverLogStageCount("after swipe exclusion", raw.length, {
         liked_set_size: likedIds.size,
         matched_set_size: matchedIds.size,
       });
-      {
+      if (!DISCOVER_BETA_SIMPLE_PIPELINE) {
         const before = raw;
         raw = raw.filter((p) => !isProfileGhostActive(p.id));
         discoverDevPipelineDiff(before, raw, "exclude_ghost_boost_slot", () => "missing required field", "ghost_boost_active");
       }
       {
-        const before = raw;
-        raw = raw.filter((p) => {
-          if (BETA_MODE || import.meta.env.DEV) return true;
-          return isWithinVisibilityWindow(p.created_at ?? null, hasPlus);
-        });
-        discoverDevPipelineDiff(before, raw, "discover_visibility_window", () => "missing required field", "discover_visibility_window");
+        const beforeVis = raw;
+        const visibility = filterDiscoverVisibilityWindow(raw, hasPlus);
+        raw = visibility.kept;
+        if (!DISCOVER_BETA_SIMPLE_PIPELINE) {
+          discoverDevPipelineDiff(
+            beforeVis,
+            raw,
+            "discover_visibility_window",
+            () => "missing required field",
+            "discover_visibility_window",
+          );
+        } else if (visibility.betaWarnings > 0) {
+          discoverLogStageCount("discover_visibility_window (beta warning-only)", raw.length, {
+            would_exclude_without_beta: visibility.betaWarnings,
+          });
+        }
       }
 
       let stage: Profile[] = raw;
       console.log("[Discover feed] profiles before scoring filters:", stage.length);
+      if (DISCOVER_PIPELINE_AUDIT && candidatesAfterQueryBeforeClientFilters > 0 && stage.length === 0) {
+        console.warn("[Discover pipeline] all RPC candidates removed before scoring", {
+          rpc_after_integrity: candidatesAfterQueryBeforeClientFilters,
+          liked_set_size: likedIds.size,
+          matched_set_size: matchedIds.size,
+          blocked_set_size: blockExclude.size,
+        });
+      }
       let sharedPlaceById = new Map<string, boolean>();
-      if (stage.length > 0) {
+      if (stage.length > 0 && !DISCOVER_BETA_SIMPLE_PIPELINE) {
         const { data: sharedRows, error: sharedErr } = await supabase.rpc("discover_shared_place_flags", {
           p_viewer_id: currentUserId,
           p_candidate_ids: stage.map((p) => p.id),
         });
-        if (sharedErr) {
+        if (sharedErr && import.meta.env.DEV) {
           console.warn("[Discover feed] discover_shared_place_flags:", sharedErr.message);
-        } else {
+        } else if (!sharedErr) {
           for (const row of (sharedRows ?? []) as { profile_id?: string; has_shared_place?: boolean }[]) {
             const pid = typeof row.profile_id === "string" ? row.profile_id : "";
             if (pid) sharedPlaceById.set(pid, row.has_shared_place === true);
@@ -2141,7 +2633,7 @@ export default function Discover() {
         }
       }
 
-      if (stage.length > 0) {
+      if (stage.length > 0 && !DISCOVER_BETA_SIMPLE_PIPELINE) {
         const paceIds = stage.map((p) => p.id);
         const { data: paceData, error: paceErr } = await supabase
           .from("profiles")
@@ -2168,7 +2660,7 @@ export default function Discover() {
         }
       }
 
-      if (stage.length > 0) {
+      if (stage.length > 0 && !DISCOVER_BETA_SIMPLE_PIPELINE) {
         const hydrationIds = stage.map((p) => p.id).filter(Boolean);
         const { data: hydrationRows, error: hydrationErr } = await supabase
           .from("profiles")
@@ -2270,14 +2762,14 @@ export default function Discover() {
       }
 
       const sploveFlagsById = new Map<string, { boost: boolean; priority_meet: boolean }>();
-      if (stage.length > 0) {
+      if (stage.length > 0 && !DISCOVER_BETA_SIMPLE_PIPELINE) {
         const { data: flagRows, error: flagErr } = await supabase.rpc(
           "discover_candidate_splove_ranking_flags",
           { p_candidate_ids: stage.map((p) => p.id) },
         );
-        if (flagErr) {
+        if (flagErr && import.meta.env.DEV) {
           console.warn("[Discover feed] discover_candidate_splove_ranking_flags:", flagErr.message);
-        } else {
+        } else if (!flagErr) {
           for (const row of (flagRows ?? []) as {
             profile_id?: string;
             boost_active?: boolean;
@@ -2293,12 +2785,8 @@ export default function Discover() {
         }
       }
 
-      const meAdapted =
-        meProfile as Profile & {
-          open_to_adapted_activities?: string | null;
-          pref_open_to_adapted_activity?: boolean | null;
-        };
       const viewerSportIdsForScoring = discoverExtractProfileSportIds(meProfile);
+      logSportMatchPreferenceScoringTrace("viewer_before_scoring_ctx", meProfile.sport_match_preference);
 
       if (import.meta.env.DEV) {
         console.info("[Discover diagnostics] candidates_before_scoring_filters", {
@@ -2314,46 +2802,114 @@ export default function Discover() {
         });
       }
 
-      const discoverFiltered: ProfileWithAffinity[] = scoreAndFilterDiscoverCandidates(
-        stage.map((p) => ({ ...p, has_shared_place: sharedPlaceById.get(p.id) === true })),
-        {
-          viewerId: currentUserId,
-          viewer: {
-            id: currentUserId,
-            city: meProfile.city ?? null,
-            profile_completed: meProfile.profile_completed ?? null,
-            birth_date:
-              typeof meProfile.birth_date === "string" && meProfile.birth_date.trim().length > 0
-                ? meProfile.birth_date.trim()
-                : null,
-            preferred_age_min: asAgePreferenceScalar(
-              (meProfile as { preferred_age_min?: unknown }).preferred_age_min,
-            ),
-            preferred_age_max: asAgePreferenceScalar(
-              (meProfile as { preferred_age_max?: unknown }).preferred_age_max,
-            ),
-            gender: meProfile.gender ?? null,
-            looking_for: meProfile.looking_for ?? null,
-            intent: meProfile.intent ?? null,
-            sport_practice_type: meProfile.sport_practice_type ?? null,
-            sport_time: meProfile.sport_time ?? null,
-            discovery_radius_km: meProfile.discovery_radius_km ?? null,
-            open_to_adapted_activities: meAdapted.open_to_adapted_activities ?? null,
-            pref_open_to_adapted_activity: meAdapted.pref_open_to_adapted_activity ?? null,
-            sport_match_preference: meProfile.sport_match_preference ?? null,
-          },
-          likedIds,
-          matchedIds,
-          blockedIds: blockExclude,
-          mySportMatchKeys: sportsSet,
-          viewerSportIds: viewerSportIdsForScoring,
-          distanceById: distById,
-          sploveFlagsById,
+      const discoverScoringCtx = {
+        viewerId: currentUserId,
+        viewer: {
+          id: currentUserId,
+          city: meProfile.city ?? null,
+          latitude: meProfile.latitude ?? null,
+          longitude: meProfile.longitude ?? null,
+          portrait_url: meProfile.portrait_url ?? null,
+          main_photo_url: meProfile.main_photo_url ?? null,
+          profile_sports: meProfile.profile_sports ?? [],
+          profile_completed: meProfile.profile_completed ?? null,
+          birth_date:
+            typeof meProfile.birth_date === "string" && meProfile.birth_date.trim().length > 0
+              ? meProfile.birth_date.trim()
+              : null,
+          preferred_age_min: asAgePreferenceScalar(
+            (meProfile as { preferred_age_min?: unknown }).preferred_age_min,
+          ),
+          preferred_age_max: asAgePreferenceScalar(
+            (meProfile as { preferred_age_max?: unknown }).preferred_age_max,
+          ),
+          gender: meProfile.gender ?? null,
+          looking_for: meProfile.looking_for ?? null,
+          intent: meProfile.intent ?? null,
+          sport_practice_type: meProfile.sport_practice_type ?? null,
+          sport_time: meProfile.sport_time ?? null,
+          discovery_radius_km: meProfile.discovery_radius_km ?? null,
+          sport_match_preference: meProfile.sport_match_preference ?? null,
         },
-      ).map((p) => ({
+        likedIds,
+        matchedIds,
+        blockedIds: blockExclude,
+        mySportMatchKeys: sportsSet,
+        viewerSportIds: viewerSportIdsForScoring,
+        distanceById: distById,
+        sploveFlagsById,
+      };
+
+      const scoringInput = stage.map((p) => ({
+        ...p,
+        has_shared_place: sharedPlaceById.get(p.id) === true,
+      }));
+      const scoringRun =
+        scoringInput.length > 0
+          ? runDiscoverScoring(scoringInput, discoverScoringCtx)
+          : { kept: [], audits: [] };
+
+      logProfileExcludedAudits(scoringRun.audits);
+
+      let discoverFiltered: ProfileWithAffinity[] = scoringRun.kept.map((p) => ({
         ...p,
         reliabilityScore: computeReliabilityScore(p),
       }));
+
+      if (
+        !DISCOVER_BETA_SIMPLE_PIPELINE &&
+        DISCOVER_SCORING_FALLBACK_AFTER_COMPLETENESS &&
+        discoverFiltered.length === 0 &&
+        profilesAfterCompletenessFilter.length > 0
+      ) {
+        const completenessScoringRun =
+          profilesAfterCompletenessFilter.length === scoringInput.length &&
+          profilesAfterCompletenessFilter.every((p, i) => p.id === scoringInput[i]?.id)
+            ? scoringRun
+            : runDiscoverScoring(
+                profilesAfterCompletenessFilter.map((p) => ({
+                  ...p,
+                  has_shared_place: sharedPlaceById.get(p.id) === true,
+                })),
+                discoverScoringCtx,
+              );
+
+        if (completenessScoringRun !== scoringRun) {
+          logProfileExcludedAudits(completenessScoringRun.audits);
+        }
+
+        const auditById = new Map(
+          completenessScoringRun.audits.map((a) => [a.profile_id, a]),
+        );
+
+        console.warn("[Discover pipeline] TEMP fallback after-completeness (scoring returned 0)", {
+          completeness_count: profilesAfterCompletenessFilter.length,
+          stage_count: stage.length,
+          scoring_kept: scoringRun.kept.length,
+        });
+
+        discoverFiltered = profilesAfterCompletenessFilter
+          .filter((p) => p?.id && isValidProfileId(p.id) && p.id !== currentUserId)
+          .map((p) => {
+            const audit = auditById.get(p.id);
+            const partialScore = audit?.discover_score ?? 0;
+            return {
+              ...p,
+              has_shared_place: sharedPlaceById.get(p.id) === true,
+              commonSportsCount: 0,
+              discoverScore: partialScore,
+              practice_score: audit?.practice_score ?? 0,
+              distanceKm: distById.get(p.id) ?? null,
+              discover_reasons: [
+                "discover_debug_fallback_after_completeness",
+                ...(audit?.reasons.length ? [`would_exclude:${audit.reasons.join(",")}`] : []),
+              ],
+              discover_excluded: false,
+              reliabilityScore: computeReliabilityScore(p),
+              is_boost_active: sploveFlagsById.get(p.id)?.boost === true,
+            } satisfies ProfileWithAffinity;
+          });
+      }
 
       if (import.meta.env.DEV) {
         console.info("[Discover diagnostics] candidates_after_scoring_filters", {
@@ -2370,14 +2926,14 @@ export default function Discover() {
         });
       }
 
-      if (discoverFiltered.length > 0) {
+      if (discoverFiltered.length > 0 && !DISCOVER_BETA_SIMPLE_PIPELINE) {
         const candidateIds = discoverFiltered.map((p) => p.id).filter(Boolean);
         const { data: engagementRows, error: engagementError } = await supabase
           .from("user_engagement")
           .select("user_id, reliability_label")
           .in("user_id", candidateIds);
         if (engagementError) {
-          console.error("[Discover] user_engagement fetch error:", engagementError);
+          console.warn("[Discover] user_engagement fetch error:", engagementError.message ?? engagementError);
         } else {
           const labelById = new Map<string, string>();
           for (const row of (engagementRows ?? []) as {
@@ -2426,12 +2982,18 @@ export default function Discover() {
       );
       const slice = safe.slice(0, DISCOVER_DISPLAY_LIMIT);
       resultCount = slice.length;
+      const viewerPrefTrace = logSportMatchPreferenceScoringTrace(
+        "pipeline_counts_final",
+        meProfile.sport_match_preference,
+      );
       console.log("[Discover audit] pipeline_counts", {
         raw_merged_profiles: profilesFromRpc.length,
         after_client_pipeline: stage.length,
         after_scoring: discoverFiltered.length,
         final_ui_slice: slice.length,
-        viewer_sport_match_preference: meProfile.sport_match_preference ?? null,
+        viewer_sport_match_preference_raw: viewerPrefTrace.raw_db,
+        viewer_sport_match_preference_normalized: viewerPrefTrace.normalized,
+        final_scoring_value: viewerPrefTrace.normalized,
         viewer_discover_radius_km: meProfile.discovery_radius_km ?? null,
       });
       console.log("[Discover feed] final profiles count:", resultCount);
@@ -2476,72 +3038,139 @@ export default function Discover() {
           });
         }
       }
-      setProfiles(takeDiscoverProfilesWithValidGps(slice));
+      const profileViewState = await profileViewsOrderingPromise;
+      profileViewOrderingRef.current = profileViewState;
+      setProfileViewOrderTick((n) => n + 1);
+      let commitProfiles = orderDiscoverProfilesByProfileViews(
+        takeDiscoverProfilesWithValidGps(slice),
+        profileViewState,
+      );
+      if (DISCOVER_BETA_SIMPLE_PIPELINE && commitProfiles.length > 0) {
+        const [likedDeferred, matchedDeferred, blockDeferred] = await Promise.all([
+          fetchOutgoingLikedUserIds(currentUserId),
+          fetchMatchedUserIds(currentUserId),
+          fetchBlockExclusionDetail(currentUserId),
+        ]);
+        commitProfiles = takeDiscoverProfilesWithValidGps(
+          commitProfiles.filter(
+            (p) =>
+              !likedDeferred.has(p.id) &&
+              !matchedDeferred.has(p.id) &&
+              !blockDeferred.excluded.has(p.id),
+          ),
+        );
+      }
+      const shouldReapplyRotation = reapplyRotationOnNextCommitRef.current;
+      reapplyRotationOnNextCommitRef.current = false;
+      commitProfiles = applyMoveProfileRotationForFeedCommit(currentUserId, commitProfiles, {
+        reapplyPendingReload: shouldReapplyRotation,
+      });
+      setStableProfiles(commitProfiles);
+      setProfiles(commitProfiles);
+      console.log("MOVE_FEED_READY", { count: commitProfiles.length });
       swipeHistoryRef.current = [];
       setSwipeHistory([]);
+      setLoading(false);
+      setFeedReady(true);
     } catch (e) {
-      console.error("[Discover] loadProfiles erreur inattendue:", e);
+      console.warn("[Discover] loadProfiles erreur inattendue:", e);
+      console.log("MOVE_FEED_ERROR", {
+        message: e instanceof Error ? e.message : String(e),
+      });
       setViewerGeoBlocked(false);
+      setStableProfiles([]);
+      setProfiles([]);
       setErrorMessage(discoverFetchFailedMsg(language));
+      setLoading(false);
+      setFeedReady(true);
     } finally {
       loadProfilesInFlightRef.current = false;
-      setLoading(false);
+      if (loadProfilesPendingReloadRef.current) {
+        loadProfilesPendingReloadRef.current = false;
+        reapplyRotationOnNextCommitRef.current = true;
+        void loadProfiles().catch((e) => {
+          console.warn("[Discover diagnostics] loadProfiles pending reload rejected", e);
+        });
+      }
     }
   }
 
   async function handlePass(profileId: string, decisionTimeMs = 0) {
     setDiscoverMenuProfileId(null);
-    if (currentUserId && isValidProfileId(profileId)) {
-      const { data: passRpcData, error: rpcErr } = await supabase.rpc("pass_profile", {
-        p_passed_profile_id: profileId,
-      });
-      if (rpcErr) {
-        console.error("[Discover] pass_profile", rpcErr);
-        setRewindError(t("discover_rewind_err_generic"));
-        return;
-      }
-      const passDeclined =
-        passRpcData &&
-        typeof passRpcData === "object" &&
-        (passRpcData as { ok?: boolean }).ok === false;
-      if (passDeclined) {
-        console.error("[Discover] pass_profile declined", passRpcData);
-        setRewindError(t("discover_rewind_err_generic"));
-        return;
-      }
-      setRewindToast(t("discover_profile_passed"));
+    setSecondChanceTarget(null);
+    setSecondChanceModalOpen(false);
+    setPreviewProfile((prev) => (prev?.id === profileId ? null : prev));
+
+    if (!isValidProfileId(profileId)) return;
+
+    explicitSwipeProfileIdRef.current = profileId;
+    if (currentUserId) {
+      profileViewOrderingRef.current = applyLocalProfileViewActionTaken(
+        profileViewOrderingRef.current,
+        profileId,
+      );
+      setProfileViewOrderTick((n) => n + 1);
+      void markProfileViewActionTaken(currentUserId, profileId);
     }
-    let removed: ProfileWithAffinity | undefined;
-    setProfiles((prev) => {
-      removed = prev.find((p) => p.id === profileId);
-      return takeDiscoverProfilesWithValidGps(prev.filter((p) => p.id !== profileId));
+
+    const topCard = profilesCardStack[0];
+    const p =
+      (topCard?.id === profileId ? topCard : null) ??
+      profiles.find((profileRow) => profileRow.id === profileId);
+    if (!p) return;
+
+    const profileCopy = JSON.parse(JSON.stringify(p)) as ProfileWithAffinity;
+    undoStackRef.current.unshift(profileCopy);
+    setUndoStackTick((n) => n + 1);
+    console.log("[Discover] undoStack push", {
+      id: profileCopy.id,
+      first_name: profileCopy.first_name ?? null,
+      stackSize: undoStackRef.current.length,
     });
-    if (removed != null) {
-      const p = removed;
-      setSwipeHistory((h) => {
-        const next: DiscoverSwipeHistoryEntry[] = [...h, { profile: p, action: "pass" as const }];
-        swipeHistoryRef.current = next;
-        return next;
-      });
-    }
-    if (removed?.id === lastRestoredProfileId) {
+
+    passedProfileIdsRef.current.add(profileId);
+    setPassedFilterTick((n) => n + 1);
+
+    patchDiscoverStackProfiles((prev) => prev.filter((profileRow) => profileRow.id !== profileId));
+    setSwipeHistory((h) => {
+      const next: DiscoverSwipeHistoryEntry[] = [...h, { profile: p, action: "pass" as const }];
+      swipeHistoryRef.current = next;
+      return next;
+    });
+    if (p.id === lastRestoredProfileId) {
       setLastRestoredProfileId(null);
     }
-    if (currentUserId && isValidProfileId(profileId)) {
-      const r = await recordDiscoverSwipe({
-        targetId: profileId,
-        action: "pass",
-        decisionTimeMs,
-        isMatch: false,
-      });
-      if (!r.ok) console.warn("[Discover] record pass swipe", r.error);
-      refreshRewindStatus();
-    }
-    if (removed != null) {
-      setSecondChanceTarget(removed);
-    } else {
-      setSecondChanceTarget(null);
-    }
+
+    if (!currentUserId) return;
+
+    void (async () => {
+      try {
+        const { data: passRpcData, error: rpcErr } = await supabase.rpc("pass_profile", {
+          p_passed_profile_id: profileId,
+        });
+        if (rpcErr) {
+          console.warn("[Discover] pass_profile", rpcErr);
+        } else {
+          const passDeclined =
+            passRpcData &&
+            typeof passRpcData === "object" &&
+            (passRpcData as { ok?: boolean }).ok === false;
+          if (passDeclined) {
+            console.warn("[Discover] pass_profile declined", passRpcData);
+          }
+        }
+        const r = await recordDiscoverSwipe({
+          targetId: profileId,
+          action: "pass",
+          decisionTimeMs,
+          isMatch: false,
+        });
+        if (!r.ok) console.warn("[Discover] record pass swipe", r.error);
+        refreshRewindStatus();
+      } catch (e) {
+        console.warn("[Discover] handlePass background", e);
+      }
+    })();
   }
 
   async function handleBlock(blockedUserId: string) {
@@ -2570,7 +3199,7 @@ export default function Discover() {
         return;
       }
     }
-    setProfiles((prev) => takeDiscoverProfilesWithValidGps(prev.filter((p) => p.id !== blockedUserId)));
+    patchDiscoverStackProfiles((prev) => prev.filter((p) => p.id !== blockedUserId));
     setPreviewProfile((prev) => (prev?.id === blockedUserId ? null : prev));
   }
 
@@ -2634,6 +3263,14 @@ export default function Discover() {
     if (likeInFlightRef.current.has(profile.id)) return;
     likeInFlightRef.current.add(profile.id);
 
+    explicitSwipeProfileIdRef.current = profile.id;
+    profileViewOrderingRef.current = applyLocalProfileViewActionTaken(
+      profileViewOrderingRef.current,
+      profile.id,
+    );
+    setProfileViewOrderTick((n) => n + 1);
+    void markProfileViewActionTaken(currentUserId, profile.id);
+
     try {
       const blocked = await isBlockedWith(profile.id);
       if (blocked) {
@@ -2664,7 +3301,7 @@ export default function Discover() {
     let conversation_id = parsed?.conversation_id ?? null;
 
     if (is_match && !conversation_id) {
-      conversation_id = await fetchConversationIdForPair(currentUserId, profile.id);
+      conversation_id = await fetchConversationIdForUserPair(currentUserId, profile.id);
     }
 
     if (rpcError && (data === null || data === undefined)) {
@@ -2711,7 +3348,7 @@ export default function Discover() {
     });
 
     const removeFromFeed = () => {
-      setProfiles((prev) => takeDiscoverProfilesWithValidGps(prev.filter((p) => p.id !== profile.id)));
+      patchDiscoverStackProfiles((prev) => prev.filter((p) => p.id !== profile.id));
     };
 
     if (is_match && conversation_id) {
@@ -2776,34 +3413,59 @@ export default function Discover() {
     setPreviewProfile(null);
   };
 
-  /** Retour (rewind) : gratuit tant que IS_BETA_UNDO_FREE ; sinon redirection SPLove+ sans crédit. */
+  function getUndoAccessState() {
+    const stackSize = undoStackRef.current.length;
+    const hasSploveUndoCredit = Boolean(currentUserId) && hasDiscoverUndoCredit(currentUserId);
+    const hasLocalCredit = localUndoCredits > 0 || hasSploveUndoCredit;
+    const hasUndoRight =
+      hasLocalCredit ||
+      profileUndoFlags.hasUndoFeature ||
+      profileUndoFlags.profileUndoCredits > 0 ||
+      profileUndoFlags.profileCanRewind ||
+      profileUndoFlags.packSplovePlusIncludesUndo;
+    const allowed =
+      stackSize > 0 &&
+      hasUndoRight;
+    const reason = hasLocalCredit
+      ? "local_credit"
+      : profileUndoFlags.hasUndoFeature
+        ? "has_undo_feature"
+        : profileUndoFlags.profileUndoCredits > 0
+          ? "profile_undo_credits"
+          : profileUndoFlags.profileCanRewind
+            ? "profile_can_rewind"
+            : profileUndoFlags.packSplovePlusIncludesUndo
+              ? "pack_splove_plus_includes_undo"
+              : null;
+    return { allowed, reason, hasLocalCredit, stackSize };
+  }
+
+  /** Retour (rewind) : pile locale d’abord ; seulement avec droit produit explicite. */
   async function handleUndoTap() {
-    if (!currentUserId || rewindBusy) return;
-    const latest = await getDiscoverRewindStatus();
-    if (latest) setRewindStatus(latest);
-
-    const localLast = swipeHistoryRef.current.at(-1) ?? null;
-    const serverRewindable =
-      Boolean(latest) &&
-      Boolean(latest?.last_swipe_at) &&
-      !latest!.last_is_match &&
-      isLastSwipeRewindable(latest!.last_action);
-    const localRewindBeta =
-      IS_BETA_UNDO_FREE &&
-      localLast != null &&
-      (localLast.action === "pass" || localLast.action === "like");
-
-    if (!serverRewindable && !localRewindBeta) {
-      setRewindToast(t("nav_undo_none_soft"));
-      return;
-    }
-
-    if (!IS_BETA_UNDO_FREE && latest != null && !latest.can_rewind) {
+    if (!currentUserId) return;
+    const undoAccess = getUndoAccessState();
+    const sploveCredits = getDiscoverUndoCreditCount(currentUserId);
+    console.log("UNDO_CLICK", {
+      stackSize: undoAccess.stackSize,
+      localCredit: sploveCredits,
+    });
+    console.log("[Discover] undo state", {
+      stackSize: undoAccess.stackSize,
+      localCredit: sploveCredits,
+      serverCanUndo: serverRewindAvailable,
+    });
+    if (!undoAccess.allowed) {
+      console.log("UNDO_BLOCKED_NO_RIGHT", {
+        stackSize: undoAccess.stackSize,
+        hasPlus,
+      });
+      setRewindToast("Active Retour dans Splove+ pour revoir le dernier profil.");
       navigate("/splove-plus", { state: { sploveHighlightFeature: "undo_swipe_return" } });
       return;
     }
 
-    await handleRewind();
+    console.log("UNDO_ALLOWED_REASON", { reason: undoAccess.reason });
+    handleRewind({ consumeLocalCredit: undoAccess.hasLocalCredit });
   }
 
   async function loadCrossings() {
@@ -2832,138 +3494,87 @@ export default function Discover() {
     }
   }
 
-  async function runRewindFlow(optimistic: DiscoverSwipeHistoryEntry | null) {
-    setRewindBusy(true);
-    setRewindError(null);
-    try {
-      const res = await rewindLastDiscoverSwipe();
-      if (!res.ok || !res.target_id) {
-        if (optimistic && !IS_BETA_UNDO_FREE) {
-          setProfiles((p) => takeDiscoverProfilesWithValidGps(p.filter((x) => x.id !== optimistic.profile.id)));
-          setSwipeHistory((prev) => {
-            const next = [...prev, optimistic];
-            swipeHistoryRef.current = next;
-            return next;
-          });
-        }
-        const err = (res.error ?? "generic").toLowerCase();
-        if (IS_BETA_UNDO_FREE) {
-          if (!optimistic) {
-            setRewindToast(t("nav_undo_none_soft"));
-          }
-          return;
-        }
-        if (err.includes("time_window") || err.includes("rewind_rate")) {
-          setRewindError(t("discover_rewind_err_upgrade"));
-        } else if (err.includes("no_undo_credits")) {
-          setRewindError(t("discover_rewind_err_no_credits"));
-        } else if (err.includes("match")) setRewindError(t("discover_rewind_err_match"));
-        else if (err.includes("no_swipe")) setRewindError(t("discover_rewind_err_none"));
-        else setRewindError(t("discover_rewind_err_generic"));
-        return;
-      }
-      void refetchProfile();
-      const fromLocal =
-        optimistic && optimistic.profile.id === res.target_id ? optimistic.profile : null;
+  function handleRewind(opts?: {
+    consumeLocalCredit?: boolean;
+  }) {
+    if (!currentUserId) return;
 
-      const me = profile as Profile | null;
-      if (!me?.id) {
-        if (IS_BETA_UNDO_FREE) {
-          setRewindToast(t("nav_undo_none_soft"));
-        } else {
-          setRewindError(t("discover_rewind_err_generic"));
-        }
-        return;
-      }
-      let restored: ProfileWithAffinity | null = fromLocal;
-      if (!restored) {
-        restored = await buildAffinityProfileForRewind({
-          currentUserId,
-          targetId: res.target_id,
-          meProfile: me,
-          mySportMatchKeys,
-        });
-      }
-      if (!restored) {
-        if (IS_BETA_UNDO_FREE) {
-          setRewindToast(t("nav_undo_none_soft"));
-        } else {
-          setRewindError(t("discover_rewind_restore_failed"));
-        }
-        return;
-      }
-      if (!optimistic) {
-        setSwipeHistory((prev) => {
-          if (prev.length && prev[prev.length - 1].profile.id === res.target_id) {
-            const next = prev.slice(0, -1);
-            swipeHistoryRef.current = next;
-            return next;
-          }
-          return prev;
-        });
-      }
-      const card = restored;
-      if (!hasFiniteDiscoverCoordinates(card)) return;
-      setProfiles((p) =>
-        takeDiscoverProfilesWithValidGps(p.some((x) => x.id === card.id) ? p : [card, ...p]),
+    if (undoStackRef.current.length > 0) {
+      const restored = undoStackRef.current.shift()!;
+      setUndoStackTick((n) => n + 1);
+      passedProfileIdsRef.current.delete(restored.id);
+      setPassedFilterTick((n) => n + 1);
+      profileViewOrderingRef.current = applyLocalProfileViewActionTaken(
+        profileViewOrderingRef.current,
+        restored.id,
       );
-      setRewindRestoredId(card.id);
+      setProfileViewOrderTick((n) => n + 1);
+      setPreviewProfile(null);
+      setDiscoverMenuProfileId(null);
+      patchDiscoverStackProfiles((prev) => [restored, ...prev.filter((p) => p.id !== restored.id)]);
+      setRewindRestoredId(restored.id);
+      setRewindRestoredFrom("left");
       setRewindToast("Profil restaure");
-      refreshRewindStatus();
-    } catch {
-      if (optimistic && !IS_BETA_UNDO_FREE) {
-        setProfiles((p) => takeDiscoverProfilesWithValidGps(p.filter((x) => x.id !== optimistic.profile.id)));
-        setSwipeHistory((prev) => {
-          const next = [...prev, optimistic];
-          swipeHistoryRef.current = next;
-          return next;
-        });
-      }
-      if (IS_BETA_UNDO_FREE) {
-        if (!optimistic) {
-          setRewindToast(t("nav_undo_none_soft"));
-        }
-      } else {
-        setRewindError(t("discover_rewind_err_generic"));
-      }
-    } finally {
-      setRewindBusy(false);
-    }
-  }
 
-  async function handleRewind() {
-    if (!currentUserId || rewindBusy) return;
-    const latest = await getDiscoverRewindStatus();
-    if (latest) setRewindStatus(latest);
-    const h = swipeHistoryRef.current;
-    const last = h[h.length - 1] ?? null;
-    if (last) {
-      const nextHist = h.slice(0, -1);
-      swipeHistoryRef.current = nextHist;
-      setSwipeHistory(nextHist);
-      setProfiles((p) => {
-        if (!hasFiniteDiscoverCoordinates(last.profile)) return takeDiscoverProfilesWithValidGps(p);
-        return takeDiscoverProfilesWithValidGps(
-          p.some((x) => x.id === last.profile.id) ? p : [last.profile, ...p],
-        );
+      const swipeLast = swipeHistoryRef.current.at(-1);
+      if (swipeLast?.profile.id === restored.id) {
+        const nextHist = swipeHistoryRef.current.slice(0, -1);
+        swipeHistoryRef.current = nextHist;
+        setSwipeHistory(nextHist);
+      }
+
+      console.log("[Discover] undo restored local profile", {
+        id: restored.id,
+        first_name: restored.first_name ?? null,
       });
-      setRewindRestoredId(last.profile.id);
-      setRewindRestoredFrom(last.action === "pass" ? "left" : "right");
-      setRewindToast("Profil restaure");
+      if (opts?.consumeLocalCredit) {
+        if (consumeDiscoverUndoCredit(currentUserId)) {
+          setUndoCreditTick((n) => n + 1);
+          syncLocalUndoCredits();
+          console.log("UNDO_CREDIT_CONSUMED", { userId: currentUserId.slice(0, 8) });
+        }
+      }
+
+      void (async () => {
+        try {
+          const res = await rewindLastDiscoverSwipe();
+          if (!res.ok) {
+            console.warn("[Discover] rewind_last_discover_swipe (background)", res.error);
+          }
+          refreshRewindStatus();
+        } catch (e) {
+          console.warn("[Discover] rewind background", e);
+        }
+      })();
+      return;
     }
-    await runRewindFlow(last);
   }
 
   undoTapLatestRef.current = handleUndoTap;
 
-  const onDiscoverShell = location.pathname === "/discover" || location.pathname === "/";
+  useEffect(() => {
+    const onNativeUndo = () => {
+      void undoTapLatestRef.current();
+    };
+    window.addEventListener("splove-native-nav-undo", onNativeUndo);
+    return () => window.removeEventListener("splove-native-nav-undo", onNativeUndo);
+  }, []);
+
+  const onDiscoverShell =
+    location.pathname === "/move" || location.pathname === "/discover" || location.pathname === "/";
+
+  useEffect(() => {
+    if (!onDiscoverShell || !currentUserId) return;
+    syncLocalUndoCredits();
+    setUndoCreditTick((n) => n + 1);
+  }, [onDiscoverShell, currentUserId, location.key, syncLocalUndoCredits]);
 
   useEffect(() => {
     if (!onDiscoverShell || !currentUserId) {
       setDiscoverUndoNav(null);
       return;
     }
-    const discoverReady = Boolean(!errorMessage && !loading && !viewerGeoBlocked);
+    const discoverReady = Boolean(feedReady && !errorMessage && !loading && !viewerGeoBlocked);
     setDiscoverUndoNav({
       undoAvailable: discoverReady && canUndo,
       undoNavTapEnabled: Boolean(discoverReady && (IS_BETA_UNDO_FREE || canUndo)),
@@ -2976,22 +3587,35 @@ export default function Discover() {
     onDiscoverShell,
     currentUserId,
     canUndo,
+    undoStackTick,
+    undoCreditTick,
     rewindBusy,
+    feedReady,
     errorMessage,
     viewerGeoBlocked,
     loading,
     setDiscoverUndoNav,
   ]);
 
-  if (!authLoading && user?.id && isProfileLoading) {
-    return <PostLoginProfileSplash />;
+  if (!showDiscoverShell) {
+    if (isMoveRoute && hasSessionUser) {
+      /* session OAuth : coque Move sans attendre le profil */
+    } else if (isColdStartSplashActive()) {
+      return null;
+    } else {
+      return <PostLoginProfileSplash />;
+    }
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-app-bg font-sans">
       <main
         className={`mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col px-2 pt-1 sm:px-3 ${
-          currentUserId && !errorMessage && !loading && !viewerGeoBlocked ? "pb-24" : "pb-10"
+          currentUserId && !errorMessage && !loading && !viewerGeoBlocked
+            ? nativeBottomNav
+              ? "pb-4"
+              : "pb-24"
+            : "pb-10"
         }`}
       >
         <section className="mb-2 shrink-0 px-0.5">
@@ -3078,6 +3702,16 @@ export default function Discover() {
                   <button
                     type="button"
                     onClick={() => {
+                      console.log("SPLOVE_PLUS_ENTRY_CLICK", { source: "discover_options_bar" });
+                      navigate("/splove-plus", { state: { sploveHighlightFeature: "undo_swipe_return" } });
+                    }}
+                    className="rounded-xl border border-app-border bg-app-bg px-3 py-2 text-[12px] font-semibold text-app-muted transition hover:bg-app-border"
+                  >
+                    SPLove+
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
                       setCrossingsOpen(true);
                       void loadCrossings();
                     }}
@@ -3129,7 +3763,7 @@ export default function Discover() {
           </details>
         </section>
 
-        {loading && !errorMessage && (
+        {showMoveSkeleton ? (
           <div
             role="status"
             aria-live="polite"
@@ -3137,156 +3771,187 @@ export default function Discover() {
             aria-label={t("loading")}
             className="flex min-h-0 flex-1 flex-col"
           >
-            <DiscoverProfileCardSkeleton immersive />
+            <MoveProfileSkeleton immersive />
           </div>
-        )}
-
-        {errorMessage && (
-          <div
-            role="alert"
-            className="mb-5 rounded-2xl border border-app-border bg-app-card px-5 py-6 text-center shadow-sm ring-1 ring-white/[0.04]"
-          >
-            <p className="text-base font-semibold leading-snug text-app-text">{t("discovery_unavailable")}</p>
-            <p className="mx-auto mt-2 max-w-[22rem] text-sm leading-relaxed text-app-muted">
-              {errorMessage}
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                setErrorMessage("");
-                void loadProfiles();
-              }}
-              className="mx-auto mt-5 block w-full max-w-xs rounded-xl px-4 py-3 text-[15px] font-bold shadow-md transition hover:opacity-95 active:scale-[0.99]"
-              style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
-            >
-              {t("discover.retryExplore")}
-            </button>
-          </div>
-        )}
-
-        {likeFeedbackMode === "like" && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="mb-2 shrink-0 rounded-2xl border border-emerald-500/25 bg-emerald-950/35 px-3 py-2.5 text-sm text-emerald-50 shadow-sm ring-1 ring-emerald-500/10"
-          >
-            <p className="text-[15px] font-bold leading-snug">{t("interest_sent")}</p>
-            <p className="mt-1 text-[13px] leading-snug text-emerald-100/90">
-              {t("interest_sent_desc")}
-            </p>
-          </div>
-        )}
-
-        {likeFeedbackMode === "match" && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="mb-2 shrink-0 rounded-2xl border border-app-border bg-app-card px-3 py-2.5 text-sm text-app-text shadow-sm ring-1 ring-white/[0.04]"
-          >
-            <p className="border-l-2 border-app-accent pl-3 text-[15px] font-bold leading-snug text-app-text">
-              Match
-            </p>
-            <p className="mt-1 text-[13px] font-medium leading-snug text-app-text">
-              Proposez une sortie ou un message court — l’essentiel est de passer au réel.
-            </p>
-          </div>
-        )}
-
-        {secondChanceTarget ? (
-          <div className="mb-2 shrink-0">
-            <SecondChancePassCard
-              title={t("second_chance_title")}
-              subtitle={t("second_chance_subtitle")}
-              ctaLabel={t("second_chance_cta")}
-              dismissLabel={t("second_chance_dismiss")}
-              onSendMessage={() => setSecondChanceModalOpen(true)}
-              onDismiss={() => {
-                setSecondChanceTarget(null);
-                setSecondChanceModalOpen(false);
-              }}
-            />
-          </div>
-        ) : null}
-
-        {secondChanceToast ? (
-          <p className="mb-2 shrink-0 rounded-xl border border-emerald-500/25 bg-emerald-950/30 px-3 py-2 text-sm text-emerald-100/95">
-            {secondChanceToast}
-          </p>
-        ) : null}
-
-        {likeActionError && (
-          <p className="mb-2 shrink-0 rounded-xl border border-amber-500/25 bg-amber-950/35 px-3 py-2 text-sm text-amber-100">
-            {likeActionError}
-          </p>
-        )}
-
-        {blockActionError && (
-          <p className="mb-2 shrink-0 rounded-xl border border-amber-500/25 bg-amber-950/35 px-3 py-2 text-sm text-amber-100">
-            {blockActionError}
-          </p>
-        )}
-
-        {boostLifecycleMessage ? (
-          <p className="mb-2 shrink-0 rounded-xl border border-fuchsia-400/30 bg-fuchsia-950/30 px-3 py-2 text-sm text-fuchsia-100">
-            {boostLifecycleMessage}
-          </p>
-        ) : null}
-
-        {!loading && !errorMessage && (profilesCardStack.length === 0 || viewerGeoBlocked) ? (
-          <div className="flex min-h-[min(50dvh,420px)] flex-1 items-center">
-            <EmptyDiscoverState
-              variant={viewerGeoBlocked ? "viewer_geo" : "default"}
-              onRefresh={() => void loadProfiles()}
-            />
-          </div>
-        ) : null}
-
-        {!loading && !errorMessage && !viewerGeoBlocked && profilesCardStack.length > 0 ? (
-          <div className="relative mt-1 flex min-h-[min(540px,calc(100dvh-10rem))] flex-1 flex-col">
-            {profilesCardStack[2] ? (
-              <DiscoverStackSilhouette key={profilesCardStack[2].id} profile={profilesCardStack[2]} layer="back" />
-            ) : null}
-            {profilesCardStack[1] ? (
-              <DiscoverStackSilhouette key={profilesCardStack[1].id} profile={profilesCardStack[1]} layer="mid" />
-            ) : null}
-            {profilesCardStack[0] ? (
+        ) : (
+          <>
+            {loadingTimedOut && (
               <div
-                key={profilesCardStack[0].id}
-                className="relative z-[24] flex min-h-0 flex-1 flex-col"
-                style={
-                  rewindRestoredId === profilesCardStack[0].id
-                    ? {
-                        animation:
-                          rewindRestoredFrom === "right"
-                            ? "splove-rewind-in-right 260ms ease-out"
-                            : "splove-rewind-in-left 260ms ease-out",
-                      }
-                    : undefined
-                }
+                role="alert"
+                className="mb-5 flex min-h-0 flex-1 flex-col items-center justify-center rounded-2xl border border-app-border bg-white px-6 py-10 text-center shadow-sm"
               >
-                <DiscoverSwipeCard
-                  profile={profilesCardStack[0]}
-                  viewerCity={myCity}
-                  mySportMatchKeys={mySportMatchKeys}
-                  discoverMenuProfileId={discoverMenuProfileId}
-                  setDiscoverMenuProfileId={setDiscoverMenuProfileId}
-                  onPass={handlePass}
-                  onLike={handleLike}
-                  onOpenDetail={handleViewProfileFromSuggestion}
-                  onReport={setReportProfileId}
-                  onReportPhoto={openReportPhotoFromDiscover}
-                  onBlock={handleBlock}
-                  restoredProfileId={restoredProfileId}
-                  immersive
+                <p className="text-lg font-semibold text-black">SPLove loading timeout</p>
+                <p className="mt-2 max-w-[22rem] text-sm text-neutral-600">
+                  Le chargement Discover a dépassé 8 secondes. Vérifiez les logs [STEP] dans Xcode.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoadingTimedOut(false);
+                    setErrorMessage("");
+                    void loadProfiles().catch((e) => console.warn("[Discover] loadProfiles retry", e));
+                  }}
+                  className="mt-5 rounded-xl bg-black px-5 py-2.5 text-sm font-semibold text-white"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {errorMessage && (
+              <div
+                role="alert"
+                className="mb-5 rounded-2xl border border-app-border bg-app-card px-5 py-6 text-center shadow-sm ring-1 ring-white/[0.04]"
+              >
+                <p className="text-base font-semibold leading-snug text-app-text">{t("discovery_unavailable")}</p>
+                <p className="mx-auto mt-2 max-w-[22rem] text-sm leading-relaxed text-app-muted">
+                  {errorMessage}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setErrorMessage("");
+                    void loadProfiles();
+                  }}
+                  className="mx-auto mt-5 block w-full max-w-xs rounded-xl px-4 py-3 text-[15px] font-bold shadow-md transition hover:opacity-95 active:scale-[0.99]"
+                  style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
+                >
+                  {t("discover.retryExplore")}
+                </button>
+              </div>
+            )}
+
+            {likeFeedbackMode === "like" && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="mb-2 shrink-0 rounded-2xl border border-emerald-500/25 bg-emerald-950/35 px-3 py-2.5 text-sm text-emerald-50 shadow-sm ring-1 ring-emerald-500/10"
+              >
+                <p className="text-[15px] font-bold leading-snug">{t("interest_sent")}</p>
+                <p className="mt-1 text-[13px] leading-snug text-emerald-100/90">
+                  {t("interest_sent_desc")}
+                </p>
+              </div>
+            )}
+
+            {likeFeedbackMode === "match" && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="mb-2 shrink-0 rounded-2xl border border-app-border bg-app-card px-3 py-2.5 text-sm text-app-text shadow-sm ring-1 ring-white/[0.04]"
+              >
+                <p className="border-l-2 border-app-accent pl-3 text-[15px] font-bold leading-snug text-app-text">
+                  Match
+                </p>
+                <p className="mt-1 text-[13px] font-medium leading-snug text-app-text">
+                  Proposez une sortie ou un message court — l’essentiel est de passer au réel.
+                </p>
+              </div>
+            )}
+
+            {secondChanceTarget ? (
+              <div className="mb-2 shrink-0">
+                <SecondChancePassCard
+                  title={t("second_chance_title")}
+                  subtitle={t("second_chance_subtitle")}
+                  ctaLabel={t("second_chance_cta")}
+                  dismissLabel={t("second_chance_dismiss")}
+                  onSendMessage={() => setSecondChanceModalOpen(true)}
+                  onDismiss={() => {
+                    setSecondChanceTarget(null);
+                    setSecondChanceModalOpen(false);
+                  }}
                 />
               </div>
             ) : null}
-          </div>
-        ) : null}
+
+            {secondChanceToast ? (
+              <p className="mb-2 shrink-0 rounded-xl border border-emerald-500/25 bg-emerald-950/30 px-3 py-2 text-sm text-emerald-100/95">
+                {secondChanceToast}
+              </p>
+            ) : null}
+
+            {likeActionError && (
+              <p className="mb-2 shrink-0 rounded-xl border border-amber-500/25 bg-amber-950/35 px-3 py-2 text-sm text-amber-100">
+                {likeActionError}
+              </p>
+            )}
+
+            {blockActionError && (
+              <p className="mb-2 shrink-0 rounded-xl border border-amber-500/25 bg-amber-950/35 px-3 py-2 text-sm text-amber-100">
+                {blockActionError}
+              </p>
+            )}
+
+            {boostLifecycleMessage ? (
+              <p className="mb-2 shrink-0 rounded-xl border border-fuchsia-400/30 bg-fuchsia-950/30 px-3 py-2 text-sm text-fuchsia-100">
+                {boostLifecycleMessage}
+              </p>
+            ) : null}
+
+            {feedReady && !errorMessage && (profilesCardStack.length === 0 || viewerGeoBlocked) ? (
+              <div className="flex min-h-[min(50dvh,420px)] flex-1 items-center">
+                <EmptyDiscoverState
+                  variant={viewerGeoBlocked ? "viewer_geo" : "default"}
+                  onRefresh={() => void loadProfiles()}
+                />
+              </div>
+            ) : null}
+
+            {canRenderFeedCards ? (
+              <div
+                className={
+                  nativeBottomNav
+                    ? "relative mt-1 flex min-h-0 max-h-[calc(100dvh-11.5rem)] flex-1 flex-col"
+                    : "relative mt-1 flex min-h-[min(540px,calc(100dvh-10rem))] flex-1 flex-col"
+                }
+              >
+                {profilesCardStack[2] ? (
+                  <DiscoverStackSilhouette key={profilesCardStack[2].id} profile={profilesCardStack[2]} layer="back" />
+                ) : null}
+                {profilesCardStack[1] ? (
+                  <DiscoverStackSilhouette key={profilesCardStack[1].id} profile={profilesCardStack[1]} layer="mid" />
+                ) : null}
+                {profilesCardStack[0] ? (
+                  <div
+                    key={profilesCardStack[0].id}
+                    className="relative z-[24] flex min-h-0 flex-1 flex-col"
+                    style={
+                      rewindRestoredId === profilesCardStack[0].id
+                        ? {
+                            animation:
+                              rewindRestoredFrom === "right"
+                                ? "splove-rewind-in-right 260ms ease-out"
+                                : "splove-rewind-in-left 260ms ease-out",
+                          }
+                        : undefined
+                    }
+                  >
+                    <DiscoverSwipeCard
+                      profile={profilesCardStack[0]}
+                      viewerCity={myCity}
+                      mySportMatchKeys={mySportMatchKeys}
+                      discoverMenuProfileId={discoverMenuProfileId}
+                      setDiscoverMenuProfileId={setDiscoverMenuProfileId}
+                      onPass={handlePass}
+                      onLike={handleLike}
+                      onOpenDetail={handleViewProfileFromSuggestion}
+                      onReport={setReportProfileId}
+                      onReportPhoto={openReportPhotoFromDiscover}
+                      onBlock={handleBlock}
+                      restoredProfileId={restoredProfileId}
+                      immersive
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        )}
 
       </main>
 
-      {crossingsOpen ? (
+      {crossingsOpen && !showMoveSkeleton ? (
         <div
           className="fixed inset-0 z-[90] flex items-end justify-center bg-slate-900/50 px-3 pb-0 pt-10 backdrop-blur-sm sm:items-center"
           role="dialog"
@@ -3353,7 +4018,7 @@ export default function Discover() {
         </div>
       ) : null}
 
-      {previewProfile ? (
+      {!showMoveSkeleton && previewProfile ? (
         <DiscoverProfileDetailPreview
           profile={previewProfile}
           mySportMatchKeys={mySportMatchKeys}
@@ -3373,7 +4038,7 @@ export default function Discover() {
         />
       ) : null}
 
-      {reportProfileId && currentUserId && (
+      {!showMoveSkeleton && reportProfileId && currentUserId && (
         <ReportModal
           reportedProfileId={reportProfileId}
           reporterId={currentUserId}
@@ -3381,7 +4046,7 @@ export default function Discover() {
         />
       )}
 
-      {reportPhotoTarget && currentUserId && (
+      {!showMoveSkeleton && reportPhotoTarget && currentUserId && (
         <ReportPhotoModal
           reportedUserId={reportPhotoTarget.profileId}
           reporterUserId={currentUserId}

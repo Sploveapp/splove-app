@@ -26,6 +26,7 @@ import { getCurrentPositionCoords } from "../utils/geolocation";
 import { forwardGeocodeFirst, reverseGeocodeCity } from "../lib/geocoding";
 import { formatCityDisplay, normalizePrimaryLocalityLabel } from "../lib/formatCityDisplay";
 import { updateProfileLocation } from "../lib/profileLocation";
+import { dismissKeyboardAndBlurInputs } from "../lib/dismissKeyboardFocus";
 import { IconSignOut } from "../components/ui/Icon";
 
 const SPORT_PHRASE_MAX_LEN = 120;
@@ -48,18 +49,133 @@ const sectionHeadingButtonStyle: CSSProperties = {
 };
 import { useTranslation } from "../i18n/useTranslation";
 import { buildAuthReferralLink, fetchGrowthProfileFields, type GrowthProfileRow } from "../services/referral.service";
-import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import {
+  primaryProfilePhotoRefCandidates,
+  useProfilePhotoDisplaySrc,
+} from "../hooks/useProfilePhotoDisplaySrc";
+import { snapshotProfilePhotoFields } from "../lib/profilePhotoPipelineLog";
+import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
+import {
+  logProfilePhotoUiDecision,
+  pickPrimaryProfilePhotoStoredRef,
+  resolveProfilePhotoUiSrc,
+} from "../lib/profilePhotoDisplayUrl";
 import LanguageSwitcher from "../components/LanguageSwitcher";
+import {
+  SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK,
+  SPLOVE_BOTTOM_NAV_HEIGHT_VAR,
+} from "../constants/appBottomNavLayout";
 import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
 import { normalizeDiscoveryRadiusKm } from "../constants/discoverGeo";
 import { normalizePreferredAgeRange } from "../lib/profileAge";
+
+function ProfilePhotoPlaceholder({
+  aspectRatio = "3 / 4",
+  hint,
+  loading = false,
+}: {
+  aspectRatio?: string;
+  hint?: string;
+  loading?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        width: "100%",
+        aspectRatio,
+        borderRadius: 16,
+        border: `1px dashed ${APP_BORDER}`,
+        background: APP_BG,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+        padding: 16,
+        boxSizing: "border-box",
+      }}
+    >
+      <img
+        src="/logo.png"
+        alt=""
+        aria-hidden
+        style={{
+          width: 48,
+          height: 48,
+          objectFit: "contain",
+          opacity: loading ? 0.45 : 0.72,
+        }}
+      />
+      {hint ? (
+        <span style={{ fontSize: 12, fontWeight: 500, color: APP_TEXT_MUTED, textAlign: "center" }}>
+          {hint}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 export default function Profile() {
-  const { t } = useTranslation();
+  const { t, language } = useTranslation();
   const navigate = useNavigate();
-  const { user, profile, refetchProfile, commitProfileRow, signOut } = useAuth();
-  const mainPhoto = profile?.main_photo_url?.trim() || null;
-  const mainPhotoDisplay = useProfilePhotoSignedUrl(mainPhoto) ?? null;
-  const [imageError, setImageError] = useState(false);
+  const { user, profile, refetchProfile, commitProfileRow, signOut, isSigningOut } = useAuth();
+  const photoCandidates = useMemo(() => primaryProfilePhotoRefCandidates(profile), [profile]);
+  const primaryStoredRef = useMemo(() => pickPrimaryProfilePhotoStoredRef(profile), [profile]);
+  const hasProfilePhotoRef = Boolean(primaryStoredRef);
+  const primaryPhoto = useProfilePhotoDisplaySrc(photoCandidates.refs, {
+    logContext: {
+      userId: user?.id ?? null,
+      profileId: profile?.id ?? user?.id ?? null,
+      source: "profile.screen",
+      fieldByRef: photoCandidates.fieldByRef,
+    },
+  });
+  const primaryImgSrc = resolveProfilePhotoUiSrc(primaryStoredRef, primaryPhoto.src);
+  const profileRef = useRef(profile);
+  profileRef.current = profile;
+
+  const syncProfileForScreen = useCallback(async () => {
+    if (!user?.id) return;
+    const row = await fetchProfileScreenFields(user.id);
+    if (!row) return;
+    const base = profileRef.current;
+    if (base?.id) {
+      commitProfileRow(mergeProfileScreenRowPreservingPhotos(base as Record<string, unknown>, row));
+    } else if (typeof row.id === "string") {
+      commitProfileRow(row);
+    }
+  }, [user?.id, commitProfileRow]);
+
+  useEffect(() => {
+    void syncProfileForScreen();
+  }, [syncProfileForScreen]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    logProfilePhotoUiDecision("profile.screen", profile, primaryImgSrc, "primary");
+    console.log("[SPLovePhoto][connected-profile] profile_snapshot", {
+      userId: user.id,
+      profileId: profile?.id ?? user.id,
+      source: "profile.screen",
+      photos: snapshotProfilePhotoFields(profile as Record<string, unknown> | null | undefined),
+      activeField: primaryPhoto.activeField,
+      hasDisplaySrc: Boolean(primaryImgSrc),
+      isLoading: primaryPhoto.isLoading,
+      isFailed: primaryPhoto.isFailed,
+    });
+  }, [
+    user?.id,
+    profile?.id,
+    profile?.main_photo_url,
+    profile?.portrait_url,
+    profile?.fullbody_url,
+    profile?.avatar_url,
+    primaryPhoto.activeField,
+    primaryImgSrc,
+    primaryPhoto.isLoading,
+    primaryPhoto.isFailed,
+    profile,
+  ]);
   const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null);
   const [growth, setGrowth] = useState<GrowthProfileRow | null>(null);
   const [growthLinkCopied, setGrowthLinkCopied] = useState(false);
@@ -77,8 +193,8 @@ export default function Profile() {
   const [phraseSaving, setPhraseSaving] = useState(false);
   const [phraseMessage, setPhraseMessage] = useState<string | null>(null);
   const [activityPendingCount, setActivityPendingCount] = useState(0);
-  const failedProfileImageSourcesRef = useRef<Set<string>>(new Set());
-  const profileImageFailureCountRef = useRef(0);
+  const locCityInputRef = useRef<HTMLInputElement>(null);
+  const locRadiusSelectRef = useRef<HTMLSelectElement>(null);
 
   const syncAccessibilityFromProfile = useCallback(() => {
     if (!profile) return;
@@ -147,12 +263,6 @@ export default function Profile() {
   }, [selectedPhotoUrl]);
 
   useEffect(() => {
-    failedProfileImageSourcesRef.current.clear();
-    profileImageFailureCountRef.current = 0;
-    setImageError(false);
-  }, [mainPhoto]);
-
-  useEffect(() => {
     if (accessibilityMessage !== ACCESSIBILITY_SAVE_SUCCESS) return;
     const t = window.setTimeout(() => setAccessibilityMessage(null), 1500);
     return () => window.clearTimeout(t);
@@ -173,8 +283,13 @@ export default function Profile() {
   }, [user?.id]);
 
   async function handleLogout() {
+    if (isSigningOut) return;
     await signOut();
   }
+
+  const redirectToMoveAfterSave = useCallback(() => {
+    navigate("/move", { replace: true });
+  }, [navigate]);
 
   async function handleSaveSportPhrase() {
     if (!user?.id) return;
@@ -200,7 +315,8 @@ export default function Profile() {
         return;
       }
       await refetchProfile();
-      setPhraseMessage(SPORT_PHRASE_SAVED_FLAG);
+      await syncProfileForScreen();
+      redirectToMoveAfterSave();
     } finally {
       setPhraseSaving(false);
     }
@@ -208,6 +324,7 @@ export default function Profile() {
 
   async function handleSaveLocation() {
     if (!user?.id || !profile) return;
+    dismissKeyboardAndBlurInputs([locCityInputRef, locRadiusSelectRef]);
     setLocMessage(null);
     setLocSaving(true);
     try {
@@ -237,7 +354,8 @@ export default function Profile() {
         return;
       }
       await refetchProfile();
-      setLocMessage("Localisation enregistree.");
+      await syncProfileForScreen();
+      redirectToMoveAfterSave();
     } finally {
       setLocSaving(false);
     }
@@ -245,6 +363,7 @@ export default function Profile() {
 
   async function handleUseMyLocation() {
     if (!user?.id || !profile) return;
+    dismissKeyboardAndBlurInputs([locCityInputRef, locRadiusSelectRef]);
     setLocMessage(null);
     setGeoLoading(true);
     try {
@@ -255,8 +374,9 @@ export default function Profile() {
       }
       const radiusFinal = normalizeDiscoveryRadiusKm(Number(locRadius)) ?? 25;
       const cityLabel = await reverseGeocodeCity(c.lat, c.lng);
+      const resolvedCity = (cityLabel ?? locCity.trim()) || null;
       const { error } = await updateProfileLocation(supabase, user.id, {
-        city: (cityLabel ?? locCity.trim()) || null,
+        city: resolvedCity,
         latitude: c.lat,
         longitude: c.lng,
         discovery_radius_km: radiusFinal,
@@ -265,8 +385,15 @@ export default function Profile() {
         setLocMessage(error.message || t("action_impossible"));
         return;
       }
+      if (resolvedCity) {
+        setLocCity(formatCityDisplay(resolvedCity) || resolvedCity);
+      }
       await refetchProfile();
-      setLocMessage("Position enregistree.");
+      await syncProfileForScreen();
+      requestAnimationFrame(() => {
+        dismissKeyboardAndBlurInputs([locCityInputRef, locRadiusSelectRef]);
+      });
+      redirectToMoveAfterSave();
     } finally {
       setGeoLoading(false);
     }
@@ -293,7 +420,8 @@ export default function Profile() {
         return;
       }
       await refetchProfile();
-      setAccessibilityMessage(ACCESSIBILITY_SAVE_SUCCESS);
+      await syncProfileForScreen();
+      redirectToMoveAfterSave();
     } finally {
       setAccessibilitySaving(false);
     }
@@ -311,8 +439,10 @@ export default function Profile() {
       <main
         style={{
           padding: "24px",
+          paddingBottom: `calc(24px + var(${SPLOVE_BOTTOM_NAV_HEIGHT_VAR}, ${SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK}))`,
           maxWidth: "420px",
           margin: "0 auto",
+          boxSizing: "border-box",
         }}
       >
         <h1
@@ -423,13 +553,14 @@ export default function Profile() {
             >
               {t("photos.primary")}
             </span>
-            {mainPhoto && !imageError ? (
+            {hasProfilePhotoRef ? (
               <button
                 type="button"
                 onClick={() => {
-                  if (mainPhotoDisplay) setSelectedPhotoUrl(mainPhotoDisplay);
+                  if (primaryImgSrc) setSelectedPhotoUrl(primaryImgSrc);
                 }}
                 aria-label={t("view_photo")}
+                disabled={!primaryImgSrc}
                 style={{
                   marginBottom: "16px",
                   padding: 0,
@@ -437,50 +568,18 @@ export default function Profile() {
                   borderRadius: "16px",
                   overflow: "hidden",
                   maxWidth: "220px",
-                  cursor: "pointer",
+                  cursor: primaryImgSrc ? "pointer" : "default",
                   display: "block",
                   background: "none",
                 }}
               >
-                {mainPhotoDisplay ? (
+                {primaryImgSrc ? (
                   <img
-                    src={mainPhotoDisplay}
+                    key={`${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}`}
+                    src={primaryImgSrc}
                     alt="Votre photo de profil — appuyez pour les options"
-                    onLoad={() => {
-                      if (import.meta.env.DEV) {
-                        console.log("[Profile image debug] image source URL", {
-                          raw: mainPhoto,
-                          src: mainPhotoDisplay,
-                          status: "loaded",
-                        });
-                      }
-                    }}
-                    onError={() => {
-                      const src = mainPhotoDisplay || "";
-                      if (failedProfileImageSourcesRef.current.has(src)) {
-                        if (import.meta.env.DEV) {
-                          console.warn("[Profile image debug] retry skipped reason", {
-                            raw: mainPhoto,
-                            src,
-                            reason: "already failed in current render cycle",
-                          });
-                        }
-                        return;
-                      }
-                      failedProfileImageSourcesRef.current.add(src);
-                      profileImageFailureCountRef.current += 1;
-                      if (import.meta.env.DEV) {
-                        console.warn("[Profile image debug] image source URL", {
-                          raw: mainPhoto,
-                          src,
-                          status: "failed",
-                        });
-                        console.warn("[Profile image debug] image load failure count", {
-                          count: profileImageFailureCountRef.current,
-                        });
-                      }
-                      setImageError(true);
-                    }}
+                    onLoad={primaryPhoto.onImageLoad}
+                    onError={primaryPhoto.onImageError}
                     style={{
                       width: "100%",
                       aspectRatio: "3 / 4",
@@ -490,33 +589,19 @@ export default function Profile() {
                     }}
                   />
                 ) : (
-                  <div
-                    style={{
-                      width: "100%",
-                      aspectRatio: "3 / 4",
-                      background: APP_BG,
-                      border: `1px solid ${APP_BORDER}`,
-                      display: "block",
-                    }}
+                  <ProfilePhotoPlaceholder
+                    aspectRatio="3 / 4"
+                    loading={primaryPhoto.isLoading}
                   />
                 )}
               </button>
             ) : (
-              <p
-                style={{
-                  margin: "0 0 16px 0",
-                  padding: 0,
-                  display: "block",
-                  width: "100%",
-                  textAlign: "left",
-                  fontSize: "14px",
-                  color: APP_TEXT_MUTED,
-                }}
-              >
-                {mainPhoto && imageError
-                  ? "La photo principale existe mais ne peut pas être chargée."
-                  : "Aucune photo principale enregistrée."}
-              </p>
+              <div style={{ marginBottom: "16px", maxWidth: "220px" }}>
+                <ProfilePhotoPlaceholder
+                  aspectRatio="3 / 4"
+                  hint="Aucune photo principale enregistrée"
+                />
+              </div>
             )}
             <div>
               <span
@@ -887,6 +972,8 @@ export default function Profile() {
                   });
                 }
                 await refetchProfile();
+                await syncProfileForScreen();
+                redirectToMoveAfterSave();
               }}
             />
           ) : null}
@@ -933,6 +1020,7 @@ export default function Profile() {
               {t("city")}
             </label>
             <input
+              ref={locCityInputRef}
               type="text"
               value={locCity}
               onChange={(e) => {
@@ -965,6 +1053,7 @@ export default function Profile() {
               {t("search_radius_km")}
             </label>
             <select
+              ref={locRadiusSelectRef}
               value={locRadius}
               onChange={(e) => {
                 setLocRadius(e.target.value);
@@ -1188,6 +1277,8 @@ export default function Profile() {
           <button
             type="button"
             onClick={() => void handleLogout()}
+            disabled={isSigningOut}
+            aria-busy={isSigningOut}
             style={{
               width: "100%",
               display: "inline-flex",
@@ -1201,11 +1292,16 @@ export default function Profile() {
               color: APP_TEXT_MUTED,
               fontSize: "14px",
               fontWeight: 500,
-              cursor: "pointer",
+              cursor: isSigningOut ? "not-allowed" : "pointer",
+              opacity: isSigningOut ? 0.6 : 1,
             }}
           >
             <IconSignOut size={18} color="currentColor" />
-            {t("logout")}
+            {isSigningOut
+              ? language === "en"
+                ? "Signing out…"
+                : "Déconnexion…"
+              : t("logout")}
           </button>
           <div
             style={{

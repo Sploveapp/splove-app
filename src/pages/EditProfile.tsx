@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
 import { useAuth } from "../contexts/AuthContext";
@@ -17,7 +17,18 @@ import { normalizePreferredAgeRange } from "../lib/profileAge";
 import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/sportMatchPreference";
 import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
-import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import {
+  primaryProfilePhotoRefs,
+  secondaryProfilePhotoRefs,
+  useProfilePhotoDisplaySrc,
+} from "../hooks/useProfilePhotoDisplaySrc";
+import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
+import {
+  logProfilePhotoUiDecision,
+  pickPrimaryProfilePhotoStoredRef,
+  pickSecondaryProfilePhotoStoredRef,
+  resolveProfilePhotoUiSrc,
+} from "../lib/profilePhotoDisplayUrl";
 import { coerceProfileHeightCm, parseHeightCmOptionalInput } from "../lib/profileHeightCm";
 
 type SportOption = { id: string | number; name: string; category?: string | null };
@@ -61,6 +72,45 @@ const EDIT_SPORT_MATCH_OPTIONS: readonly {
 const PHOTO_BUCKET = "profile-photos";
 const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 const PHOTO_ACCEPT_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+function EditProfilePhotoPlaceholder({
+  hint,
+  loading = false,
+}: {
+  hint?: string;
+  loading?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        width: "100%",
+        aspectRatio: "4 / 5",
+        borderRadius: 12,
+        marginBottom: 10,
+        border: `1px dashed ${APP_BORDER}`,
+        background: APP_BG,
+        color: APP_TEXT_MUTED,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        padding: 12,
+        boxSizing: "border-box",
+      }}
+    >
+      <img
+        src="/logo.png"
+        alt=""
+        aria-hidden
+        style={{ width: 44, height: 44, objectFit: "contain", opacity: loading ? 0.45 : 0.72 }}
+      />
+      {hint ? (
+        <span style={{ fontSize: 12, fontWeight: 500, textAlign: "center" }}>{hint}</span>
+      ) : null}
+    </div>
+  );
+}
 
 function mapDbIntentToUi(raw: unknown): (typeof INTENT_OPTIONS)[number]["value"] {
   const n = String(raw ?? "").trim().toLowerCase();
@@ -109,8 +159,6 @@ export default function EditProfile() {
   const { user, profile, refetchProfile, commitProfileRow } = useAuth();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [saveSuccessToast, setSaveSuccessToast] = useState(false);
-  const redirectAfterSaveTimerRef = useRef<number | null>(null);
 
   const [sportsCatalog, setSportsCatalog] = useState<SportOption[]>([]);
   const [selectedSports, setSelectedSports] = useState<SportOption[]>([]);
@@ -128,14 +176,53 @@ export default function EditProfile() {
   const [bodyFile, setBodyFile] = useState<File | null>(null);
   const [portraitPreviewUrl, setPortraitPreviewUrl] = useState<string>("");
   const [bodyPreviewUrl, setBodyPreviewUrl] = useState<string>("");
-  const signedPortrait = useProfilePhotoSignedUrl(
-    portraitPreviewUrl ? null : (portraitUrl.trim() || null),
-  );
-  const signedBody = useProfilePhotoSignedUrl(
-    bodyPreviewUrl ? null : (bodyUrl.trim() || null),
-  );
-  const portraitDisplaySrc = portraitPreviewUrl || signedPortrait || "";
-  const bodyDisplaySrc = bodyPreviewUrl || signedBody || "";
+  const profileRef = useRef(profile);
+  profileRef.current = profile;
+
+  const primaryStoredRef = useMemo(() => pickPrimaryProfilePhotoStoredRef(profile), [profile]);
+  const secondaryStoredRef = useMemo(() => pickSecondaryProfilePhotoStoredRef(profile), [profile]);
+
+  const portraitRefs = useMemo(() => {
+    if (portraitPreviewUrl) return [portraitPreviewUrl];
+    const fromProfile = primaryProfilePhotoRefs(profile);
+    const extra = portraitUrl.trim();
+    if (extra && !fromProfile.includes(extra)) return [extra, ...fromProfile];
+    return fromProfile;
+  }, [portraitPreviewUrl, portraitUrl, profile]);
+
+  const bodyRefs = useMemo(() => {
+    if (bodyPreviewUrl) return [bodyPreviewUrl];
+    const fromProfile = secondaryProfilePhotoRefs(profile);
+    const extra = bodyUrl.trim();
+    if (extra && !fromProfile.includes(extra)) return [extra, ...fromProfile];
+    return fromProfile;
+  }, [bodyPreviewUrl, bodyUrl, profile]);
+
+  const primaryPhoto = useProfilePhotoDisplaySrc(portraitRefs);
+  const secondaryPhoto = useProfilePhotoDisplaySrc(bodyRefs);
+  const primaryImgSrc = resolveProfilePhotoUiSrc(primaryStoredRef, primaryPhoto.src);
+  const secondaryImgSrc = resolveProfilePhotoUiSrc(secondaryStoredRef, secondaryPhoto.src);
+
+  useEffect(() => {
+    logProfilePhotoUiDecision("edit_profile.screen", profile, primaryImgSrc, "primary");
+    logProfilePhotoUiDecision("edit_profile.screen", profile, secondaryImgSrc, "secondary");
+  }, [profile, primaryImgSrc, secondaryImgSrc]);
+
+  const syncProfileForScreen = useCallback(async () => {
+    if (!user?.id) return;
+    const row = await fetchProfileScreenFields(user.id);
+    if (!row) return;
+    const base = profileRef.current;
+    if (base?.id) {
+      commitProfileRow(mergeProfileScreenRowPreservingPhotos(base as Record<string, unknown>, row));
+    } else if (typeof row.id === "string") {
+      commitProfileRow(row);
+    }
+  }, [user?.id, commitProfileRow]);
+
+  useEffect(() => {
+    void syncProfileForScreen();
+  }, [syncProfileForScreen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -179,11 +266,15 @@ export default function EditProfile() {
     setHeightCmInput(hCoerced != null ? String(hCoerced) : "");
     setBio(String((profile as Record<string, unknown>).sport_phrase ?? ""));
     const portraitFromDb =
+      primaryProfilePhotoRefs(profile)[0] ||
       (typeof profile.portrait_url === "string" && profile.portrait_url.trim()) ||
       (typeof profile.main_photo_url === "string" && profile.main_photo_url.trim()) ||
       "";
     setPortraitUrl(portraitFromDb);
-    setBodyUrl(String(profile.fullbody_url ?? ""));
+    const bodyFromDb =
+      secondaryProfilePhotoRefs(profile)[0] ||
+      (typeof profile.fullbody_url === "string" ? profile.fullbody_url.trim() : "");
+    setBodyUrl(bodyFromDb);
     setSportMatchPreference(parseSportMatchPreference((profile as Record<string, unknown>).sport_match_preference));
   }, [profile]);
 
@@ -206,15 +297,6 @@ export default function EditProfile() {
     setBodyPreviewUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [bodyFile]);
-
-  useEffect(() => {
-    return () => {
-      if (redirectAfterSaveTimerRef.current != null) {
-        window.clearTimeout(redirectAfterSaveTimerRef.current);
-        redirectAfterSaveTimerRef.current = null;
-      }
-    };
-  }, []);
 
   const searchMatches = useMemo(() => {
     const q = sportSearch.trim().toLowerCase();
@@ -407,13 +489,10 @@ export default function EditProfile() {
       }
 
       await refetchProfile();
+      await syncProfileForScreen();
       setPortraitFile(null);
       setBodyFile(null);
-      setSaveSuccessToast(true);
-      redirectAfterSaveTimerRef.current = window.setTimeout(() => {
-        redirectAfterSaveTimerRef.current = null;
-        navigate("/discover", { replace: true });
-      }, 900);
+      navigate("/move", { replace: true });
     } catch (e) {
       const msg = e instanceof Error ? e.message : t("edit_profile_save_error");
       setMessage(msg);
@@ -441,7 +520,7 @@ export default function EditProfile() {
                   preferred_age_max: max,
                 });
               }
-              await refetchProfile();
+              await syncProfileForScreen();
             }}
           />
         ) : null}
@@ -550,29 +629,19 @@ export default function EditProfile() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
             <div style={{ border: `1px solid ${APP_BORDER}`, borderRadius: 14, padding: 10, background: APP_BG }}>
               <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.primary")}</p>
-              {portraitDisplaySrc ? (
+              {primaryImgSrc ? (
                 <img
-                  src={portraitDisplaySrc}
+                  key={`primary-${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}`}
+                  src={primaryImgSrc}
                   alt={t("photos.primary")}
+                  onLoad={primaryPhoto.onImageLoad}
+                  onError={primaryPhoto.onImageError}
                   style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, marginBottom: 10 }}
                 />
               ) : (
-                <div
-                  style={{
-                    width: "100%",
-                    aspectRatio: "4 / 5",
-                    borderRadius: 12,
-                    marginBottom: 10,
-                    border: `1px dashed ${APP_BORDER}`,
-                    color: APP_TEXT_MUTED,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 12,
-                  }}
-                >
-                  {t("photos.no_preview")}
-                </div>
+                <EditProfilePhotoPlaceholder
+                  loading={primaryPhoto.isLoading && Boolean(primaryStoredRef)}
+                />
               )}
               <input
                 id="edit-profile-portrait-file"
@@ -606,29 +675,19 @@ export default function EditProfile() {
             </div>
             <div style={{ border: `1px solid ${APP_BORDER}`, borderRadius: 14, padding: 10, background: APP_BG }}>
               <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.secondary")}</p>
-              {bodyDisplaySrc ? (
+              {secondaryImgSrc ? (
                 <img
-                  src={bodyDisplaySrc}
+                  key={`secondary-${secondaryPhoto.activeRef ?? secondaryStoredRef ?? "none"}-${secondaryPhoto.urlIndex}`}
+                  src={secondaryImgSrc}
                   alt={t("photos.secondary")}
+                  onLoad={secondaryPhoto.onImageLoad}
+                  onError={secondaryPhoto.onImageError}
                   style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, marginBottom: 10 }}
                 />
               ) : (
-                <div
-                  style={{
-                    width: "100%",
-                    aspectRatio: "4 / 5",
-                    borderRadius: 12,
-                    marginBottom: 10,
-                    border: `1px dashed ${APP_BORDER}`,
-                    color: APP_TEXT_MUTED,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 12,
-                  }}
-                >
-                  {t("photos.no_preview")}
-                </div>
+                <EditProfilePhotoPlaceholder
+                  loading={secondaryPhoto.isLoading && Boolean(secondaryStoredRef)}
+                />
               )}
               <input
                 id="edit-profile-body-file"
@@ -664,7 +723,7 @@ export default function EditProfile() {
         </section>
 
         <div style={{ display: "flex", gap: 10 }}>
-          <button type="button" onClick={() => navigate("/profile")} style={{ flex: 1, borderRadius: 12, border: `1px solid ${APP_BORDER}`, background: APP_CARD, color: APP_TEXT, padding: "12px 14px", fontWeight: 600 }}>
+          <button type="button" onClick={() => navigate("/profile", { replace: true })} style={{ flex: 1, borderRadius: 12, border: `1px solid ${APP_BORDER}`, background: APP_CARD, color: APP_TEXT, padding: "12px 14px", fontWeight: 600 }}>
             {t("back")}
           </button>
           <button type="button" onClick={() => void handleSave()} disabled={loading} style={{ flex: 1, borderRadius: 12, border: "none", background: loading ? CTA_DISABLED_BG : BRAND_BG, color: TEXT_ON_BRAND, padding: "12px 14px", fontWeight: 700 }}>
@@ -673,31 +732,6 @@ export default function EditProfile() {
         </div>
         {message ? <p style={{ margin: "10px 2px 0", color: APP_TEXT_MUTED, fontSize: 13 }}>{message}</p> : null}
       </main>
-      {saveSuccessToast ? (
-        <div
-          role="status"
-          aria-live="polite"
-          style={{
-            position: "fixed",
-            left: "50%",
-            bottom: "max(24px, env(safe-area-inset-bottom, 0px))",
-            transform: "translateX(-50%)",
-            zIndex: 50,
-            maxWidth: "min(92vw, 360px)",
-            padding: "12px 18px",
-            borderRadius: 14,
-            background: APP_CARD,
-            border: `1px solid ${APP_BORDER}`,
-            color: APP_TEXT,
-            fontSize: 14,
-            fontWeight: 600,
-            textAlign: "center",
-            boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
-          }}
-        >
-          {t("edit_profile_saved")}
-        </div>
-      ) : null}
     </div>
   );
 }
