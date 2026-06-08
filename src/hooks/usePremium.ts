@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { BETA_MODE } from "../constants/beta";
+import { deferSecondaryWork } from "../lib/deferSecondaryWork";
+import { isNativeCapacitorApp } from "../lib/authRedirect";
 import { hasPremiumAccess } from "../services/premium.service";
 
 export function usePremium(profileId: string | null) {
-  const [hasPlus, setHasPlus] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [hasPlus, setHasPlus] = useState(BETA_MODE);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     if (BETA_MODE && profileId) {
@@ -18,14 +20,19 @@ export function usePremium(profileId: string | null) {
       return;
     }
     let cancelled = false;
-    hasPremiumAccess(profileId).then((ok) => {
-      if (!cancelled) {
-        setHasPlus(ok);
-        setIsLoading(false);
-      }
-    });
+    const deferMs = isNativeCapacitorApp() ? 3_500 : 1_200;
+    const cancelDefer = deferSecondaryWork(() => {
+      setIsLoading(true);
+      void hasPremiumAccess(profileId).then((ok) => {
+        if (!cancelled) {
+          setHasPlus(ok);
+          setIsLoading(false);
+        }
+      });
+    }, deferMs);
     return () => {
       cancelled = true;
+      cancelDefer();
     };
   }, [profileId]);
 

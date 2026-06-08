@@ -2,10 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { useAuth } from "../../contexts/AuthContext";
 import { useTranslation } from "../../i18n/useTranslation";
 import type { Language } from "../../i18n";
 import type { TranslationKey } from "../../i18n";
 import { IS_BETA_UNDO_FREE } from "../../constants/discoverUndo";
+import {
+  activateDiscoverUndoCredit,
+  getDiscoverUndoCreditCount,
+  DISCOVER_UNDO_CREDIT_EVENT,
+} from "../../lib/discoverUndoCredits";
 import type { SploveCreditType, SploveTimedFeatureType } from "../../types/sploveCommerce.types";
 import { activateFeature } from "../../services/sploveCommerce.service";
 import {
@@ -285,6 +291,7 @@ function writePackBetaActive(): void {
 
 export default function SplovePlusScreen() {
   const { language, t } = useTranslation();
+  const { user, session } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const undoReturnCardRef = useRef<HTMLButtonElement | null>(null);
@@ -292,6 +299,8 @@ export default function SplovePlusScreen() {
   const smartReminderCardRef = useRef<HTMLButtonElement | null>(null);
 
   const [userId, setUserId] = useState<string | null>(null);
+  /** Même clé utilisateur que Discover (`user?.id ?? session?.user?.id`). */
+  const discoverUndoUserId = user?.id ?? session?.user?.id ?? userId;
   const [creditsQty, setCreditsQty] = useState<Partial<Record<SploveCreditType, number>>>({});
   const [timedExpiry, setTimedExpiry] = useState<Partial<Record<SploveTimedFeatureType, string>>>({});
   const [profileUndo, setProfileUndo] = useState(0);
@@ -381,13 +390,29 @@ export default function SplovePlusScreen() {
       }
       const uid = data.user?.id ?? null;
       setUserId(uid);
-      if (uid) await refreshWallet(uid);
+      if (uid) {
+        await refreshWallet(uid);
+        const localUndo = getDiscoverUndoCreditCount(uid);
+        if (localUndo > 0) {
+          setProfileUndo((prev) => Math.max(prev, localUndo));
+        }
+      }
     }
     void boot();
     return () => {
       cancelled = true;
     };
   }, [refreshWallet]);
+
+  useEffect(() => {
+    if (!discoverUndoUserId) return;
+    const syncLocalUndo = () => {
+      setProfileUndo((prev) => Math.max(prev, getDiscoverUndoCreditCount(discoverUndoUserId)));
+    };
+    syncLocalUndo();
+    window.addEventListener(DISCOVER_UNDO_CREDIT_EVENT, syncLocalUndo);
+    return () => window.removeEventListener(DISCOVER_UNDO_CREDIT_EVENT, syncLocalUndo);
+  }, [discoverUndoUserId]);
 
   useEffect(() => {
     const st = location.state as { sploveHighlightFeature?: string } | null | undefined;
@@ -477,7 +502,12 @@ export default function SplovePlusScreen() {
       return;
     }
     if (feature.creditType === "undo_swipe") {
-      setProfileUndo((prev) => prev + 1);
+      if (discoverUndoUserId) {
+        const credits = activateDiscoverUndoCredit(discoverUndoUserId);
+        setProfileUndo(credits);
+      } else {
+        setProfileUndo((prev) => prev + 1);
+      }
     } else if (feature.creditType === "second_chance") {
       setProfileSecondChance((prev) => prev + 1);
     }
@@ -579,6 +609,9 @@ export default function SplovePlusScreen() {
       await refreshWallet(userId).catch((err) => {
         console.warn("[SplovePlusScreen] refreshWallet soft-fail", err);
       });
+      if (feature.key === "undo_swipe_return" && discoverUndoUserId) {
+        activateDiscoverUndoCredit(discoverUndoUserId);
+      }
     } else {
       simulateLocalActivation(feature);
     }

@@ -16,3 +16,7 @@ interface ImportMetaEnv {
   interface ImportMeta {
     readonly env: ImportMetaEnv
   }
+
+  interface Window {
+    __SPLOVE_OAUTH_PROCESSING__?: boolean;
+  }

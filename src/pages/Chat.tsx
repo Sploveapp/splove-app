@@ -9,6 +9,7 @@ import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { IconSend } from "../components/ui/Icon";
 import { ProposalCard } from "../components/ProposalCard";
 import { ActivityResponseBubble } from "../components/chat/ActivityResponseBubble";
+import { ChatMessageMeta } from "../components/chat/ChatMessageMeta";
 import { ActivityProposalBubble } from "../components/chat/ActivityProposalBubble";
 import { ChatConfirmedActivityCard } from "../components/chat/ChatConfirmedActivityCard";
 import { MeetingConfirmationPanel } from "../components/MeetingConfirmationPanel";
@@ -173,6 +174,7 @@ type TextMessageRow = {
   body: string;
   sender_id: string;
   created_at: string;
+  read_at?: string | null;
   message_type?: string | null;
   activity_proposal_id?: string | null;
   metadata?: Record<string, unknown> | null;
@@ -220,6 +222,36 @@ function parseCreatedMs(iso: string | null | undefined): number {
   if (!iso) return 0;
   const n = new Date(iso).getTime();
   return Number.isNaN(n) ? 0 : n;
+}
+
+/** Messages utilisateur réels (hors réponses système / cartes structurées). */
+function isRealUserExchangeMessage(msg: { message_type?: string | null }): boolean {
+  const mt = (msg.message_type ?? "text").trim().toLowerCase();
+  if (mt === "activity_proposal_response" || mt === "system" || mt === "system_message") {
+    return false;
+  }
+  if (isFreeTextChatMessage(msg)) return true;
+  return mt === "activity_proposal";
+}
+
+function countRealUserExchangeMessages(messages: TextMessageRow[]): number {
+  return messages.filter((m) => isRealUserExchangeMessage(m)).length;
+}
+
+function isConversationOpenBannerDismissed(storageKey: string): boolean {
+  try {
+    return localStorage.getItem(storageKey) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function persistConversationOpenBannerDismissed(storageKey: string): void {
+  try {
+    localStorage.setItem(storageKey, "1");
+  } catch {
+    /* quota / private mode */
+  }
 }
 
 /** Au plus une proposition `pending` / `proposed` (la plus récente) ; historique inchangé. */
@@ -575,7 +607,7 @@ export default function Chat() {
     async (cid: string): Promise<string | null> => {
       const { data, error } = await supabase
         .from(CHAT_MESSAGES_TABLE)
-        .select("id, body, sender_id, created_at, message_type, activity_proposal_id, metadata, payload")
+        .select("id, body, sender_id, created_at, read_at, message_type, activity_proposal_id, metadata, payload")
         .eq("conversation_id", cid)
         .order("created_at", { ascending: true });
       console.log("[Chat loading] messages result:", {
@@ -893,6 +925,13 @@ export default function Chat() {
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: CHAT_MESSAGES_TABLE, filter },
+        () => {
+          void reloadChatMessages(conversationId);
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: CHAT_MESSAGES_TABLE, filter },
         () => {
           void reloadChatMessages(conversationId);
         },
@@ -1244,25 +1283,72 @@ export default function Chat() {
     return () => window.clearTimeout(timer);
   }, [policyToast]);
 
-  const conversationOpenBannerKey = conversationId
-    ? `splove_chat_open_banner_seen_${conversationId}`
+  const conversationOpenBannerStorageKey = conversationId
+    ? `dismissed_activity_banner_${conversationId}`
     : null;
   const [showConversationOpenBanner, setShowConversationOpenBanner] = useState(false);
+  const realUserMessageCount = useMemo(
+    () => countRealUserExchangeMessages(chatMessages),
+    [chatMessages],
+  );
 
   useEffect(() => {
-    if (!isPostMatchNoActivity || !conversationStarted || !conversationOpenBannerKey) {
+    if (!conversationId || !conversationOpenBannerStorageKey) {
       setShowConversationOpenBanner(false);
       return;
     }
-    const seen = sessionStorage.getItem(conversationOpenBannerKey) === "1";
-    setShowConversationOpenBanner(!seen);
-  }, [isPostMatchNoActivity, conversationStarted, conversationOpenBannerKey]);
+
+    const dismissed = isConversationOpenBannerDismissed(conversationOpenBannerStorageKey);
+    const enoughExchange = realUserMessageCount >= 2;
+    if (enoughExchange && !dismissed) {
+      persistConversationOpenBannerDismissed(conversationOpenBannerStorageKey);
+    }
+
+    const shouldShow =
+      isPostMatchNoActivity && conversationStarted && !dismissed && !enoughExchange;
+
+    let visibleReason = "hidden";
+    if (shouldShow) {
+      visibleReason = "eligible_new_or_early_conversation";
+    } else if (!isPostMatchNoActivity) {
+      visibleReason = "activity_flow_active";
+    } else if (!conversationStarted) {
+      visibleReason = "conversation_not_started";
+    } else if (dismissed) {
+      visibleReason = "dismissed_localStorage";
+    } else if (enoughExchange) {
+      visibleReason = "enough_user_messages";
+    }
+
+    console.log("[Chat] conversation open banner", {
+      conversationId,
+      bannerVisible: shouldShow,
+      visibleReason,
+      realUserMessageCount,
+      dismissed,
+      isPostMatchNoActivity,
+      conversationStarted,
+    });
+
+    setShowConversationOpenBanner(shouldShow);
+  }, [
+    conversationId,
+    conversationOpenBannerStorageKey,
+    isPostMatchNoActivity,
+    conversationStarted,
+    realUserMessageCount,
+  ]);
 
   function dismissConversationOpenBanner() {
-    if (conversationOpenBannerKey) {
-      sessionStorage.setItem(conversationOpenBannerKey, "1");
+    if (conversationOpenBannerStorageKey) {
+      persistConversationOpenBannerDismissed(conversationOpenBannerStorageKey);
     }
     setShowConversationOpenBanner(false);
+    console.log("[Chat] conversation open banner dismissed", {
+      conversationId: conversationId ?? null,
+      dismissed: true,
+      realUserMessageCount,
+    });
   }
 
   useEffect(() => {
@@ -1430,6 +1516,21 @@ export default function Chat() {
     latestProposal,
     hasAcceptedProposal,
   ]);
+
+  /** Dernier message sortant (accusé de lecture sur celui-ci uniquement). */
+  const lastOwnOutgoingMessage = useMemo(() => {
+    const uid = user?.id;
+    if (!uid) return null;
+    for (let i = chatMessages.length - 1; i >= 0; i -= 1) {
+      const m = chatMessages[i];
+      if (!m || m.sender_id !== uid) continue;
+      const mt = m.message_type ?? "text";
+      if (mt === "activity_proposal_response") continue;
+      if (hasAcceptedProposal && mt === "activity_proposal") continue;
+      return m;
+    }
+    return null;
+  }, [chatMessages, user?.id, hasAcceptedProposal]);
 
   function blockFirstMessagePolicy(): boolean {
     if (canSendFreeMessage) return false;
@@ -2320,54 +2421,88 @@ export default function Chat() {
                     return null;
                   }
                   if (mt === "activity_proposal_response") {
-                    return <ActivityResponseBubble key={item.sortKey} message={m} />;
+                    return (
+                      <div key={item.sortKey} className="flex flex-col items-center">
+                        <ActivityResponseBubble message={m} />
+                        <ChatMessageMeta createdAt={m.created_at} align="center" />
+                      </div>
+                    );
                   }
+                  const showReadStatus = mine && lastOwnOutgoingMessage?.id === m.id;
                   return (
                     <div
                       key={item.sortKey}
-                      className={
-                        mine
-                          ? `chat-message-bubble ml-auto ${getOwnMessageBubbleClassName(chatAccentTheme)}`
-                          : "chat-message-bubble mr-auto max-w-[85%] rounded-2xl border border-app-border bg-app-card px-3.5 py-2.5 text-sm leading-snug text-app-text shadow-sm"
-                      }
-                      {...{ "x-apple-data-detectors": "false" }}
+                      className={`flex max-w-[85%] flex-col ${mine ? "ml-auto items-end" : "mr-auto items-start"}`}
                     >
-                      {m.body}
+                      <div
+                        className={
+                          mine
+                            ? `chat-message-bubble ${getOwnMessageBubbleClassName(chatAccentTheme)}`
+                            : "chat-message-bubble rounded-2xl border border-app-border bg-app-card px-3.5 py-2.5 text-sm leading-snug text-app-text shadow-sm"
+                        }
+                        {...{ "x-apple-data-detectors": "false" }}
+                      >
+                        {m.body}
+                      </div>
+                      <ChatMessageMeta
+                        createdAt={m.created_at}
+                        align={mine ? "right" : "left"}
+                        readAt={m.read_at}
+                        showReadStatus={showReadStatus}
+                      />
                     </div>
                   );
                 }
                 const p = item.proposal;
                 if (!p?.id) return null;
                 const mine = p.proposer_id === user?.id;
+                const linkedOwnMsg =
+                  mine && lastOwnOutgoingMessage?.activity_proposal_id === p.id
+                    ? lastOwnOutgoingMessage
+                    : (chatMessages.find(
+                        (row) => row.activity_proposal_id === p.id && row.sender_id === user?.id,
+                      ) ?? null);
+                const showProposalReadStatus =
+                  mine && linkedOwnMsg != null && lastOwnOutgoingMessage?.id === linkedOwnMsg.id;
                 return (
-                  <ActivityProposalBubble
+                  <div
                     key={item.sortKey}
-                    proposal={p}
-                    currentUserId={user?.id}
-                    conversationReady={Boolean(conversationId && user?.id)}
-                    pairBlocked={pairBlocked}
-                    mine={mine}
-                    proposalActionLocked={proposalActionBusy}
-                    proposalActionInFlightId={proposalActionInFlightId}
-                    proposalMutationAction={
-                      proposalMutation?.proposalId === p.id &&
-                      proposalMutation.action !== "counter"
-                        ? proposalMutation.action
-                        : null
-                    }
-                    onOpenDetail={() => setProposalDetail(p)}
-                    onAccept={() => void respondToProposal(p.id, "accepted")}
-                    onDecline={() => void respondToProposal(p.id, "declined")}
-                    onCounter={() => {
-                      setCounterReplaceProposalId(p.id);
-                      setCounterPrefill({
-                        sport: p.sport?.trim() || "",
-                        place: p.location?.trim() || "",
-                      });
-                      openActivityComposer();
-                    }}
-                    onCancel={() => void respondToProposal(p.id, "cancelled")}
-                  />
+                    className={`flex max-w-[92%] flex-col ${mine ? "ml-auto items-end" : "mr-auto items-start"}`}
+                  >
+                    <ActivityProposalBubble
+                      proposal={p}
+                      currentUserId={user?.id}
+                      conversationReady={Boolean(conversationId && user?.id)}
+                      pairBlocked={pairBlocked}
+                      mine={mine}
+                      proposalActionLocked={proposalActionBusy}
+                      proposalActionInFlightId={proposalActionInFlightId}
+                      proposalMutationAction={
+                        proposalMutation?.proposalId === p.id &&
+                        proposalMutation.action !== "counter"
+                          ? proposalMutation.action
+                          : null
+                      }
+                      onOpenDetail={() => setProposalDetail(p)}
+                      onAccept={() => void respondToProposal(p.id, "accepted")}
+                      onDecline={() => void respondToProposal(p.id, "declined")}
+                      onCounter={() => {
+                        setCounterReplaceProposalId(p.id);
+                        setCounterPrefill({
+                          sport: p.sport?.trim() || "",
+                          place: p.location?.trim() || "",
+                        });
+                        openActivityComposer();
+                      }}
+                      onCancel={() => void respondToProposal(p.id, "cancelled")}
+                    />
+                    <ChatMessageMeta
+                      createdAt={p.created_at}
+                      align={mine ? "right" : "left"}
+                      readAt={linkedOwnMsg?.read_at}
+                      showReadStatus={showProposalReadStatus}
+                    />
+                  </div>
                 );
               })}
             </div>

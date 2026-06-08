@@ -13,7 +13,6 @@ import {
   IconBanSoft,
   IconHeartFilled,
   IconPass,
-  IconProfileAvatarPlaceholder,
 } from "../ui/Icon";
 import { VerifiedBadge } from "../VerifiedBadge";
 import { isIdentityVerified } from "../../lib/profileVerification";
@@ -35,6 +34,8 @@ import { useTranslation } from "../../i18n/useTranslation";
 import { formatHeightCmForDisplay } from "../../lib/profileHeightCm";
 import { formatCityDisplay } from "../../lib/formatCityDisplay";
 import { BLOCK_PROFILE_LINK_LABEL, REPORT_LINK_LABEL } from "../../constants/copy";
+import { SPLOVE_BOTTOM_CLEARANCE } from "../../constants/appBottomNavLayout";
+import { usesNativeBottomNavigation } from "../../lib/nativeBottomNav";
 
 export type DiscoverProfileCardModel = {
   id: string;
@@ -86,6 +87,10 @@ export type DiscoverProfileCardProps = {
   onPass: (decisionTimeMs?: number) => void;
   onLike: (decisionTimeMs?: number) => void | Promise<void>;
   onReport: () => void;
+  /** Repli URL photo (public → signée) après échec `<img>`. */
+  onPhotoError?: () => void;
+  /** Diagnostic `[PhotoRender] img_onload` — sans effet métier. */
+  onPhotoLoad?: () => void;
   /** Carte Discover plein focus — photo plus haute, rythme immersif. */
   immersive?: boolean;
 };
@@ -110,9 +115,12 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   onPass,
   onLike,
   onReport,
+  onPhotoError,
+  onPhotoLoad,
   immersive = false,
 }: DiscoverProfileCardProps) {
   const { t } = useTranslation();
+  const nativeBottomNav = usesNativeBottomNavigation();
   const age = useAge(profile.birth_date);
   const showActiveTodayBadge = shouldShowDiscoverActiveTodayBadge(profile);
   const sharedSportLabel = getSharedSport(profile, mySportMatchKeys);
@@ -169,7 +177,9 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
       <div
         className={
           immersive
-            ? "relative min-h-[min(72dvh,620px)] w-full flex-[1] basis-0 cursor-grab touch-none bg-zinc-950 active:cursor-grabbing sm:min-h-[min(68dvh,640px)]"
+            ? nativeBottomNav
+              ? "relative min-h-0 w-full flex-[1] basis-0 cursor-grab touch-none bg-zinc-950 active:cursor-grabbing"
+              : "relative min-h-[min(72dvh,620px)] w-full flex-[1] basis-0 cursor-grab touch-none bg-zinc-950 active:cursor-grabbing sm:min-h-[min(68dvh,640px)]"
             : "relative min-h-[min(64vh,480px)] w-full flex-[1] basis-0 cursor-grab touch-none bg-zinc-950 active:cursor-grabbing sm:min-h-[min(58vh,520px)]"
         }
         style={swipeZoneStyle}
@@ -187,18 +197,25 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
                 : t("profile_photo")
             }
             className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+            onLoad={onPhotoLoad}
+            onError={onPhotoError}
           />
         ) : (
           <button
             type="button"
-            className="absolute inset-0 flex items-center justify-center bg-app-border"
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-zinc-900"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onOpenDetail();
             }}
           >
-            <IconProfileAvatarPlaceholder className="text-app-muted/80" size={88} />
+            <img
+              src="/logo.png"
+              alt=""
+              aria-hidden
+              className="h-14 w-14 object-contain opacity-70"
+            />
           </button>
         )}
         <div
@@ -330,7 +347,18 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
           ) : null}
         </div>
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[10] pb-[max(0.65rem,env(safe-area-inset-bottom))] pt-[max(8.5rem,28vh)]">
+        <div
+          className={
+            immersive && nativeBottomNav
+              ? "pointer-events-none absolute inset-x-0 bottom-0 z-[10] pt-[max(5.5rem,20vh)]"
+              : "pointer-events-none absolute inset-x-0 bottom-0 z-[10] pb-[max(0.65rem,env(safe-area-inset-bottom))] pt-[max(8.5rem,28vh)]"
+          }
+          style={
+            immersive && nativeBottomNav
+              ? ({ paddingBottom: SPLOVE_BOTTOM_CLEARANCE } satisfies CSSProperties)
+              : undefined
+          }
+        >
           <div className="px-5">
             {sharedSportLabel ? (
               <div className="flex flex-wrap items-center gap-2">
@@ -445,7 +473,16 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
             </p>
           </div>
 
-          <div className="pointer-events-auto relative z-[19] mt-6 flex items-center justify-center gap-14 px-6 sm:gap-16 sm:px-9">
+          <div
+            className={`pointer-events-auto relative z-[19] flex items-center justify-center gap-14 px-6 sm:gap-16 sm:px-9 ${
+              immersive && nativeBottomNav ? "mt-3" : "mt-4 sm:mt-6"
+            }`}
+            style={
+              immersive && nativeBottomNav
+                ? ({ marginBottom: 30 } satisfies CSSProperties)
+                : undefined
+            }
+          >
             <motion.button
               type="button"
               whileTap={{ scale: 0.88 }}
@@ -479,15 +516,17 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
         </div>
       </div>
 
-      <div className="border-t border-app-border/85 bg-app-card px-4 py-3.5">
-        <button
-          type="button"
-          onClick={onReport}
-          className="w-full py-1 text-center text-[11px] font-medium text-app-muted underline decoration-app-border underline-offset-2 hover:text-app-muted"
-        >
-          {REPORT_LINK_LABEL}
-        </button>
-      </div>
+      {!immersive ? (
+        <div className="border-t border-app-border/85 bg-app-card px-4 py-3.5">
+          <button
+            type="button"
+            onClick={onReport}
+            className="w-full py-1 text-center text-[11px] font-medium text-app-muted underline decoration-app-border underline-offset-2 hover:text-app-muted"
+          >
+            {REPORT_LINK_LABEL}
+          </button>
+        </div>
+      ) : null}
     </>
   );
 });

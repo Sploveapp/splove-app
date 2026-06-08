@@ -4,7 +4,15 @@ import { useNavigate } from "react-router-dom";
 import sploveMark from "../assets/welcome/splove-mark.png";
 import { NotificationListItem } from "../components/notifications/NotificationListItem";
 import { dispatchInAppNotificationsRefresh } from "../constants";
+import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { formatRelativeTime } from "../lib/formatRelativeTime";
+import {
+  getPushRegistrationSummary,
+  initPushNotificationHandlers,
+  requestPushNotificationsPermission,
+  syncPushTokenIfGranted,
+  type PushPermissionState,
+} from "../lib/pushNotifications";
 import {
   isBellCenterNotificationRow,
   presentNotification,
@@ -26,6 +34,9 @@ export default function NotificationsPage() {
   const [rows, setRows] = useState<InAppNotificationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [pushPermission, setPushPermission] = useState<PushPermissionState>("unsupported");
+  const [pushSavedInDb, setPushSavedInDb] = useState(false);
+  const [pushEnabling, setPushEnabling] = useState(false);
   const realtimeRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const markedAllOnOpenRef = useRef(false);
 
@@ -53,9 +64,29 @@ export default function NotificationsPage() {
     }
   }, []);
 
+  const refreshPushStatus = useCallback(async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.id) {
+      setPushPermission("unsupported");
+      setPushSavedInDb(false);
+      return;
+    }
+    await initPushNotificationHandlers(user.id);
+    await syncPushTokenIfGranted(user.id);
+    const summary = await getPushRegistrationSummary(user.id);
+    setPushPermission(summary.permission);
+    setPushSavedInDb(summary.savedInDb);
+  }, []);
+
   useEffect(() => {
     void load({ markAllReadOnOpen: true });
   }, [load]);
+
+  useEffect(() => {
+    void refreshPushStatus();
+  }, [refreshPushStatus]);
 
   useEffect(() => {
     const id = window.setInterval(() => setNowTick(Date.now()), 60_000);
@@ -116,6 +147,22 @@ export default function NotificationsPage() {
 
   const sorted = useMemo(() => sortNotifications(rows), [rows]);
 
+  async function handleEnablePush() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.id || pushEnabling) return;
+    setPushEnabling(true);
+    try {
+      const result = await requestPushNotificationsPermission(user.id);
+      setPushPermission(result);
+      const summary = await getPushRegistrationSummary(user.id);
+      setPushSavedInDb(summary.savedInDb);
+    } finally {
+      setPushEnabling(false);
+    }
+  }
+
   async function handleOpen(row: InAppNotificationRow) {
     const presentation = presentNotification(row, t);
     if (!row.read) {
@@ -147,6 +194,35 @@ export default function NotificationsPage() {
 
         <h1 className="text-xl font-bold tracking-tight text-app-text">{t("in_app_notif.screen_title")}</h1>
         <p className="mt-1 text-[13px] leading-snug text-app-muted">{t("in_app_notif.screen_subtitle")}</p>
+
+        {pushPermission !== "unsupported" ? (
+          <section
+            className="mt-4 rounded-2xl border border-app-border bg-app-card/80 px-4 py-3.5"
+            aria-labelledby="push-notif-prompt-title"
+          >
+            <h2 id="push-notif-prompt-title" className="text-sm font-semibold text-app-text">
+              {t("push_notif.enable_title")}
+            </h2>
+            <p className="mt-1 text-[13px] leading-snug text-app-muted">{t("push_notif.enable_body")}</p>
+            {pushPermission === "granted" && pushSavedInDb ? (
+              <p className="mt-3 text-[13px] font-medium text-emerald-400/90">{t("push_notif.enabled_status")}</p>
+            ) : pushPermission === "denied" ? (
+              <p className="mt-3 text-[13px] leading-snug text-app-muted">{t("push_notif.denied_hint")}</p>
+            ) : (
+              <button
+                type="button"
+                disabled={pushEnabling}
+                onClick={() => void handleEnablePush()}
+                className="mt-3 w-full rounded-xl px-4 py-3 text-sm font-semibold transition active:scale-[0.99] disabled:opacity-70"
+                style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
+              >
+                {pushEnabling ? t("loading") : t("push_notif.enable_button")}
+              </button>
+            )}
+          </section>
+        ) : (
+          <p className="mt-3 text-[12px] leading-snug text-app-muted/80">{t("push_notif.unsupported")}</p>
+        )}
 
         {loading ? (
           <p className="mt-8 text-sm text-app-muted">{t("loading")}</p>

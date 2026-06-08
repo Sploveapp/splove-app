@@ -1,26 +1,32 @@
+import { useEffect } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
-import { SplashScreen } from "./SplashScreen";
-import { PostLoginProfileSplash } from "./PostLoginProfileSplash";
-import WelcomeSPLove from "../pages/WelcomeSPLove";
+import { logBootDecision, resolveBootRoute } from "../lib/bootRouteDecision";
+import { RouteBootLoader } from "./RouteBootLoader";
 
-/**
- * Point d’entrée `#/` : accueil SPLove si non connecté ; sinon mêmes cibles que les guards existants.
- */
+/** Point d’entrée `#/` : splash → une seule redirection auth / onboarding / move. */
 export function PublicRootEntry() {
-  const { user, session, isAuthInitialized, isLoading, isProfileLoading, isProfileComplete } = useAuth();
+  const auth = useAuth();
+  const decision = resolveBootRoute(auth);
 
-  if (!isAuthInitialized || isLoading) {
-    return <SplashScreen />;
+  useEffect(() => {
+    logBootDecision(decision, "/");
+  }, [decision]);
+
+  if (decision.status === "loading") {
+    return <RouteBootLoader />;
   }
-  if (session?.user?.id && isProfileLoading) {
-    return <PostLoginProfileSplash />;
+
+  if (decision.route === "/auth") {
+    console.log("AUTH_NO_SESSION");
+    return <Navigate to="/auth" replace />;
   }
-  if (user?.id && isProfileComplete) {
-    return <Navigate to="/discover" replace />;
-  }
-  if (user?.id && !isProfileComplete) {
+
+  if (decision.route === "/onboarding") {
+    console.log("AUTH_REDIRECT_ONBOARDING");
     return <Navigate to="/onboarding" replace />;
   }
-  return <WelcomeSPLove />;
+
+  console.log("AUTH_REDIRECT_MOVE");
+  return <Navigate to="/move" replace />;
 }

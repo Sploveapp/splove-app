@@ -1,17 +1,18 @@
 import { useEffect, useState } from "react";
 import { Navigate, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { oauthRedirectUrl } from "../lib/authRedirect";
+import { signInWithGoogleOAuth, subscribeGoogleOAuthBrowserTimeout, SPLOVE_OAUTH_BROWSER_CLOSED_EVENT } from "../lib/capacitorOAuth";
+import { consumeAuthOAuthUserMessage } from "../lib/authOAuthUserMessage";
+import { GOOGLE_OAUTH_USER_ERROR_MSG } from "../lib/googleOAuthFlow";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
+import { beginPostOAuthSplash } from "../lib/postOAuthSplash";
 import { useAuth } from "../contexts/AuthContext";
-import { APP_BG, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
-import { SplashScreen } from "../components/SplashScreen";
-import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
+import { APP_BG, APP_TEXT_MUTED, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
+import { isAppAuthReady } from "../lib/isAppAuthReady";
 import { IconEye, IconEyeOff } from "../components/ui/Icon";
 import { useTranslation } from "../i18n/useTranslation";
 import { stashPendingReferralCodeFromSearch } from "../services/referral.service";
 import { clearOnboardingUiLocalCache } from "../lib/onboardingUiLocalCache";
-
 function signupModeFromSearchParams(sp: URLSearchParams): boolean {
   return sp.get("signup") === "1" || sp.get("mode") === "signup";
 }
@@ -19,6 +20,123 @@ function signupModeFromSearchParams(sp: URLSearchParams): boolean {
 /** Welcome « Continuer avec email » : formulaire direct sans palier Apple/Google/Email. */
 function emailFormDirectFromSearchParams(sp: URLSearchParams): boolean {
   return sp.get("email") === "1";
+}
+
+/** Fond sportif — asset public (compatible Capacitor iOS). */
+const AUTH_SPORT_BG_IMAGE = `${import.meta.env.BASE_URL}welcome-sport-clean.png?v=2`.replace(/\/{2,}/g, "/");
+
+function AuthSportShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        position: "relative",
+        minHeight: "100vh",
+        backgroundColor: "#050509",
+        backgroundImage: `url(${AUTH_SPORT_BG_IMAGE})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center 38%",
+        backgroundRepeat: "no-repeat",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        padding: "20px 18px 36px",
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
+      }}
+    >
+      <div
+        aria-hidden
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 0,
+          pointerEvents: "none",
+          background:
+            "linear-gradient(to bottom, rgba(0,0,0,0.35), rgba(0,0,0,0.65), rgba(0,0,0,0.82))",
+        }}
+      />
+      <div style={{ position: "relative", zIndex: 2, width: "100%" }}>{children}</div>
+    </div>
+  );
+}
+
+function AuthBrandMark({
+  slogan,
+  subtitle,
+}: {
+  slogan: string;
+  subtitle: string;
+}) {
+  return (
+    <div style={{ textAlign: "center", marginBottom: 28 }}>
+      <div
+        style={{
+          position: "relative",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          marginBottom: 20,
+        }}
+      >
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: -24,
+            borderRadius: "50%",
+            background:
+              "radial-gradient(circle, rgba(255, 30, 45, 0.42) 0%, rgba(255, 30, 45, 0.08) 48%, transparent 72%)",
+            filter: "blur(10px)",
+            pointerEvents: "none",
+          }}
+        />
+        <img
+          src="/logo.png"
+          alt="SPLove"
+          width={96}
+          height={96}
+          fetchPriority="high"
+          decoding="sync"
+          draggable={false}
+          style={{
+            position: "relative",
+            width: 96,
+            height: 96,
+            objectFit: "contain",
+            filter: "drop-shadow(0 8px 28px rgba(255, 30, 45, 0.35))",
+          }}
+        />
+      </div>
+      <h1
+        style={{
+          margin: "0 0 10px 0",
+          fontSize: "30px",
+          fontWeight: 800,
+          color: "rgba(255,255,255,0.98)",
+          lineHeight: 1.15,
+          letterSpacing: "-0.03em",
+          textShadow: "0 1px 14px rgba(0,0,0,0.45)",
+        }}
+      >
+        {slogan}
+      </h1>
+      <p
+        style={{
+          margin: 0,
+          fontSize: "15px",
+          fontWeight: 500,
+          color: "rgba(255,255,255,0.78)",
+          lineHeight: 1.45,
+          maxWidth: 320,
+          marginLeft: "auto",
+          marginRight: "auto",
+          textShadow: "0 1px 10px rgba(0,0,0,0.45)",
+        }}
+      >
+        {subtitle}
+      </p>
+    </div>
+  );
 }
 
 function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
@@ -35,16 +153,21 @@ function authErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
   if (m.includes("user already registered")) {
     return language === "en" ? "This account already exists. Log in." : "Ce compte existe deja. Connecte-toi.";
   }
+  if (raw.includes(GOOGLE_OAUTH_USER_ERROR_MSG)) {
+    return GOOGLE_OAUTH_USER_ERROR_MSG;
+  }
   return language === "en"
     ? "Unable to sign in right now. Please try again."
     : "Connexion impossible. Reessaie dans un instant.";
 }
 
 export default function Auth() {
-  const { t, language, setLanguage } = useTranslation();
+  const { t, language } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { user, profile, isProfileComplete, isLoading, isAuthInitialized, isProfileLoading } = useAuth();
+  const { user, session, profile, isProfileComplete, isLoading, isAuthInitialized, isProfileLoading } =
+    useAuth();
+  const appAuthReady = isAppAuthReady({ isAuthInitialized, session, profile });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -61,6 +184,26 @@ export default function Auth() {
       stashPendingReferralCodeFromSearch(new URLSearchParams(window.location.search).get("ref"));
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    const pending = consumeAuthOAuthUserMessage();
+    if (pending) {
+      setMessage({ type: "error", text: pending });
+    }
+  }, []);
+
+  useEffect(() => {
+    return subscribeGoogleOAuthBrowserTimeout(() => {
+      setMessage({ type: "error", text: GOOGLE_OAUTH_USER_ERROR_MSG });
+      setOauthLoading(null);
+    });
+  }, []);
+
+  useEffect(() => {
+    const onBrowserClosed = () => setOauthLoading(null);
+    window.addEventListener(SPLOVE_OAUTH_BROWSER_CLOSED_EVENT, onBrowserClosed);
+    return () => window.removeEventListener(SPLOVE_OAUTH_BROWSER_CLOSED_EVENT, onBrowserClosed);
+  }, []);
 
   useEffect(() => {
     if (signupModeFromSearchParams(searchParams)) {
@@ -90,27 +233,25 @@ export default function Auth() {
 
   const emailDirect = emailFormDirectFromSearchParams(searchParams);
   const showEmailFormBlock = showEmailForm || emailDirect;
+  const authBootstrapping = !isAuthInitialized || isLoading;
 
-  if (!isAuthInitialized || isLoading) {
-    return <SplashScreen />;
-  }
-
-  if (user && isProfileLoading) {
-    return <PostLoginProfileSplash />;
+  if (user?.id && isProfileLoading && !appAuthReady) {
+    console.log("AUTH_REDIRECT_MOVE", { phase: "auth_page_session_pending_profile" });
+    return <Navigate to="/move" replace />;
   }
 
   if (user) {
     const pr = profile as Record<string, unknown> | null | undefined;
     if (isProfileComplete) {
-      console.log("[ONBOARDING_GUARD] auth redirect -> /discover", {
+      console.log("AUTH_REDIRECT_MOVE", {
         userId: user.id,
         profile_completed: pr?.profile_completed ?? null,
         onboarding_completed: pr?.onboarding_completed ?? null,
         onboarding_done: pr?.onboarding_done ?? null,
       });
-      return <Navigate to="/discover" replace />;
+      return <Navigate to="/move" replace />;
     }
-    console.log("[ONBOARDING_GUARD] auth redirect -> /onboarding", {
+    console.log("AUTH_REDIRECT_ONBOARDING", {
       userId: user.id,
       profile_completed: pr?.profile_completed ?? null,
       onboarding_completed: pr?.onboarding_completed ?? null,
@@ -123,18 +264,15 @@ export default function Auth() {
   async function signInWithGoogle() {
     setMessage(null);
     setOauthLoading("google");
+    beginPostOAuthSplash();
     try {
-      console.log("[GoogleOAuth] click");
-      console.log("[GoogleOAuth] redirectTo", oauthRedirectUrl());
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: { redirectTo: oauthRedirectUrl() },
-      });
-      if (error) throw error;
-      console.log("[GoogleOAuth] redirect started");
+      const { error } = await signInWithGoogleOAuth();
+      if (error) {
+        setMessage({ type: "error", text: GOOGLE_OAUTH_USER_ERROR_MSG });
+        setOauthLoading(null);
+      }
     } catch (err: unknown) {
-      setMessage({ type: "error", text: authErrorToUserMessage(err, language) });
-    } finally {
+      setMessage({ type: "error", text: GOOGLE_OAUTH_USER_ERROR_MSG });
       setOauthLoading(null);
     }
   }
@@ -207,133 +345,29 @@ export default function Auth() {
     boxShadow: "0 10px 30px rgba(0,0,0,0.32)",
   };
 
-  const langPillBtn = (lang: "fr" | "en"): React.CSSProperties => ({
-    padding: "5px 10px",
-    borderRadius: "999px",
-    border: "none",
-    background: language === lang ? BRAND_BG : "transparent",
-    color: language === lang ? TEXT_ON_BRAND : "rgba(255,255,255,0.55)",
-    fontSize: "11px",
-    fontWeight: 700,
-    letterSpacing: "0.06em",
-    cursor: "pointer",
-    transition: "background-color 150ms ease, color 150ms ease",
-  });
-
   return (
-    <div
-      style={{
-        position: "relative",
-        minHeight: "100vh",
-        background: "#000",
-        overflow: "hidden",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        padding: "20px 18px 36px",
-        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
-      }}
-    >
+    <AuthSportShell>
       <style>{`
-        @keyframes spvAuthFadeUp {
-          from { opacity: 0; transform: translate3d(0, 10px, 0); }
-          to { opacity: 1; transform: translate3d(0, 0, 0); }
-        }
-        .spv-auth-fade-in {
-          opacity: 0;
-          animation: spvAuthFadeUp 380ms ease-out forwards;
-          will-change: opacity, transform;
-        }
         .spv-auth-tactile {
           transition: transform 140ms ease, box-shadow 200ms ease, opacity 200ms ease;
         }
         .spv-auth-tactile:active {
           transform: scale(0.985);
         }
+        @keyframes spvAuthCtaIn {
+          from { opacity: 0; transform: translate3d(0, 8px, 0); }
+          to { opacity: 1; transform: translate3d(0, 0, 0); }
+        }
+        .spv-auth-cta-in {
+          animation: spvAuthCtaIn 280ms ease-out forwards;
+        }
         @media (prefers-reduced-motion: reduce) {
-          .spv-auth-fade-in { animation: none !important; opacity: 1 !important; transform: none !important; }
+          .spv-auth-cta-in { animation: none !important; opacity: 1 !important; transform: none !important; }
           .spv-auth-tactile { transition: none !important; }
         }
       `}</style>
 
-      <video
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="auto"
-        aria-hidden
-        tabIndex={-1}
-        disablePictureInPicture
-        disableRemotePlayback
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-          zIndex: 0,
-          pointerEvents: "none",
-        }}
-      >
-        <source src="/videos/splove-hero.mp4" type="video/mp4" />
-      </video>
-
       <div
-        aria-hidden
-        style={{
-          position: "absolute",
-          inset: 0,
-          zIndex: 1,
-          pointerEvents: "none",
-          background:
-            "linear-gradient(to bottom, rgba(0,0,0,0.45), rgba(0,0,0,0.78))",
-        }}
-      />
-
-      <div
-        role="group"
-        aria-label="Language"
-        style={{
-          position: "absolute",
-          top: "max(env(safe-area-inset-top, 0px), 14px)",
-          right: 14,
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 2,
-          padding: "3px",
-          borderRadius: "999px",
-          background: "rgba(255,255,255,0.06)",
-          border: `1px solid rgba(255,255,255,0.12)`,
-          backdropFilter: "blur(8px)",
-          WebkitBackdropFilter: "blur(8px)",
-          zIndex: 10,
-        }}
-      >
-        <button
-          type="button"
-          aria-label="Français"
-          aria-pressed={language === "fr"}
-          onClick={() => setLanguage("fr")}
-          style={langPillBtn("fr")}
-        >
-          FR
-        </button>
-        <span aria-hidden style={{ color: "rgba(255,255,255,0.18)", fontSize: 11 }}>
-          |
-        </span>
-        <button
-          type="button"
-          aria-label="English"
-          aria-pressed={language === "en"}
-          onClick={() => setLanguage("en")}
-          style={langPillBtn("en")}
-        >
-          EN
-        </button>
-      </div>
-      <div
-        className="spv-auth-fade-in"
         style={{
           position: "relative",
           zIndex: 2,
@@ -342,40 +376,20 @@ export default function Auth() {
           margin: "0 auto",
         }}
       >
-        <div style={{ textAlign: "center", marginBottom: "26px" }}>
-          <img
-            src="/logo.png"
-            alt=""
-            style={{ width: 78, height: "auto", marginBottom: 18, opacity: 0.96 }}
-          />
-          <h1
-            style={{
-              margin: "0 0 10px 0",
-              fontSize: "28px",
-              fontWeight: 800,
-              color: "rgba(255,255,255,0.98)",
-              lineHeight: 1.18,
-              letterSpacing: "-0.02em",
-              textShadow: "0 1px 14px rgba(0,0,0,0.45)",
-            }}
-          >
-            {t("auth_hero_main_slogan")}
-          </h1>
-          <p
-            style={{
-              margin: 0,
-              fontSize: "15px",
-              fontWeight: 500,
-              color: "rgba(255,255,255,0.78)",
-              lineHeight: 1.45,
-              textShadow: "0 1px 10px rgba(0,0,0,0.45)",
-            }}
-          >
-            {t("auth_hero_subtitle")}
-          </p>
-        </div>
+        <AuthBrandMark slogan={t("auth_hero_main_slogan")} subtitle={t("auth_hero_subtitle")} />
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div
+          className={authBootstrapping ? undefined : "spv-auth-cta-in"}
+          aria-busy={authBootstrapping}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+            opacity: authBootstrapping ? 0.42 : 1,
+            pointerEvents: authBootstrapping ? "none" : "auto",
+            transition: "opacity 200ms ease",
+          }}
+        >
           {!emailDirect ? (
             <>
               <button
@@ -385,7 +399,7 @@ export default function Auth() {
                   ...btnOAuth,
                   opacity: loading || oauthLoading ? 0.5 : 0.6,
                 }}
-                disabled={!!oauthLoading || loading}
+                disabled={authBootstrapping || !!oauthLoading || loading}
                 onClick={handleAppleComingSoon}
               >
                 {t("continue_with_apple")}
@@ -405,7 +419,7 @@ export default function Auth() {
                 type="button"
                 className="spv-auth-tactile"
                 style={btnOAuth}
-                disabled={!!oauthLoading || loading}
+                disabled={authBootstrapping || !!oauthLoading || loading}
                 onClick={() => void signInWithGoogle()}
               >
                 {oauthLoading === "google" ? `${t("loading")}` : t("continue_with_google")}
@@ -414,6 +428,7 @@ export default function Auth() {
               <button
                 type="button"
                 className="spv-auth-tactile"
+                disabled={authBootstrapping}
                 onClick={() => {
                   setShowEmailForm((v) => !v);
                   setMessage(null);
@@ -585,14 +600,13 @@ export default function Auth() {
             textAlign: "center",
             fontSize: "11px",
             lineHeight: 1.5,
-            color: "rgba(255,255,255,0.62)",
+            color: APP_TEXT_MUTED,
             padding: "0 8px",
-            textShadow: "0 1px 8px rgba(0,0,0,0.45)",
           }}
         >
           {t("auth_terms_notice")}
         </p>
       </div>
-    </div>
+    </AuthSportShell>
   );
 }

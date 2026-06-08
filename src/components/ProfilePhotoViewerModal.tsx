@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { useTranslation } from "../i18n/useTranslation";
+import { SPLOVE_BOTTOM_CLEARANCE } from "../constants/appBottomNavLayout";
+import type { ProfilePhotoUrlFields } from "../lib/profilePhotoDisplayUrl";
+import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
 
 type Props = {
   isOpen: boolean;
@@ -9,9 +12,11 @@ type Props = {
   rawRefs: readonly string[];
   initialIndex: number;
   nameForAlt: string | null;
+  /** Champs photo profil — diagnostic `[PhotoRender]` uniquement. */
+  profilePhotoFields?: ProfilePhotoUrlFields | null;
 };
 
-export function ProfilePhotoViewerModal({ isOpen, onClose, rawRefs, initialIndex, nameForAlt }: Props) {
+export function ProfilePhotoViewerModal({ isOpen, onClose, rawRefs, initialIndex, nameForAlt, profilePhotoFields }: Props) {
   const { t } = useTranslation();
   const list = useMemo(
     () => rawRefs.map((r) => String(r).trim()).filter(Boolean),
@@ -56,6 +61,32 @@ export function ProfilePhotoViewerModal({ isOpen, onClose, rawRefs, initialIndex
     };
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen || !rawCurrent) return;
+    PhotoRenderLog.displaySrc({
+      screen: "PhotoViewer",
+      displaySrc: displayUrl,
+      resolvedUrl: displayUrl,
+      profile: profilePhotoFields,
+      extra: { rawRef: rawCurrent, index, listLength: list.length },
+    });
+    PhotoRenderLog.resolvedUrl({
+      screen: "PhotoViewer",
+      displaySrc: displayUrl,
+      resolvedUrl: displayUrl,
+      profile: profilePhotoFields,
+      extra: { rawRef: rawCurrent, index, listLength: list.length },
+    });
+  }, [isOpen, rawCurrent, displayUrl, index, list.length, profilePhotoFields]);
+
+  const photoViewerImgHandlers = chainPhotoRenderHandlers({
+    screen: "PhotoViewer",
+    displaySrc: displayUrl,
+    resolvedUrl: displayUrl,
+    profile: profilePhotoFields,
+    extra: { rawRef: rawCurrent, index, listLength: list.length },
+  });
+
   if (!isOpen || list.length === 0) return null;
 
   const alt = nameForAlt
@@ -72,7 +103,11 @@ export function ProfilePhotoViewerModal({ isOpen, onClose, rawRefs, initialIndex
       <button
         type="button"
         onClick={onClose}
-        className="absolute right-3 top-3 z-30 flex h-12 min-w-[44px] items-center justify-center rounded-full bg-white/12 px-4 text-[15px] font-semibold text-white backdrop-blur-sm hover:bg-white/20"
+        className="absolute z-[210] flex min-h-[44px] min-w-[44px] items-center justify-center rounded-full bg-white/12 px-4 text-[15px] font-semibold text-white backdrop-blur-sm hover:bg-white/20"
+        style={{
+          top: "calc(env(safe-area-inset-top, 0px) + 14px)",
+          right: "16px",
+        }}
         aria-label={t("close")}
       >
         {t("close")}
@@ -110,6 +145,8 @@ export function ProfilePhotoViewerModal({ isOpen, onClose, rawRefs, initialIndex
             alt={alt}
             className="max-h-[min(100dvh,100vh)] max-w-full object-contain"
             onClick={(e) => e.stopPropagation()}
+            onLoad={photoViewerImgHandlers.onLoad}
+            onError={photoViewerImgHandlers.onError}
           />
         ) : (
           <div className="text-sm text-white/50">{t("loading")}</div>
@@ -117,7 +154,11 @@ export function ProfilePhotoViewerModal({ isOpen, onClose, rawRefs, initialIndex
       </div>
 
       {hasNav ? (
-        <p className="pb-4 text-center text-xs text-white/60" aria-hidden>
+        <p
+          className="text-center text-xs text-white/60"
+          style={{ paddingBottom: SPLOVE_BOTTOM_CLEARANCE }}
+          aria-hidden
+        >
           {index + 1} / {list.length}
         </p>
       ) : null}

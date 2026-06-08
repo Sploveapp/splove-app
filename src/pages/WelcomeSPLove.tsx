@@ -2,12 +2,17 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Bike, CircleDot, Footprints, Mountain, Waves } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
+import { beginPostOAuthSplash } from "../lib/postOAuthSplash";
 import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
+import { isAppAuthReady } from "../lib/isAppAuthReady";
 import { APP_BORDER, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { useTranslation } from "../i18n/useTranslation";
 import welcomeLogoMark from "../assets/welcome/splove-mark.png";
-import { supabase } from "../lib/supabase";
-import { oauthRedirectUrl } from "../lib/authRedirect";
+import {
+  GOOGLE_OAUTH_INTERRUPTED_MSG,
+  signInWithGoogleOAuth,
+  subscribeGoogleOAuthBrowserTimeout,
+} from "../lib/capacitorOAuth";
 
 /** WebKit iOS Safari : backdrop-filter + calques peut dupliquer le rendu des CTA. */
 function welcomeIsIosSafari(): boolean {
@@ -31,6 +36,9 @@ function oauthErrorToUserMessage(err: unknown, language: "fr" | "en"): string {
   }
   if (m.includes("user already registered")) {
     return language === "en" ? "This account already exists. Log in." : "Ce compte existe deja. Connecte-toi.";
+  }
+  if (raw.includes(GOOGLE_OAUTH_INTERRUPTED_MSG)) {
+    return GOOGLE_OAUTH_INTERRUPTED_MSG;
   }
   return language === "en"
     ? "Unable to sign in right now. Please try again."
@@ -105,7 +113,9 @@ const WELCOME_BG_IMAGE = `${import.meta.env.BASE_URL}welcome-sport-clean.png?v=2
 export default function WelcomeSPLove() {
   const navigate = useNavigate();
   const { t, language, setLanguage } = useTranslation();
-  const { user, isAuthInitialized, isLoading, isProfileLoading, isProfileComplete } = useAuth();
+  const { user, session, profile, isAuthInitialized, isLoading, isProfileLoading, isProfileComplete } =
+    useAuth();
+  const appAuthReady = isAppAuthReady({ isAuthInitialized, session, profile });
   const [logoSrc, setLogoSrc] = useState<string>(welcomeLogoMark);
   const [appleNotice, setAppleNotice] = useState(false);
   const appleTimerRef = useRef<number | undefined>(undefined);
@@ -123,6 +133,13 @@ export default function WelcomeSPLove() {
     return () => {
       if (appleTimerRef.current !== undefined) window.clearTimeout(appleTimerRef.current);
     };
+  }, []);
+
+  useEffect(() => {
+    return subscribeGoogleOAuthBrowserTimeout((text) => {
+      setOauthBanner(text || GOOGLE_OAUTH_INTERRUPTED_MSG);
+      setOauthLoading(null);
+    });
   }, []);
 
   useEffect(() => {
@@ -164,11 +181,9 @@ export default function WelcomeSPLove() {
     if (!navigationReady) return;
     setOauthBanner(null);
     setOauthLoading("google");
+    beginPostOAuthSplash();
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: { redirectTo: oauthRedirectUrl() },
-      });
+      const { error } = await signInWithGoogleOAuth();
       if (error) throw error;
     } catch (err: unknown) {
       setOauthBanner(oauthErrorToUserMessage(err, language));
@@ -204,7 +219,7 @@ export default function WelcomeSPLove() {
       className="relative min-h-[100dvh] w-full overflow-hidden"
       style={{ backgroundColor: "#050509", color: textMain }}
     >
-      {user?.id && isProfileLoading ? <PostLoginProfileSplash /> : null}
+      {user?.id && isProfileLoading && !appAuthReady ? <PostLoginProfileSplash /> : null}
       <img
         src={WELCOME_BG_IMAGE}
         alt=""

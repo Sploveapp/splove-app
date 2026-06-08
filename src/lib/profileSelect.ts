@@ -36,6 +36,10 @@ const PROFILE_SELECT_GATE_FLAGS_NAMES =
 export const PROFILE_SELECT_MINIMAL =
   "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed, onboarding_completed";
 
+/** Post-OAuth : routing + geo Discover + photos (évite profil sans URLs sur iOS). */
+export const PROFILE_SELECT_OAUTH_DISCOVER_GATE =
+  "id, first_name, birth_date, gender, looking_for, profile_completed, onboarding_completed, onboarding_done, portrait_url, fullbody_url, main_photo_url, avatar_url, city, latitude, longitude, discovery_radius_km, sport_match_preference";
+
 const PROFILE_SELECT_MINIMAL_NO_ONBOARDING =
   "id, first_name, birth_date, gender, looking_for, intent, meet_pref, accepted_terms_at, accepted_privacy_at, portrait_url, fullbody_url, main_photo_url, profile_completed";
 
@@ -62,6 +66,157 @@ export const PROFILE_LOAD_TIERS_FOR_AUTH: string[] = [
   PROFILE_SELECT_ULTRA,
   PROFILE_SELECT_ULTRA_FLAGS,
 ];
+
+/** Post-login OAuth : paliers sans colonnes optionnelles d’abord (évite 42703 lents). */
+export const PROFILE_LOAD_TIERS_FAST_AUTH: string[] = [
+  PROFILE_SELECT_ULTRA_FLAGS,
+  PROFILE_SELECT_GATE_FLAGS_NAMES,
+  PROFILE_SELECT_OAUTH_DISCOVER_GATE,
+];
+
+/** Timeout fetch profil fast (background, non bloquant UI). */
+export const PROFILE_FETCH_FAST_MS = 2_000;
+
+/** Profil minimal pour afficher le shell Discover (pas d’enrichissement optionnel). */
+export function isProfileMinimalForDiscoverGate(
+  profile: { id?: string; first_name?: unknown; birth_date?: unknown; gender?: unknown; looking_for?: unknown; profile_completed?: unknown } | null | undefined,
+): boolean {
+  if (!profile?.id) return false;
+  return (
+    "first_name" in profile &&
+    "birth_date" in profile &&
+    "gender" in profile &&
+    "looking_for" in profile &&
+    "profile_completed" in profile
+  );
+}
+
+/** Timeout max bootstrap post-login (AuthContext + Discover feed). */
+export const POST_LOGIN_BOOT_MAX_MS = 2_000;
+
+/** Max wait auth bootstrap (iOS) — plafond 2 s. */
+export const AUTH_BOOTSTRAP_MAX_MS = POST_LOGIN_BOOT_MAX_MS;
+
+/** Max wait for profile fetch before unblocking app bootstrap (OAuth / post-login). */
+export const AUTH_PROFILE_BOOTSTRAP_MAX_MS = POST_LOGIN_BOOT_MAX_MS;
+
+/** Tentatives max (réseau) pour fetch profil auth. */
+export const AUTH_PROFILE_FETCH_MAX_ATTEMPTS = 2;
+
+/** Durée max écran OAuth (AuthCallback) — conservé pour référence, plus de redirect forcé. */
+export const OAUTH_SPLASH_MAX_MS = 1_500;
+
+/**
+ * Discover peut s’afficher : profil terminé ou noyau minimal — les colonnes optionnelles
+ * absentes (language, adapted openness, etc.) ne doivent jamais bloquer le rendu.
+ */
+export function canShowDiscoverShell(
+  profile: {
+    id?: string;
+    profile_completed?: unknown;
+    onboarding_completed?: unknown;
+    onboarding_done?: unknown;
+    first_name?: unknown;
+    birth_date?: unknown;
+    gender?: unknown;
+    looking_for?: unknown;
+  } | null | undefined,
+): boolean {
+  if (!profile?.id) return false;
+  if (profile.profile_completed === true) return true;
+  const row = profile as Record<string, unknown>;
+  if (row.onboarding_completed === true || row.onboarding_done === true) return true;
+  return isProfileMinimalForDiscoverGate(profile);
+}
+
+/** Délai max pour décider /move vs /onboarding après OAuth (non bloquant feed). */
+export const OAUTH_ROUTE_RESOLVE_MS = 500;
+
+export function isProfileCompleteForMove(
+  profile: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!profile) return false;
+  if (profile.profile_completed === true) return true;
+  if (profile.onboarding_completed === true) return true;
+  if (profile.onboarding_done === true) return true;
+  return false;
+}
+
+/** Route post-OAuth : /move si profil terminé, sinon /onboarding (attend le profil). */
+export async function resolvePostOAuthPath(
+  client: SupabaseClient,
+  userId: string,
+): Promise<"/move" | "/onboarding"> {
+  const result = await selectProfilesFirstMatch(
+    client,
+    userId,
+    PROFILE_LOAD_TIERS_FAST_AUTH,
+    "[oauth-route]",
+  );
+  const row = (result.data as Record<string, unknown> | null) ?? null;
+  if (!row) {
+    console.warn("[BOOT] resolvePostOAuthPath — profil absent, onboarding par défaut");
+    return "/onboarding";
+  }
+  return isProfileCompleteForMove(row) ? "/move" : "/onboarding";
+}
+
+const OPTIONAL_COLS_SKIP_STORAGE_KEY = "splove_profile_optional_cols_skip_v1";
+
+function readSkippedOptionalCols(): Set<string> {
+  try {
+    const raw = sessionStorage.getItem(OPTIONAL_COLS_SKIP_STORAGE_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((x): x is string => typeof x === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function rememberSkippedOptionalCol(column: string): void {
+  const set = readSkippedOptionalCols();
+  if (set.has(column)) return;
+  set.add(column);
+  try {
+    sessionStorage.setItem(OPTIONAL_COLS_SKIP_STORAGE_KEY, JSON.stringify([...set]));
+  } catch {
+    /* ignore */
+  }
+}
+
+const ADAPTED_OPENNESS_SKIP_KEY = "splove_profile_adapted_openness_skip_v1";
+
+/** Évite les doubles SELECT open_to_adapted / pref_open_to_adapted si absents en prod. */
+export function shouldSkipAdaptedOpennessFetch(): boolean {
+  try {
+    return sessionStorage.getItem(ADAPTED_OPENNESS_SKIP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markAdaptedOpennessFetchSkipped(): void {
+  try {
+    sessionStorage.setItem(ADAPTED_OPENNESS_SKIP_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Évite les SELECT optionnels bloquants au cold start post-OAuth (colonnes souvent absentes en prod). */
+export function seedPostLoginOptionalColSkips(): void {
+  for (const col of OPTIONAL_PROFILE_FIELDS) {
+    rememberSkippedOptionalCol(col);
+  }
+  markAdaptedOpennessFetchSkipped();
+}
+
+export function shouldSkipAllOptionalProfileFields(): boolean {
+  const skipped = readSkippedOptionalCols();
+  return OPTIONAL_PROFILE_FIELDS.every((c) => skipped.has(c));
+}
 
 const ONBOARDING_HYDRATE_FULL =
   "id, first_name, birth_date, gender, looking_for, intent, city, latitude, longitude, discovery_radius_km, location_source, sport_intensity, meet_vibe, onboarding_variant, sport_motivation, sport_phrase, practice_preferences, portrait_url, fullbody_url, main_photo_url, avatar_url, photo2_path, portrait_path, fullbody_path, activity_photo_path";
@@ -173,8 +328,6 @@ export const OPTIONAL_PROFILE_FIELDS = [
   "sport_match_preference",
   "needs_adapted_activities",
   "sport_time",
-  "open_to_adapted_activities",
-  "pref_open_to_adapted_activity",
   "boost_credits",
   "beta_splove_plus_unlocked",
   /** Identité (Veriff ou équivalent) — badge « Profil vérifié » uniquement avec ces flags. */
@@ -192,8 +345,13 @@ export async function mergeOptionalProfileFields(
   client: SupabaseClient,
   userId: string,
 ): Promise<Record<string, unknown>> {
-  let cols = [...OPTIONAL_PROFILE_FIELDS];
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  if (shouldSkipAllOptionalProfileFields()) {
+    return {};
+  }
+  const skipped = readSkippedOptionalCols();
+  let cols = OPTIONAL_PROFILE_FIELDS.filter((c) => !skipped.has(c));
+  if (cols.length === 0) return {};
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     if (cols.length === 0) return {};
     const { data, error } = await client
       .from("profiles")
@@ -206,7 +364,9 @@ export async function mergeOptionalProfileFields(
     if (!error) return {};
     if (isRecoverableUnknownColumnError(error)) {
       const msg = error.message ?? "";
-      const m = msg.match(/column\s+["']?([a-zA-Z0-9_]+)["']?/i);
+      const m =
+        msg.match(/column\s+profiles\.["']?([a-zA-Z0-9_]+)["']?/i) ??
+        msg.match(/column\s+["']?([a-zA-Z0-9_]+)["']?/i);
       const miss = m?.[1] ?? null;
       if (import.meta.env.DEV && attempt === 0) {
         console.debug("[PROFILE_OPTIONAL_FIELDS_SKIPPED]", {
@@ -216,6 +376,7 @@ export async function mergeOptionalProfileFields(
         });
       }
       if (miss && cols.some((x) => x === miss)) {
+        rememberSkippedOptionalCol(miss);
         cols = cols.filter((x) => x !== miss);
       } else {
         cols = cols.slice(0, -1);

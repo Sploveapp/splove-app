@@ -27,34 +27,71 @@ import Notifications from "./pages/Notifications";
 import LegalCGU from "./pages/LegalCGU.tsx";
 import PrivacyPolicy from "./pages/PrivacyPolicy.tsx";
 import { PublicRootEntry } from "./components/PublicRootEntry";
+import { BootSplashGate } from "./components/BootSplashGate";
+import { PostOAuthSplashGate } from "./components/PostOAuthSplashGate";
+import { isOauthProcessingLocked } from "./lib/oauthCallbackLock";
+import { isNativeCapacitorApp } from "./lib/authRedirect";
+import { SplashScreen } from "./components/SplashScreen";
+import { PushNotificationsBridge } from "./components/PushNotificationsBridge";
+import { NativeShellVisibilityBridge } from "./components/NativeShellVisibilityBridge";
+
+function AppRouteRedirectFallback() {
+  return <SplashScreen overlay />;
+}
+
 function App() {
+  const oauthLocked = isOauthProcessingLocked();
   const hash = window.location.hash;
+  const native = isNativeCapacitorApp();
+
   if (
+    !oauthLocked &&
     window.location.pathname === "/auth/callback" &&
     hash &&
     /^#\/(profile|discover|onboarding)(\/|$|[?#])/.test(hash)
   ) {
-    window.location.replace(window.location.origin + hash);
-    return null;
+    if (native) {
+      window.location.hash = hash.startsWith("#") ? hash : `#${hash}`;
+    } else {
+      window.location.replace(window.location.origin + hash);
+    }
+    return <AppRouteRedirectFallback />;
   }
-  if (window.location.pathname === "/auth/callback" && !window.location.hash) {
-    window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/auth/callback${window.location.search}`);
-    return null;
+  if (!oauthLocked && window.location.pathname === "/auth/callback" && !window.location.hash) {
+    const callbackHash = `#/auth/callback${window.location.search}`;
+    if (native) {
+      window.location.hash = callbackHash;
+    } else {
+      window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}${callbackHash}`);
+    }
+    return <AppRouteRedirectFallback />;
   }
   if (window.location.pathname === "/cgu" && !window.location.hash) {
-    window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/cgu`);
-    return null;
+    if (native) {
+      window.location.hash = "#/cgu";
+    } else {
+      window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/cgu`);
+    }
+    return <AppRouteRedirectFallback />;
   }
   if (window.location.pathname === "/privacy" && !window.location.hash) {
-    window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/privacy`);
-    return null;
+    if (native) {
+      window.location.hash = "#/privacy";
+    } else {
+      window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/privacy`);
+    }
+    return <AppRouteRedirectFallback />;
   }
 
   return (
     <HashRouter>
       <AuthProvider>
-        <RecoveryRedirect />
-        <Routes>
+        <NativeShellVisibilityBridge />
+        <PushNotificationsBridge />
+        <BootSplashGate>
+        <PostOAuthSplashGate>
+          <RecoveryRedirect />
+          <Routes>
           <Route path="/" element={<PublicRootEntry />} />
           <Route path="/auth" element={<Auth />} />
           {/* OAuth return: outside ProtectedRoute; AuthContext must not force /auth on this path */}
@@ -72,8 +109,8 @@ function App() {
                 <Routes>
                   <Route element={<AppLayout />}>
                     <Route path="/onboarding" element={<Onboarding />} />
-                    <Route path="/move" element={<Navigate to="/discover" replace />} />
-                    <Route path="/discover" element={<Discover />} />
+                    <Route path="/discover" element={<Navigate to="/move" replace />} />
+                    <Route path="/move" element={<Discover />} />
                     <Route path="/notifications" element={<Notifications />} />
                     <Route path="/activity" element={<Navigate to="/discover" replace />} />
                     <Route path="/messages" element={<Messages />} />
@@ -96,6 +133,8 @@ function App() {
             }
           />
         </Routes>
+        </PostOAuthSplashGate>
+        </BootSplashGate>
       </AuthProvider>
     </HashRouter>
   );

@@ -121,3 +121,54 @@ background-color: #0F0F14;
   transition: background-color 9999s ease-out 0s;
 }
 
+/* Shell authentifié — barre d’onglets fixe type Instagram / Tinder */
+.splove-app-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+.splove-app-shell__main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: var(--splove-bottom-nav-height, calc(78px + env(safe-area-inset-bottom, 0px)));
+}
+
+.splove-app-shell__main--native-nav {
+  padding-bottom: var(
+    --splove-bottom-nav-height,
+    calc(var(--splove-native-bottom-nav-content-height, 0px) + env(safe-area-inset-bottom, 0px))
+  );
+}
+
+.splove-app-shell__bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  pointer-events: auto;
+}
+
+/** Host modale / sheet — barre native (var injectée) + safe area système. */
+.splove-modal-sheet-host {
+  padding-bottom: calc(
+    var(--splove-native-bottom-nav-content-height, 0px) + env(safe-area-inset-bottom, 0px)
+  );
+}
+
+/** Sheet profil — aucune marge fixe : viewport − safe areas − barre native. */
+.splove-profile-sheet {
+  max-height: calc(
+    100dvh - env(safe-area-inset-top, 0px) - var(--splove-native-bottom-nav-content-height, 0px) -
+      env(safe-area-inset-bottom, 0px)
+  );
+}

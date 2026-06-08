@@ -2,7 +2,10 @@
  * Géoloc utile Discover — pas de carte, libellés approximatifs.
  */
 
+import { Capacitor } from "@capacitor/core";
+import { Geolocation } from "@capacitor/geolocation";
 import { formatCityDisplay } from "../lib/formatCityDisplay";
+import { isNativeCapacitorApp } from "../lib/authRedirect";
 
 export function formatDiscoverDistanceLabel(km: number | null | undefined): string | null {
   if (km == null || !Number.isFinite(km) || km < 0) return null;
@@ -48,10 +51,46 @@ export function formatViewerRadiusLabel(radiusKm: number | null | undefined): st
   return `Rayon de recherche : ${Math.round(radiusKm)} km`;
 }
 
-/**
- * @returns null si refus / indisponible / timeout
- */
-export function getCurrentPositionCoords(timeoutMs = 12000): Promise<{ lat: number; lng: number } | null> {
+function coordsFromPosition(lat: number, lng: number): { lat: number; lng: number } | null {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { lat, lng };
+}
+
+function isLocationPermissionGranted(
+  status: Awaited<ReturnType<typeof Geolocation.requestPermissions>>,
+): boolean {
+  if (Capacitor.getPlatform() === "android") {
+    return status.location === "granted" || status.coarseLocation === "granted";
+  }
+  return status.location === "granted";
+}
+
+/** iOS/Android : demande d’abord la permission système, puis lecture GPS. */
+async function getCurrentPositionCoordsNative(
+  timeoutMs: number,
+): Promise<{ lat: number; lng: number } | null> {
+  try {
+    const permission = await Geolocation.requestPermissions();
+    if (!isLocationPermissionGranted(permission)) {
+      console.warn("[geolocation] permission not granted", permission);
+      return null;
+    }
+
+    const pos = await Geolocation.getCurrentPosition({
+      enableHighAccuracy: false,
+      timeout: timeoutMs,
+      maximumAge: 120_000,
+    });
+
+    return coordsFromPosition(pos.coords.latitude, pos.coords.longitude);
+  } catch (e) {
+    console.warn("[geolocation] native getCurrentPosition failed", e);
+    return null;
+  }
+}
+
+/** Web : popup navigateur via getCurrentPosition (pas de requestPermissions séparé). */
+function getCurrentPositionCoordsWeb(timeoutMs: number): Promise<{ lat: number; lng: number } | null> {
   if (typeof navigator === "undefined" || !navigator.geolocation?.getCurrentPosition) {
     return Promise.resolve(null);
   }
@@ -60,19 +99,26 @@ export function getCurrentPositionCoords(timeoutMs = 12000): Promise<{ lat: numb
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         window.clearTimeout(t);
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-          resolve(null);
-          return;
-        }
-        resolve({ lat, lng });
+        resolve(coordsFromPosition(pos.coords.latitude, pos.coords.longitude));
       },
-      () => {
+      (err) => {
         window.clearTimeout(t);
+        console.warn("[geolocation] web getCurrentPosition failed", err?.message ?? err);
         resolve(null);
       },
       { enableHighAccuracy: false, maximumAge: 120_000, timeout: timeoutMs },
     );
   });
+}
+
+/**
+ * @returns null si refus / indisponible / timeout
+ */
+export async function getCurrentPositionCoords(
+  timeoutMs = 12000,
+): Promise<{ lat: number; lng: number } | null> {
+  if (isNativeCapacitorApp()) {
+    return getCurrentPositionCoordsNative(timeoutMs);
+  }
+  return getCurrentPositionCoordsWeb(timeoutMs);
 }

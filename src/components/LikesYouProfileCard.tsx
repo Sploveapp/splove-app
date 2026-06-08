@@ -416,6 +416,7 @@ export function LikesYouProfileCard({
       rawRefs={galleryRawRefs}
       initialIndex={mainGalleryIndex}
       nameForAlt={profile.first_name?.trim() || null}
+      profilePhotoFields={profile}
     />
     </>
   );

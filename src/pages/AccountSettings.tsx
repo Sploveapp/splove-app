@@ -92,10 +92,9 @@ export default function AccountSettings() {
     setActionMessage(null);
     setDeactivateLoading(true);
     try {
-      const now = new Date().toISOString();
       const { error } = await supabase
         .from("profiles")
-        .update({ is_active: false, deactivated_at: now })
+        .update({ is_active: false })
         .eq("id", user.id);
       if (error) {
         console.warn("[account] deactivate", error.message);

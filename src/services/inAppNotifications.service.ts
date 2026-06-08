@@ -1,4 +1,6 @@
 import { supabase } from "../lib/supabase";
+import { DISCOVER_BETA_SIMPLE_PIPELINE } from "../lib/discoverBetaPipeline";
+import { rpcOptional } from "../lib/optionalSupabase";
 
 /** Phase 1 cloche : événements importants (pas les messages chat). */
 export const BELL_NOTIFICATION_KINDS = [
@@ -33,15 +35,13 @@ function isMissingRpcOrTableError(error: { code?: string | number; message?: str
 
 /** Traite les jobs dus pour l’utilisateur courant ; retourne le nombre de notifications non lues. */
 export async function pulseInAppNotifications(): Promise<number> {
-  const { data, error } = await supabase.rpc("pulse_my_in_app_notifications");
-  if (error) {
-    if (isMissingRpcOrTableError(error)) {
-      console.warn("[inAppNotifications] pulse skipped (missing RPC)", error.message ?? error);
-      return 0;
-    }
-    console.warn("[inAppNotifications] pulse", error.message);
-    return 0;
-  }
+  if (DISCOVER_BETA_SIMPLE_PIPELINE) return 0;
+  const data = await rpcOptional<number | string>(
+    "pulse_my_in_app_notifications",
+    {},
+    "pulse_my_in_app_notifications",
+    2_500,
+  );
   if (typeof data === "number" && Number.isFinite(data)) return data;
   if (typeof data === "string") {
     const n = Number(data);

@@ -1,4 +1,6 @@
 import { supabase } from "../lib/supabase";
+import { DISCOVER_BETA_SIMPLE_PIPELINE } from "../lib/discoverBetaPipeline";
+import { rpcOptional } from "../lib/optionalSupabase";
 
 export type DiscoverRewindStatus = {
   can_rewind: boolean;
@@ -52,13 +54,28 @@ export async function recordDiscoverSwipe(input: {
   return { ok: Boolean(j?.ok), error: j?.error };
 }
 
+const BETA_REWIND_STATUS_IDLE: DiscoverRewindStatus = {
+  can_rewind: false,
+  reason: null,
+  has_premium: true,
+  has_undo_feature: false,
+  undo_credits: 0,
+  suggest_paywall: false,
+  last_action: null,
+  last_is_match: false,
+  rewind_count: 0,
+  rewind_limit_free: 2,
+  last_swipe_at: null,
+};
+
 export async function getDiscoverRewindStatus(): Promise<DiscoverRewindStatus | null> {
-  const { data, error } = await supabase.rpc("get_discover_rewind_status");
-  if (error) {
-    console.warn("[discoverSwipes] get_discover_rewind_status", error.message);
-    return null;
-  }
-  const d = (data ?? null) as Record<string, unknown> | null;
+  if (DISCOVER_BETA_SIMPLE_PIPELINE) return BETA_REWIND_STATUS_IDLE;
+  const d = await rpcOptional<Record<string, unknown>>(
+    "get_discover_rewind_status",
+    {},
+    "get_discover_rewind_status",
+    2_500,
+  );
   if (!d) return null;
   const lastAt = d.last_swipe_at;
   return {

@@ -60,6 +60,7 @@ import {
   pickPrimaryProfilePhotoStoredRef,
   resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
+import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 import {
   SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK,
@@ -131,6 +132,7 @@ export default function Profile() {
     },
   });
   const primaryImgSrc = resolveProfilePhotoUiSrc(primaryStoredRef, primaryPhoto.src);
+  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null);
   const profileRef = useRef(profile);
   profileRef.current = profile;
 
@@ -153,6 +155,20 @@ export default function Profile() {
   useEffect(() => {
     if (!user?.id) return;
     logProfilePhotoUiDecision("profile.screen", profile, primaryImgSrc, "primary");
+    PhotoRenderLog.displaySrc({
+      screen: "Profile",
+      displaySrc: primaryImgSrc,
+      resolvedUrl: primaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user.id, slot: "primary" },
+    });
+    PhotoRenderLog.resolvedUrl({
+      screen: "Profile",
+      displaySrc: primaryImgSrc,
+      resolvedUrl: primaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user.id, slot: "primary", urlIndex: primaryPhoto.urlIndex },
+    });
     console.log("[SPLovePhoto][connected-profile] profile_snapshot", {
       userId: user.id,
       profileId: profile?.id ?? user.id,
@@ -172,11 +188,44 @@ export default function Profile() {
     profile?.avatar_url,
     primaryPhoto.activeField,
     primaryImgSrc,
+    primaryPhoto.src,
+    primaryPhoto.urlIndex,
     primaryPhoto.isLoading,
     primaryPhoto.isFailed,
     profile,
   ]);
-  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedPhotoUrl) return;
+    PhotoRenderLog.displaySrc({
+      screen: "Profile",
+      displaySrc: selectedPhotoUrl,
+      resolvedUrl: primaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user?.id ?? null, view: "fullscreen_modal" },
+    });
+  }, [selectedPhotoUrl, primaryPhoto.src, profile, user?.id]);
+
+  const profilePrimaryImgHandlers = chainPhotoRenderHandlers(
+    {
+      screen: "Profile",
+      displaySrc: primaryImgSrc,
+      resolvedUrl: primaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user?.id ?? null, slot: "primary" },
+    },
+    { onLoad: primaryPhoto.onImageLoad, onError: primaryPhoto.onImageError },
+  );
+
+  const profileFullscreenImgHandlers = chainPhotoRenderHandlers(
+    {
+      screen: "Profile",
+      displaySrc: selectedPhotoUrl,
+      resolvedUrl: primaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user?.id ?? null, view: "fullscreen_modal" },
+    },
+  );
   const [growth, setGrowth] = useState<GrowthProfileRow | null>(null);
   const [growthLinkCopied, setGrowthLinkCopied] = useState(false);
   const [needsAdaptedActivities, setNeedsAdaptedActivities] = useState(false);
@@ -578,8 +627,8 @@ export default function Profile() {
                     key={`${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}`}
                     src={primaryImgSrc}
                     alt="Votre photo de profil — appuyez pour les options"
-                    onLoad={primaryPhoto.onImageLoad}
-                    onError={primaryPhoto.onImageError}
+                    onLoad={profilePrimaryImgHandlers.onLoad}
+                    onError={profilePrimaryImgHandlers.onError}
                     style={{
                       width: "100%",
                       aspectRatio: "3 / 4",
@@ -1347,6 +1396,8 @@ export default function Profile() {
                 src={selectedPhotoUrl}
                 alt=""
                 className="max-h-[85vh] max-w-[95vw] object-contain shadow-2xl"
+                onLoad={profileFullscreenImgHandlers.onLoad}
+                onError={profileFullscreenImgHandlers.onError}
               />
             </div>
           </div>

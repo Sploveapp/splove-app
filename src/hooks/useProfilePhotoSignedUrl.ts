@@ -5,6 +5,7 @@ import { resolveProfilePhotoDisplayCandidates } from "../lib/profilePhotoUpload"
 import {
   buildSyncProfilePhotoDisplaySrc,
   buildSyncProfilePhotoDisplayCandidates,
+  skipSyncPublicProfilePhotoUrl,
 } from "../lib/profilePhotoDisplayUrl";
 import {
   DEFAULT_PROFILE_PHOTO_SIGNED_TTL_SEC,
@@ -106,7 +107,9 @@ function useProfilePhotoResolvedInternal(
       return;
     }
 
-    const syncImmediate = buildSyncProfilePhotoDisplayCandidates(rawTrimmed);
+    const syncImmediate = skipSyncPublicProfilePhotoUrl(rawTrimmed)
+      ? []
+      : buildSyncProfilePhotoDisplayCandidates(rawTrimmed);
     if (syncImmediate.length > 0) {
       candidatesRef.current = syncImmediate;
       setCandidates(syncImmediate);
@@ -117,7 +120,9 @@ function useProfilePhotoResolvedInternal(
     }
 
     if (failedRawRefs.has(rawTrimmed)) {
-      const cachedFallback = buildSyncProfilePhotoDisplaySrc(rawTrimmed);
+      const cachedFallback = skipSyncPublicProfilePhotoUrl(rawTrimmed)
+        ? null
+        : buildSyncProfilePhotoDisplaySrc(rawTrimmed);
       if (cachedFallback) {
         candidatesRef.current = [cachedFallback];
         setCandidates([cachedFallback]);
@@ -142,7 +147,9 @@ function useProfilePhotoResolvedInternal(
 
     const objectPath = profilePhotoObjectPathFromStoredValue(rawTrimmed);
     if (objectPath && failedObjectPaths.has(objectPath)) {
-      const cachedFallback = buildSyncProfilePhotoDisplaySrc(rawTrimmed);
+      const cachedFallback = skipSyncPublicProfilePhotoUrl(rawTrimmed)
+        ? null
+        : buildSyncProfilePhotoDisplaySrc(rawTrimmed);
       if (cachedFallback) {
         candidatesRef.current = [cachedFallback];
         setCandidates([cachedFallback]);
@@ -188,7 +195,9 @@ function useProfilePhotoResolvedInternal(
         candidateIndexRef.current = 0;
         setIsLoading(false);
         if (candidatesRef.current.length === 0) {
-          const fallback = buildSyncProfilePhotoDisplaySrc(rawTrimmed);
+          const fallback = skipSyncPublicProfilePhotoUrl(rawTrimmed)
+            ? null
+            : buildSyncProfilePhotoDisplaySrc(rawTrimmed);
           if (fallback) {
             candidatesRef.current = [fallback];
             setCandidates([fallback]);
@@ -277,7 +286,9 @@ function useProfilePhotoResolvedInternal(
     failedRawRefs.add(storedRef);
     const objectPath = profilePhotoObjectPathFromStoredValue(storedRef);
     if (objectPath) failedObjectPaths.add(objectPath);
-    const fallback = buildSyncProfilePhotoDisplaySrc(storedRef);
+    const fallback = skipSyncPublicProfilePhotoUrl(storedRef)
+      ? null
+      : buildSyncProfilePhotoDisplaySrc(storedRef);
     if (fallback) {
       candidatesRef.current = [fallback];
       setCandidates([fallback]);
@@ -308,7 +319,9 @@ function useProfilePhotoResolvedInternal(
   const resolvedSrc =
     candidates.length > 0 && !exhausted
       ? (candidates[candidateIndex] ?? null)
-      : buildSyncProfilePhotoDisplaySrc(rawTrimmed);
+      : skipSyncPublicProfilePhotoUrl(rawTrimmed)
+        ? null
+        : buildSyncProfilePhotoDisplaySrc(rawTrimmed);
 
   return {
     src: resolvedSrc,

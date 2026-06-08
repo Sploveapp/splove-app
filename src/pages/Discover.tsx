@@ -76,6 +76,7 @@ import { MoveProfileSkeleton } from "../components/discover/MoveProfileSkeleton"
 import { EmptyDiscoverState } from "../components/discover/EmptyDiscoverState";
 import { SplovePinIcon } from "../components/splovePlus/SplovePlusIcons";
 import { ProfilePhotoViewerModal } from "../components/ProfilePhotoViewerModal";
+import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
 import { useDiscoverUndoNavRegistration } from "../contexts/DiscoverUndoNavContext";
 import { IS_BETA_UNDO_FREE } from "../constants/discoverUndo";
 import {
@@ -583,6 +584,7 @@ function DiscoverProfileDetailPreview({
       rawRefs={galleryRawRefs}
       initialIndex={photoViewerInitial}
       nameForAlt={nameForViewer}
+      profilePhotoFields={profile}
     />
     </>
   );
@@ -1143,7 +1145,32 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   useEffect(() => {
     if (!photoRaw) return;
     logProfilePhotoUiDecision("discover.swipe_card", profile, photo || null, "primary");
-  }, [profile.id, photoRaw, photo, profile]);
+    PhotoRenderLog.displaySrc({
+      screen: "Move",
+      displaySrc: photo,
+      resolvedUrl: photoDisplay.src,
+      profile,
+      extra: { profileId: profile.id, slot: "primary" },
+    });
+    PhotoRenderLog.resolvedUrl({
+      screen: "Move",
+      displaySrc: photo,
+      resolvedUrl: photoDisplay.src,
+      profile,
+      extra: { profileId: profile.id, slot: "primary", photoField, photoRaw },
+    });
+  }, [profile, photoRaw, photo, photoDisplay.src, photoField]);
+
+  const movePhotoImgHandlers = chainPhotoRenderHandlers(
+    {
+      screen: "Move",
+      displaySrc: photo,
+      resolvedUrl: photoDisplay.src,
+      profile,
+      extra: { profileId: profile.id, slot: "primary", photoField, photoRaw },
+    },
+    { onError: photoDisplay.onImageError },
+  );
 
   const [dx, setDx] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -1293,7 +1320,8 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
         onPass={(decisionTimeMs) => onPass(profile.id, decisionTimeMs)}
         onLike={(decisionTimeMs) => void onLike(profile, decisionTimeMs)}
         onReport={() => onReport(profile.id)}
-        onPhotoError={photoDisplay.onImageError}
+        onPhotoError={movePhotoImgHandlers.onError}
+        onPhotoLoad={movePhotoImgHandlers.onLoad}
         immersive={immersive}
       />
     </article>

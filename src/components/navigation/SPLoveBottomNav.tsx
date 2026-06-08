@@ -32,7 +32,7 @@ export type SPLoveBottomNavProps = {
 };
 
 function matchActiveDiscover(pathname: string): boolean {
-  return pathname === "/" || pathname === "/discover";
+  return pathname === "/" || pathname === "/move" || pathname === "/discover";
 }
 
 function matchActiveMessages(pathname: string): boolean {
@@ -72,6 +72,7 @@ export function SPLoveBottomNav({
 
   return (
     <nav
+      id="splove-bottom-nav"
       className="w-full border-t"
       style={{ backgroundColor: NAV_BACKGROUND, borderTopColor: NAV_BORDER_TOP }}
       role="navigation"
@@ -90,7 +91,7 @@ export function SPLoveBottomNav({
           ariaLabel={t("nav_tab_discover")}
           active={isDiscover}
           icon={(c) => <DiscoverIcon color={c} />}
-          onActivate={() => navigate("/discover")}
+          onActivate={() => navigate("/move")}
         />
         <UndoBottomItem undo={discoverUndoNav} label={t("nav_tab_undo")} />
         <BottomItem

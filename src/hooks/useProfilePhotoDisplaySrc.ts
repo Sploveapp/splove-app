@@ -12,6 +12,7 @@ import {
   buildSyncProfilePhotoDisplaySrc,
   pickPrimaryProfilePhotoStoredRef,
   pickSecondaryProfilePhotoStoredRef,
+  skipSyncPublicProfilePhotoUrl,
 } from "../lib/profilePhotoDisplayUrl";
 
 export type ProfilePhotoDisplayState = {
@@ -141,6 +142,11 @@ export function secondaryProfilePhotoRefs(profile: ProfilePhotoFields | null | u
   return secondary ? [secondary] : [];
 }
 
+function syncFallbackForRef(ref: string | null | undefined): string | null {
+  if (!ref || skipSyncPublicProfilePhotoUrl(ref)) return null;
+  return buildSyncProfilePhotoDisplaySrc(ref);
+}
+
 async function urlsForStoredRef(storedRef: string): Promise<string[]> {
   const sync = buildSyncProfilePhotoDisplayCandidates(storedRef);
   if (sync.length === 0) return [];
@@ -244,9 +250,10 @@ export function useProfilePhotoDisplaySrc(
     }
 
     const firstStored = refs[0];
-    const syncImmediate = firstStored
-      ? buildSyncProfilePhotoDisplayCandidates(firstStored)
-      : [];
+    const syncImmediate =
+      firstStored && !skipSyncPublicProfilePhotoUrl(firstStored)
+        ? buildSyncProfilePhotoDisplayCandidates(firstStored)
+        : [];
     if (syncImmediate.length > 0) {
       setRefIndex(0);
       setUrlCandidates(syncImmediate);
@@ -296,7 +303,7 @@ export function useProfilePhotoDisplaySrc(
         });
       }
       if (genRef.current !== gen) return;
-      const fallback = buildSyncProfilePhotoDisplaySrc(refs[0]);
+      const fallback = syncFallbackForRef(refs[0]);
       if (fallback) {
         setRefIndex(0);
         setUrlCandidates([fallback]);
@@ -322,7 +329,7 @@ export function useProfilePhotoDisplaySrc(
   }, [refsKey, refs, applyRef]);
 
   const activeRef = refs[refIndex] ?? refs[0] ?? null;
-  const syncFallback = buildSyncProfilePhotoDisplaySrc(activeRef);
+  const syncFallback = syncFallbackForRef(activeRef);
   const candidateSrc =
     urlCandidates.length > 0 ? (urlCandidates[urlIndex] ?? null) : null;
   const src = candidateSrc ?? syncFallback;
@@ -357,7 +364,7 @@ export function useProfilePhotoDisplaySrc(
 
     const nextRef = refIndex + 1;
     if (nextRef >= refsRef.current.length) {
-      const fallback = buildSyncProfilePhotoDisplaySrc(activeRef ?? refsRef.current[0]);
+      const fallback = syncFallbackForRef(activeRef ?? refsRef.current[0]);
       if (fallback) {
         setUrlCandidates([fallback]);
         setUrlIndex(0);

@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { isNativeCapacitorApp } from "./authRedirect";
 import {
   buildProfilePhotoPublicUrl,
   normalizeProfilePhotoStoredRef,
@@ -9,6 +10,17 @@ import {
 } from "./profilePhotoSignedUrl";
 import { photoUrlPrefix } from "./profilePhotoPipelineLog";
 import { PhotoFlowLog } from "./photoFlowLog";
+
+/** Sur iOS/Android, les URL publiques Storage échouent souvent en `<img>` WKWebView — on préfère signées. */
+export function skipSyncPublicProfilePhotoUrl(storedRef: string | null | undefined): boolean {
+  if (!isNativeCapacitorApp()) return false;
+  const normalized = normalizeProfilePhotoStoredRef(storedRef, supabase);
+  if (!normalized) return false;
+  if (shouldPassThroughProfilePhotoDisplayUrl(normalized)) {
+    return !normalized.includes("/profile-photos/");
+  }
+  return profilePhotoObjectPathFromStoredValue(normalized) != null;
+}
 
 export type ProfilePhotoUrlFields = {
   id?: string | null;
@@ -49,6 +61,10 @@ export function buildSyncProfilePhotoDisplayCandidates(
 ): string[] {
   const normalized = normalizeProfilePhotoStoredRef(storedRef, supabase);
   if (!normalized) return [];
+
+  if (skipSyncPublicProfilePhotoUrl(storedRef)) {
+    return [];
+  }
 
   if (shouldPassThroughProfilePhotoDisplayUrl(normalized)) {
     return [normalized];

@@ -15,8 +15,8 @@ type GlobalHeaderProps = {
  * En-tête global : marque + déconnexion ; onglets Découvrir / SPLove+ sur les routes concernées.
  */
 export function GlobalHeader({ variant = "default", inAppUnreadCount = 0 }: GlobalHeaderProps) {
-  const { t } = useTranslation();
-  const { signOut } = useAuth();
+  const { t, language } = useTranslation();
+  const { signOut, isSigningOut } = useAuth();
   const location = useLocation();
   const compact = variant === "compact";
 
@@ -28,14 +28,20 @@ export function GlobalHeader({ variant = "default", inAppUnreadCount = 0 }: Glob
   const isSplovePlus = location.pathname === "/splove-plus";
 
   async function handleLogout() {
+    if (isSigningOut) return;
     await signOut();
   }
+
+  const headerSafePaddingTop = compact
+    ? "calc(env(safe-area-inset-top) + 6px)"
+    : "calc(env(safe-area-inset-top) + 8px)";
 
   return (
     <header
       className={`sticky top-0 z-30 w-full border-b border-app-border/30 bg-app-bg/95 backdrop-blur-md ${
-        compact ? "px-4 py-1.5" : showPrimaryNav ? "px-4 pb-2.5 pt-3" : "px-6 py-3"
+        compact ? "px-4 pb-1.5" : showPrimaryNav ? "px-4 pb-2.5" : "px-6 pb-3"
       }`}
+      style={{ paddingTop: headerSafePaddingTop }}
     >
       <div className="mx-auto flex w-full max-w-md flex-col gap-1">
         {/* Niveau 1 — marque */}
@@ -63,12 +69,18 @@ export function GlobalHeader({ variant = "default", inAppUnreadCount = 0 }: Glob
             <button
               type="button"
               onClick={() => void handleLogout()}
+              disabled={isSigningOut}
               aria-label={t("auth.logout")}
-              className={`shrink-0 rounded-lg font-medium text-app-muted transition-colors hover:bg-white/[0.04] hover:text-app-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/25 ${
+              aria-busy={isSigningOut}
+              className={`shrink-0 rounded-lg font-medium text-app-muted transition-colors hover:bg-white/[0.04] hover:text-app-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/25 disabled:cursor-not-allowed disabled:opacity-60 ${
                 compact ? "px-2 py-1 text-[11px]" : "px-2 py-1.5 text-[11px]"
               }`}
             >
-              {t("auth.logout")}
+              {isSigningOut
+                ? language === "en"
+                  ? "Signing out…"
+                  : "Déconnexion…"
+                : t("auth.logout")}
             </button>
           </div>
         </div>

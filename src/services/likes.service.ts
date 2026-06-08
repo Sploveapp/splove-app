@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { fetchConversationIdForUserPair } from "../lib/matchConversationId";
 import {
   filterLikeRowsByViewerPreference,
   logPreferenceCompatibilityPipeline,
@@ -230,7 +231,7 @@ export async function getLikesReceived(
   });
 
   if (likesError) {
-    console.error("getLikesReceived", likesError);
+    console.warn("[likesYou] getLikesReceived", likesError.message ?? likesError);
     return [];
   }
 
@@ -363,7 +364,7 @@ export async function getLikesReceived(
     .in("id", fromIds);
 
   if (profilesError) {
-    console.error("[likesYou] profiles select failed — returning empty (no raw likes)", profilesError);
+    console.warn("[likesYou] profiles select failed — returning empty (no raw likes)", profilesError.message ?? profilesError);
     return [];
   }
 
@@ -533,20 +534,4 @@ export async function verifyOutgoingLikeExists(fromUserId: string, toUserId: str
 }
 
 /** Conversation liée au match entre deux utilisateurs (si déjà créée). */
-export async function fetchConversationIdForUserPair(userA: string, userB: string): Promise<string | null> {
-  const { data: row1 } = await supabase
-    .from("matches")
-    .select("conversation_id")
-    .eq("user_a", userA)
-    .eq("user_b", userB)
-    .maybeSingle();
-  const c1 = (row1 as { conversation_id?: string | null } | null)?.conversation_id;
-  if (c1) return c1;
-  const { data: row2 } = await supabase
-    .from("matches")
-    .select("conversation_id")
-    .eq("user_a", userB)
-    .eq("user_b", userA)
-    .maybeSingle();
-  return (row2 as { conversation_id?: string | null } | null)?.conversation_id ?? null;
-}
+export { fetchConversationIdForUserPair };

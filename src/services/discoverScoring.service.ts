@@ -3,6 +3,7 @@ import { evaluateDiscoverV3, viewerOpenAdaptedResolved } from "../lib/discoverSc
 import {
   discoverAllowsZeroSharedSports,
   discoverCrossSportSecondaryAllowed,
+  logSportMatchPreferenceScoringTrace,
   parseSportMatchPreference,
 } from "@/lib/sportMatchPreference";
 import { encodeDiscoverScoringReason } from "@/lib/discoverScoringReasons";
@@ -11,6 +12,16 @@ import { hasFiniteDiscoverCoordinates, isValidDiscoveryRadiusKm } from "../const
 import { asAgePreferenceScalar, isReciprocalAgeDiscoverMatch } from "../lib/profileAge";
 import { normalizePrimaryLocalityLabel } from "../lib/formatCityDisplay";
 import { getDiscoverFeedIntegrityExclusionReasons } from "../lib/onboardingDiscoverReadiness";
+import {
+  discoverPipelineScoringZero,
+  DISCOVER_PIPELINE_AUDIT,
+  type DiscoverProfileScoringAudit,
+} from "../lib/discoverPipelineAudit";
+import {
+  DISCOVER_BETA_SIMPLE_PIPELINE,
+  isOutsideDiscoverRadius,
+  shouldBypassDiscoverViewerIntegrity,
+} from "../lib/discoverBetaPipeline";
 
 type DiscoverProfile = {
   id: string;
@@ -59,6 +70,11 @@ type ViewerProfile = {
   pref_open_to_adapted_activity?: boolean | null;
   discovery_radius_km?: number | null;
   sport_match_preference?: string | null;
+  latitude?: unknown;
+  longitude?: unknown;
+  portrait_url?: string | null;
+  main_photo_url?: string | null;
+  profile_sports?: unknown;
 };
 
 export type DiscoverScoringContext = {
@@ -73,6 +89,11 @@ export type DiscoverScoringContext = {
   distanceById: Map<string, number | null>;
   /** SPLove+ visibility / meeting priority from `discover_candidate_splove_ranking_flags` RPC */
   sploveFlagsById?: Map<string, { boost: boolean; priority_meet: boolean }>;
+};
+
+export type DiscoverScoringRunResult<T extends DiscoverProfile> = {
+  kept: DiscoverScoredCandidate<T>[];
+  audits: DiscoverProfileScoringAudit[];
 };
 
 export type DiscoverScoredCandidate<T extends DiscoverProfile> = T & {
@@ -323,6 +344,80 @@ function isBanned(candidate: DiscoverProfile): boolean {
 /** Exclude hard incompatible inclusivity (viewer « no » vs adapted candidate). */
 const INCLUSIVITY_EXCLUDE_THRESHOLD = -10;
 
+const CANONICAL_FILTER_PRIORITY = [
+  "viewer_incomplete",
+  "self",
+  "incomplete_profile",
+  "blocked",
+  "already_matched",
+  "already_liked",
+  "missing_gps",
+  "photo_status",
+  "no_shared_sports",
+  "gender_mismatch",
+  "age_mismatch",
+  "radius",
+  "score_below_threshold",
+] as const;
+
+function mapExclusionToCanonicalReason(raw: string, filterOverride?: string): string {
+  if (filterOverride) return filterOverride;
+  const t = raw.trim().toLowerCase();
+  if (t.includes("outside discovery radius") || t.includes("distance/gps")) return "radius";
+  if (t.includes("gender mismatch") || t.includes("looking_for mismatch")) return "gender_mismatch";
+  if (t.includes("already matched")) return "already_matched";
+  if (t.includes("already liked")) return "already_liked";
+  if (t.includes("no common sport")) return "no_shared_sports";
+  if (t.includes("age preference")) return "age_mismatch";
+  if (t.includes("blocked")) return "blocked";
+  if (t.startsWith("missing_") || t.includes("ghost") || t === "incomplete") return "incomplete_profile";
+  if (t.includes("missing_candidate_gps")) return "missing_gps";
+  if (t.includes("rejected photo") || t.includes("pending photo")) return "photo_status";
+  if (t.includes("viewer_incomplete")) return "viewer_incomplete";
+  if (t === "self") return "self";
+  if (t === "missing required field") return "score_below_threshold";
+  return t.replace(/\s+/g, "_");
+}
+
+function canonicalReasonsFromRaw(
+  rawReasons: string[],
+  filterOverride?: string,
+): { reasons: string[]; primary_filter: string | null } {
+  const reasons = [
+    ...new Set(
+      rawReasons.map((r) => mapExclusionToCanonicalReason(r, filterOverride)).filter(Boolean),
+    ),
+  ];
+  if (filterOverride && !reasons.includes(filterOverride)) {
+    reasons.unshift(filterOverride);
+  }
+  const primary =
+    CANONICAL_FILTER_PRIORITY.find((p) => reasons.includes(p)) ?? reasons[0] ?? null;
+  return { reasons, primary_filter: primary };
+}
+
+function buildScoringAudit(
+  candidate: DiscoverProfile,
+  rawExclusion: string[],
+  included: boolean,
+  scores: { discover_score: number | null; practice_score: number | null },
+  filterOverride?: string,
+): DiscoverProfileScoringAudit {
+  const { reasons, primary_filter } = included
+    ? { reasons: [] as string[], primary_filter: null }
+    : canonicalReasonsFromRaw(rawExclusion, filterOverride);
+  return {
+    profile_id: candidate.id,
+    first_name: candidate.first_name ?? null,
+    included,
+    discover_score: scores.discover_score,
+    practice_score: scores.practice_score,
+    primary_filter,
+    reasons,
+    raw_exclusion: rawExclusion,
+  };
+}
+
 /** Score secondaire léger lorsque 0 sport commun mais ouverture cross-sport (reste bien sous sportPointsV3(1)). */
 const CROSS_SPORT_SECONDARY_SCORE_BONUS = 10;
 
@@ -356,6 +451,84 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
   candidates: T[],
   ctx: DiscoverScoringContext,
 ): DiscoverScoredCandidate<T>[] {
+  return runDiscoverScoring(candidates, ctx).kept;
+}
+
+/** Scoring minimal bêta : genre réciproque + rayon si distance connue (pas d’intégrité / V3 / seuils). */
+function runDiscoverScoringBetaSimple<T extends DiscoverProfile>(
+  candidates: T[],
+  ctx: DiscoverScoringContext,
+): DiscoverScoringRunResult<T> {
+  logSportMatchPreferenceScoringTrace("scoring_beta_simple_entry", ctx.viewer.sport_match_preference);
+  const viewerGender = canonicalGender(ctx.viewer.gender);
+  const viewerLookingFor = parseLookingFor(ctx.viewer.looking_for);
+  const kept: DiscoverScoredCandidate<T>[] = [];
+  const audits: DiscoverProfileScoringAudit[] = [];
+
+  for (const candidate of candidates) {
+    const excludedReasons: string[] = [];
+    if (!candidate?.id || candidate.id === ctx.viewerId) excludedReasons.push("self");
+    if (ctx.likedIds.has(candidate.id)) excludedReasons.push("already liked");
+    if (ctx.matchedIds.has(candidate.id)) excludedReasons.push("already matched");
+    if (ctx.blockedIds?.has(candidate.id)) excludedReasons.push("blocked");
+
+    const candidateGender = canonicalGender(candidate.gender);
+    const candidateLookingFor = parseLookingFor(candidate.looking_for);
+    const meToThem = lookingForAcceptsGender(viewerLookingFor, candidateGender);
+    const themToMe = lookingForAcceptsGender(candidateLookingFor, viewerGender);
+    if (!meToThem || !themToMe) excludedReasons.push("gender mismatch");
+
+    const distanceKm = ctx.distanceById.get(candidate.id) ?? null;
+    if (isOutsideDiscoverRadius(distanceKm, ctx.viewer.discovery_radius_km)) {
+      excludedReasons.push("outside discovery radius");
+    }
+
+    if (excludedReasons.length > 0) {
+      audits.push(
+        buildScoringAudit(candidate, excludedReasons, false, {
+          discover_score: null,
+          practice_score: null,
+        }),
+      );
+      continue;
+    }
+
+    audits.push(
+      buildScoringAudit(candidate, [], true, {
+        discover_score: 1,
+        practice_score: 0,
+      }),
+    );
+    kept.push({
+      ...candidate,
+      commonSportsCount: 0,
+      discoverScore: 1,
+      practice_score: 0,
+      distanceKm,
+      discover_reasons: [],
+      discover_excluded: false,
+    });
+  }
+
+  kept.sort((a, b) => {
+    const bd = b.distanceKm ?? 9999;
+    const ad = a.distanceKm ?? 9999;
+    if (ad !== bd) return ad - bd;
+    return safeTimeMs(b.last_active_at) - safeTimeMs(a.last_active_at);
+  });
+
+  return { kept, audits };
+}
+
+export function runDiscoverScoring<T extends DiscoverProfile>(
+  candidates: T[],
+  ctx: DiscoverScoringContext,
+): DiscoverScoringRunResult<T> {
+  if (DISCOVER_BETA_SIMPLE_PIPELINE) {
+    return runDiscoverScoringBetaSimple(candidates, ctx);
+  }
+
+  logSportMatchPreferenceScoringTrace("scoring_full_entry", ctx.viewer.sport_match_preference);
   const viewerGender = canonicalGender(ctx.viewer.gender);
   const viewerLookingFor = parseLookingFor(ctx.viewer.looking_for);
   const viewerOpenTier = viewerOpenAdaptedResolved(
@@ -365,6 +538,39 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
   const viewerSportIds = extractViewerSportIds(ctx);
 
   const kept: DiscoverScoredCandidate<T>[] = [];
+  const audits: DiscoverProfileScoringAudit[] = [];
+  const exclusionHistogram = new Map<string, number>();
+
+  const viewerIntegrity = shouldBypassDiscoverViewerIntegrity(ctx.viewer as Record<string, unknown>)
+    ? []
+    : getDiscoverFeedIntegrityExclusionReasons(
+        ctx.viewer as Record<string, unknown>,
+        ctx.viewerSportIds?.length ?? 0,
+      );
+  if (viewerIntegrity.length > 0) {
+    if (DISCOVER_PIPELINE_AUDIT) {
+      console.warn("[Discover pipeline] viewer integrity blocks scoring", {
+        viewer_id: ctx.viewerId,
+        reasons: viewerIntegrity,
+      });
+    }
+    discoverPipelineScoringZero(candidates.length, {
+      blocker: "viewer_incomplete",
+      viewer_integrity: viewerIntegrity,
+    });
+    for (const candidate of candidates) {
+      audits.push(
+        buildScoringAudit(
+          candidate,
+          ["viewer_incomplete", ...viewerIntegrity],
+          false,
+          { discover_score: null, practice_score: null },
+          "viewer_incomplete",
+        ),
+      );
+    }
+    return { kept: [], audits };
+  }
 
   if (import.meta.env.DEV) {
     console.info("[Discover diagnostics] scoring input", {
@@ -421,10 +627,6 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const excludedReasons: string[] = [];
     const diagExtra: Record<string, unknown> = {};
     if (!candidate?.id || candidate.id === ctx.viewerId) excludedReasons.push("self");
-    const viewerIntegrity = getDiscoverFeedIntegrityExclusionReasons(
-      ctx.viewer as Record<string, unknown>,
-    );
-    if (viewerIntegrity.length > 0) excludedReasons.push("viewer_incomplete", ...viewerIntegrity);
     const candidateIntegrity = getDiscoverFeedIntegrityExclusionReasons(
       candidate as Record<string, unknown>,
     );
@@ -454,10 +656,15 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     const candidateSportIds = extractCandidateSportIds(candidate);
     const commonSportIds = intersectSportIds(viewerSportIds, candidateSportIds);
     const sharedCount = commonSportIds.length;
+    const viewerPrefParsed = parseSportMatchPreference(ctx.viewer.sport_match_preference);
     const allowZeroSharedSports =
       sharedCount >= 1 ||
       discoverAllowsZeroSharedSports(ctx.viewer.sport_match_preference, candidate.sport_match_preference);
-    if (!allowZeroSharedSports) excludedReasons.push("no common sport");
+    if (!allowZeroSharedSports) {
+      excludedReasons.push("no common sport");
+    } else if (viewerPrefParsed === "both" && sharedCount >= 1) {
+      diagExtra.sport_match_both_shared_boost_only = true;
+    }
 
     const candidateGender = canonicalGender(candidate.gender);
     const candidateLookingFor = parseLookingFor(candidate.looking_for);
@@ -530,6 +737,22 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     diagExtra.discovery_radius_km = viewerRadius;
 
     if (excludedReasons.length > 0) {
+      for (const r of excludedReasons) {
+        exclusionHistogram.set(r, (exclusionHistogram.get(r) ?? 0) + 1);
+      }
+      audits.push(
+        buildScoringAudit(candidate, excludedReasons, false, {
+          discover_score: null,
+          practice_score: null,
+        }),
+      );
+      if (DISCOVER_PIPELINE_AUDIT) {
+        console.log("[Discover pipeline] scoring excluded", {
+          id: candidate.id ?? null,
+          first_name: candidate.first_name ?? null,
+          exclusion_reasons: excludedReasons,
+        });
+      }
       if (isDiscoverAuditSpotlightName(candidate.first_name)) {
         console.log("[Discover audit] scoring_excluded", {
           first_name: candidate.first_name,
@@ -622,6 +845,14 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     });
 
     if (v3.outside_radius) {
+      const radiusReasons = ["outside discovery radius"];
+      exclusionHistogram.set("outside discovery radius", (exclusionHistogram.get("outside discovery radius") ?? 0) + 1);
+      audits.push(
+        buildScoringAudit(candidate, radiusReasons, false, {
+          discover_score: v3.total ?? null,
+          practice_score: null,
+        }),
+      );
       if (import.meta.env.DEV) {
         const hl = isDiscoverDiagHighlightName(candidate.first_name);
         const row = {
@@ -645,6 +876,16 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       continue;
     }
     if (v3.inclusivity_raw < INCLUSIVITY_EXCLUDE_THRESHOLD) {
+      exclusionHistogram.set("score_below_threshold", (exclusionHistogram.get("score_below_threshold") ?? 0) + 1);
+      audits.push(
+        buildScoringAudit(
+          candidate,
+          ["score_below_threshold", `inclusivity_raw:${v3.inclusivity_raw}`],
+          false,
+          { discover_score: v3.total ?? null, practice_score: null },
+          "score_below_threshold",
+        ),
+      );
       if (import.meta.env.DEV) {
         const hl = isDiscoverDiagHighlightName(candidate.first_name);
         const row = {
@@ -735,6 +976,13 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
       });
     }
 
+    audits.push(
+      buildScoringAudit(candidate, [], true, {
+        discover_score: totalScore,
+        practice_score,
+      }),
+    );
+
     kept.push({
       ...candidate,
       commonSportsCount: sharedCount,
@@ -756,5 +1004,12 @@ export function scoreAndFilterDiscoverCandidates<T extends DiscoverProfile>(
     return safeTimeMs(b.created_at) - safeTimeMs(a.created_at);
   });
 
-  return kept;
+  if (candidates.length > 0 && kept.length === 0) {
+    discoverPipelineScoringZero(candidates.length, {
+      exclusion_histogram: Object.fromEntries(exclusionHistogram),
+      audit_count: audits.length,
+    });
+  }
+
+  return { kept, audits };
 }

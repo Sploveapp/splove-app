@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { APP_BG } from "../constants/theme";
 import { GlobalHeader } from "./GlobalHeader";
@@ -14,10 +14,18 @@ import {
 import { fetchActivityProposalsPendingActionCount } from "../lib/activityProposalPendingAction";
 import { CHAT_MESSAGES_TABLE, supabase } from "../lib/supabase";
 import { fetchBlockedRelatedUserIds } from "../services/blocks.service";
+import { deferSecondaryWork } from "../lib/deferSecondaryWork";
+import { runPostLoginOptionalBatch } from "../lib/postLoginPerf";
 import {
   countUnreadInAppNotifications,
   pulseInAppNotifications,
 } from "../services/inAppNotifications.service";
+import {
+  SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK,
+  SPLOVE_BOTTOM_NAV_HEIGHT_VAR,
+  SPLOVE_NATIVE_BOTTOM_NAV_HEIGHT_FALLBACK,
+} from "../constants/appBottomNavLayout";
+import { usesNativeBottomNavigation } from "../lib/nativeBottomNav";
 
 const USER_PROFILE_PATH = "/profile";
 
@@ -107,18 +115,11 @@ export function AppLayout() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      if (cancelled) return;
-      await loadInboxCount();
-      if (cancelled) return;
-      await loadLikesBadgeCount();
-      if (cancelled) return;
-      await loadActivityPendingCount();
-    })();
-    return () => {
-      cancelled = true;
-    };
+    return deferSecondaryWork(() => {
+      void loadInboxCount();
+      void loadLikesBadgeCount();
+      void loadActivityPendingCount();
+    }, 3_500);
   }, [location.pathname, loadInboxCount, loadLikesBadgeCount, loadActivityPendingCount]);
 
   useEffect(() => {
@@ -139,14 +140,24 @@ export function AppLayout() {
   }, [loadActivityPendingCount]);
 
   useEffect(() => {
-    void pulseAppNotifications();
+    return deferSecondaryWork(() => {
+      void runPostLoginOptionalBatch("app-layout-notifications", async () => {
+        await pulseAppNotifications();
+      });
+    }, 3_500);
   }, [location.pathname, pulseAppNotifications]);
 
   useEffect(() => {
-    const id = window.setInterval(() => {
-      void pulseAppNotifications();
-    }, 120_000);
-    return () => clearInterval(id);
+    let intervalId: number | undefined;
+    const cancelDefer = deferSecondaryWork(() => {
+      intervalId = window.setInterval(() => {
+        void pulseAppNotifications();
+      }, 120_000);
+    }, 1500);
+    return () => {
+      cancelDefer();
+      if (intervalId != null) window.clearInterval(intervalId);
+    };
   }, [pulseAppNotifications]);
 
   useEffect(() => {
@@ -155,55 +166,88 @@ export function AppLayout() {
         void pulseAppNotifications();
       }
     };
-    document.addEventListener("visibilitychange", onVis);
-    return () => document.removeEventListener("visibilitychange", onVis);
+    const cancelDefer = deferSecondaryWork(() => {
+      document.addEventListener("visibilitychange", onVis);
+    }, 1500);
+    return () => {
+      cancelDefer();
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, [pulseAppNotifications]);
 
   useEffect(() => {
     const onRefresh = () => {
       void pulseAppNotifications();
     };
-    window.addEventListener(IN_APP_NOTIFICATIONS_REFRESH_EVENT, onRefresh);
-    return () => window.removeEventListener(IN_APP_NOTIFICATIONS_REFRESH_EVENT, onRefresh);
+    const cancelDefer = deferSecondaryWork(() => {
+      window.addEventListener(IN_APP_NOTIFICATIONS_REFRESH_EVENT, onRefresh);
+    }, 1500);
+    return () => {
+      cancelDefer();
+      window.removeEventListener(IN_APP_NOTIFICATIONS_REFRESH_EVENT, onRefresh);
+    };
   }, [pulseAppNotifications]);
 
   const inboxRealtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const notifRealtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const bottomNavMeasureRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = bottomNavMeasureRef.current;
+    if (!el) return;
+
+    const syncNavHeight = () => {
+      document.documentElement.style.setProperty(
+        SPLOVE_BOTTOM_NAV_HEIGHT_VAR,
+        `${el.offsetHeight}px`,
+      );
+    };
+
+    syncNavHeight();
+    const ro = new ResizeObserver(syncNavHeight);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      document.documentElement.style.removeProperty(SPLOVE_BOTTOM_NAV_HEIGHT_VAR);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-
-    void (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return;
-      const ch = supabase
-        .channel(`inbox-messages:${user.id}`)
-        .on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: CHAT_MESSAGES_TABLE },
-          () => {
-            void loadInboxCount();
-          },
-        )
-        .on(
-          "postgres_changes",
-          { event: "UPDATE", schema: "public", table: CHAT_MESSAGES_TABLE },
-          () => {
-            void loadInboxCount();
-          },
-        )
-        .subscribe();
-      if (cancelled) {
-        void supabase.removeChannel(ch);
-        return;
-      }
-      inboxRealtimeChannelRef.current = ch;
-    })();
+    const cancelDefer = deferSecondaryWork(() => {
+      void (async () => {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user || cancelled) return;
+        const ch = supabase
+          .channel(`inbox-messages:${user.id}`)
+          .on(
+            "postgres_changes",
+            { event: "INSERT", schema: "public", table: CHAT_MESSAGES_TABLE },
+            () => {
+              void loadInboxCount();
+            },
+          )
+          .on(
+            "postgres_changes",
+            { event: "UPDATE", schema: "public", table: CHAT_MESSAGES_TABLE },
+            () => {
+              void loadInboxCount();
+            },
+          )
+          .subscribe();
+        if (cancelled) {
+          void supabase.removeChannel(ch);
+          return;
+        }
+        inboxRealtimeChannelRef.current = ch;
+      })();
+    }, 2000);
 
     return () => {
       cancelled = true;
+      cancelDefer();
       const ch = inboxRealtimeChannelRef.current;
       inboxRealtimeChannelRef.current = null;
       if (ch) void supabase.removeChannel(ch);
@@ -212,38 +256,40 @@ export function AppLayout() {
 
   useEffect(() => {
     let cancelled = false;
+    const cancelDefer = deferSecondaryWork(() => {
+      void (async () => {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user?.id || cancelled) return;
 
-    void (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user?.id) return;
+        const ch = supabase
+          .channel(`in-app-notifications:${user.id}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "in_app_notifications",
+              filter: `user_id=eq.${user.id}`,
+            },
+            () => {
+              void pulseAppNotifications();
+            },
+          )
+          .subscribe();
 
-      const ch = supabase
-        .channel(`in-app-notifications:${user.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "in_app_notifications",
-            filter: `user_id=eq.${user.id}`,
-          },
-          () => {
-            void pulseAppNotifications();
-          },
-        )
-        .subscribe();
-
-      if (cancelled) {
-        void supabase.removeChannel(ch);
-        return;
-      }
-      notifRealtimeChannelRef.current = ch;
-    })();
+        if (cancelled) {
+          void supabase.removeChannel(ch);
+          return;
+        }
+        notifRealtimeChannelRef.current = ch;
+      })();
+    }, 2000);
 
     return () => {
       cancelled = true;
+      cancelDefer();
       const ch = notifRealtimeChannelRef.current;
       notifRealtimeChannelRef.current = null;
       if (ch) void supabase.removeChannel(ch);
@@ -251,6 +297,7 @@ export function AppLayout() {
   }, [pulseAppNotifications]);
 
   const shellBg = isMesRencontres ? "#F4F6F8" : APP_BG;
+  const nativeBottomNav = usesNativeBottomNavigation();
 
   const handleProfileTabClick = useCallback(() => {
     const currentPath = location.pathname;
@@ -270,29 +317,38 @@ export function AppLayout() {
   return (
     <DiscoverUndoNavProvider>
       <div
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          flexDirection: "column",
-          background: shellBg,
-        }}
+        className="splove-app-shell"
+        style={
+          {
+            background: shellBg,
+            [SPLOVE_BOTTOM_NAV_HEIGHT_VAR]: nativeBottomNav
+              ? SPLOVE_NATIVE_BOTTOM_NAV_HEIGHT_FALLBACK
+              : SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK,
+          } as CSSProperties
+        }
       >
         {!isChat && !isMesRencontres ? <GlobalHeader inAppUnreadCount={inAppUnread} /> : null}
 
-        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div
+          className={
+            nativeBottomNav ? "splove-app-shell__main splove-app-shell__main--native-nav" : "splove-app-shell__main"
+          }
+        >
           <Outlet />
         </div>
 
-        <div style={{ flexShrink: 0 }}>
-          <SPLoveBottomNav
-            activeRoute={location.pathname}
-            unreadMessagesCount={inboxCount}
-            likesCount={likesCount}
-            profileNeedsAction={!isProfileLoading && !isProfileComplete}
-            activityProposalsNeedAction={activityPendingCount > 0}
-            onProfileTabClick={handleProfileTabClick}
-          />
-        </div>
+        {!nativeBottomNav ? (
+          <div ref={bottomNavMeasureRef} className="splove-app-shell__bottom-nav">
+            <SPLoveBottomNav
+              activeRoute={location.pathname}
+              unreadMessagesCount={inboxCount}
+              likesCount={likesCount}
+              profileNeedsAction={!isProfileLoading && !isProfileComplete}
+              activityProposalsNeedAction={activityPendingCount > 0}
+              onProfileTabClick={handleProfileTabClick}
+            />
+          </div>
+        ) : null}
       </div>
     </DiscoverUndoNavProvider>
   );

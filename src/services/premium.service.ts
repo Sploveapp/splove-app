@@ -7,6 +7,7 @@ import {
   errorMentionsColumn,
   isSubscriptionsColumnError,
 } from "../lib/subscriptionsQuery";
+import { isMissingSupabaseResourceError, warnOptional } from "../lib/optionalSupabase";
 import type { Subscription } from "../types/premium.types";
 
 const ACTIVE_STATUS = "active";
@@ -33,6 +34,11 @@ export async function getActiveSubscription(
 
   if (!withEnd.error) {
     return withEnd.data as Subscription | null;
+  }
+
+  if (isMissingSupabaseResourceError(withEnd.error)) {
+    warnOptional("subscriptions.profile_id", withEnd.error);
+    return null;
   }
 
   if (
@@ -68,11 +74,11 @@ export async function getActiveSubscription(
       if (!minimal.error) {
         return minimal.data as Subscription | null;
       }
-      console.error("getActiveSubscription", minimal.error);
+      console.warn("[premium] getActiveSubscription", minimal.error.message ?? minimal.error);
       return null;
     }
 
-    console.error("getActiveSubscription", noEnd.error);
+    console.warn("[premium] getActiveSubscription", noEnd.error.message ?? noEnd.error);
     return null;
   }
 
@@ -91,14 +97,26 @@ export async function getActiveSubscription(
     }
   }
 
-  console.error("getActiveSubscription", withEnd.error);
+  console.warn("[premium] getActiveSubscription", withEnd.error.message ?? withEnd.error);
   return null;
 }
 
-async function referralPlusOrBeta(profileId: string): Promise<boolean> {
-  let cols = ["referral_plus_until", "beta_splove_plus_unlocked"];
+const REFERRAL_PLUS_SKIP_KEY = "splove_referral_plus_until_skip_v1";
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+function isReferralPlusUntilSkipped(): boolean {
+  try {
+    return sessionStorage.getItem(REFERRAL_PLUS_SKIP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+async function referralPlusOrBeta(profileId: string): Promise<boolean> {
+  let cols = isReferralPlusUntilSkipped()
+    ? ["beta_splove_plus_unlocked"]
+    : ["referral_plus_until", "beta_splove_plus_unlocked"];
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     const { data, error } = await supabase
       .from("profiles")
       .select(cols.join(", "))
@@ -122,8 +140,15 @@ async function referralPlusOrBeta(profileId: string): Promise<boolean> {
 
     const m = (error.message ?? "").match(/column\s+["']?([a-zA-Z0-9_]+)["']?/i);
     const missingCol = m?.[1] ?? null;
+    if (missingCol === "referral_plus_until") {
+      try {
+        sessionStorage.setItem(REFERRAL_PLUS_SKIP_KEY, "1");
+      } catch {
+        /* ignore */
+      }
+    }
     if (!missingCol || !cols.includes(missingCol)) {
-      cols = ["referral_plus_until"];
+      cols = cols.filter((c) => c !== "referral_plus_until");
     } else {
       cols = cols.filter((c) => c !== missingCol);
     }

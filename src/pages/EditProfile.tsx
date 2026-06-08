@@ -29,6 +29,7 @@ import {
   pickSecondaryProfilePhotoStoredRef,
   resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
+import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
 import { coerceProfileHeightCm, parseHeightCmOptionalInput } from "../lib/profileHeightCm";
 
 type SportOption = { id: string | number; name: string; category?: string | null };
@@ -206,7 +207,66 @@ export default function EditProfile() {
   useEffect(() => {
     logProfilePhotoUiDecision("edit_profile.screen", profile, primaryImgSrc, "primary");
     logProfilePhotoUiDecision("edit_profile.screen", profile, secondaryImgSrc, "secondary");
-  }, [profile, primaryImgSrc, secondaryImgSrc]);
+    PhotoRenderLog.displaySrc({
+      screen: "EditProfile",
+      displaySrc: primaryImgSrc,
+      resolvedUrl: primaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user?.id ?? null, slot: "primary" },
+    });
+    PhotoRenderLog.resolvedUrl({
+      screen: "EditProfile",
+      displaySrc: primaryImgSrc,
+      resolvedUrl: primaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user?.id ?? null, slot: "primary", urlIndex: primaryPhoto.urlIndex },
+    });
+    PhotoRenderLog.displaySrc({
+      screen: "EditProfile",
+      displaySrc: secondaryImgSrc,
+      resolvedUrl: secondaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user?.id ?? null, slot: "secondary" },
+    });
+    PhotoRenderLog.resolvedUrl({
+      screen: "EditProfile",
+      displaySrc: secondaryImgSrc,
+      resolvedUrl: secondaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user?.id ?? null, slot: "secondary", urlIndex: secondaryPhoto.urlIndex },
+    });
+  }, [
+    profile,
+    primaryImgSrc,
+    secondaryImgSrc,
+    primaryPhoto.src,
+    secondaryPhoto.src,
+    primaryPhoto.urlIndex,
+    secondaryPhoto.urlIndex,
+    user?.id,
+  ]);
+
+  const editPrimaryImgHandlers = chainPhotoRenderHandlers(
+    {
+      screen: "EditProfile",
+      displaySrc: primaryImgSrc,
+      resolvedUrl: primaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user?.id ?? null, slot: "primary" },
+    },
+    { onLoad: primaryPhoto.onImageLoad, onError: primaryPhoto.onImageError },
+  );
+
+  const editSecondaryImgHandlers = chainPhotoRenderHandlers(
+    {
+      screen: "EditProfile",
+      displaySrc: secondaryImgSrc,
+      resolvedUrl: secondaryPhoto.src,
+      profile,
+      extra: { profileId: profile?.id ?? user?.id ?? null, slot: "secondary" },
+    },
+    { onLoad: secondaryPhoto.onImageLoad, onError: secondaryPhoto.onImageError },
+  );
 
   const syncProfileForScreen = useCallback(async () => {
     if (!user?.id) return;
@@ -634,8 +694,8 @@ export default function EditProfile() {
                   key={`primary-${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}`}
                   src={primaryImgSrc}
                   alt={t("photos.primary")}
-                  onLoad={primaryPhoto.onImageLoad}
-                  onError={primaryPhoto.onImageError}
+                  onLoad={editPrimaryImgHandlers.onLoad}
+                  onError={editPrimaryImgHandlers.onError}
                   style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, marginBottom: 10 }}
                 />
               ) : (
@@ -680,8 +740,8 @@ export default function EditProfile() {
                   key={`secondary-${secondaryPhoto.activeRef ?? secondaryStoredRef ?? "none"}-${secondaryPhoto.urlIndex}`}
                   src={secondaryImgSrc}
                   alt={t("photos.secondary")}
-                  onLoad={secondaryPhoto.onImageLoad}
-                  onError={secondaryPhoto.onImageError}
+                  onLoad={editSecondaryImgHandlers.onLoad}
+                  onError={editSecondaryImgHandlers.onError}
                   style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, marginBottom: 10 }}
                 />
               ) : (

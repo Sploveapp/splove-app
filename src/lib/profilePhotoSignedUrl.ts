@@ -3,8 +3,8 @@ import { profilePhotoStoragePathFromPublicUrl } from "./profilePhotoStoragePath"
 
 export const PROFILE_PHOTOS_BUCKET = "profile-photos" as const;
 
-/** Default signed URL lifetime (1 hour). */
-export const DEFAULT_PROFILE_PHOTO_SIGNED_TTL_SEC = 300;
+/** Default signed URL lifetime — 1 h (WKWebView iOS ne recharge pas automatiquement). */
+export const DEFAULT_PROFILE_PHOTO_SIGNED_TTL_SEC = 3600;
 
 const BUCKET_SLASH = `${PROFILE_PHOTOS_BUCKET}/`;
 

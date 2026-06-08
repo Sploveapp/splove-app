@@ -7,7 +7,6 @@ import { env } from "../lib/env";
 import { useAuth } from "../contexts/AuthContext";
 import { GlobalHeader } from "../components/GlobalHeader";
 import { SplashScreen } from "../components/SplashScreen";
-import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
 import { isAdultFromBirthIso } from "../lib/ageGate";
 import {
   mergeOptionalProfileFields,
@@ -17,6 +16,7 @@ import {
   isUndefinedColumnError,
   selectProfilesFirstMatch,
 } from "../lib/profileSelect";
+import { mergeAdaptedOpennessFields } from "../lib/profileAdaptedOpenness";
 import { isProfileRecord } from "../lib/appProfile";
 import {
   type CitySearchSuggestion,
@@ -26,6 +26,7 @@ import {
 } from "../lib/geocoding";
 import { formatCityDisplay, normalizePrimaryLocalityLabel, normalizeProfileCityForStorage } from "../lib/formatCityDisplay";
 import { clearOnboardingUiLocalCache } from "../lib/onboardingUiLocalCache";
+import { offerPushNotificationsAfterOnboarding } from "../lib/pushNotifications";
 import { getCurrentPositionCoords } from "../utils/geolocation";
 import {
   APP_BORDER,
@@ -37,7 +38,6 @@ import {
 } from "../constants/theme";
 import { PHOTO_VERIFICATION_PLACEHOLDER } from "../constants";
 import { profilePhotoStoragePathFromPublicUrl } from "../lib/profilePhotoStoragePath";
-import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { photoModerationHeadline, photoModerationRejectedDetail } from "../lib/photoModerationUi";
 import { invokeModeratePhoto } from "../services/photoModeration.service";
 import type { PhotoModerationStatus } from "../types/photoModeration.types";
@@ -63,7 +63,30 @@ import {
   isProfileReadyForDiscover,
   messageForDiscoverReadinessGap,
 } from "../lib/onboardingDiscoverReadiness";
-import { computeOnboardingProfileFillPercent } from "../lib/onboardingProfileFillPercent";
+import {
+  computeOnboardingProfileFillPercent,
+  type OnboardingFillSnapshot,
+} from "../lib/onboardingProfileFillPercent";
+import {
+  buildCanSubmitChecks,
+  logOnboardingFinalValidationDiagnostics,
+} from "../lib/onboardingProfileValidationDebug";
+import {
+  normalizeProfilePhotoStoredRef,
+  resolveProfilePhotoDisplayUrl,
+  uploadProfilePhoto,
+} from "../lib/profilePhotoUpload";
+import { SPLovePhotoLog } from "../lib/profilePhotoPipelineLog";
+import { PhotoFlowLog } from "../lib/photoFlowLog";
+import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
+import {
+  ensureOnboardingCompletionInProfile,
+  fetchProfileAfterOnboardingSubmit,
+  mergeProfileRowPreservingCompletion,
+  profileRowOnboardingComplete,
+} from "../lib/onboardingCompletion";
+import { OnboardingFlowLog } from "../lib/onboardingFlowLog";
+import { clearProfilePhotoResolutionCache } from "../hooks/useProfilePhotoSignedUrl";
 import {
   type EnergyOptionKey,
   normalizeIntensityForOnboardingHydrate,
@@ -75,6 +98,28 @@ import {
   sportMatchesFirstThreeLetters,
   sportPictogramForSlug,
 } from "../lib/onboardingSportsQuickPick";
+
+function isSafePhotoPreviewSrc(src: string | null | undefined): boolean {
+  const value = typeof src === "string" ? src.trim() : "";
+  if (!value) return false;
+  if (value.includes("[redacted")) return false;
+  return true;
+}
+
+function pickOnboardingPhotoPreviewSrc(
+  localPersisted: string | null,
+  fileObjectUrl: string | null,
+  remoteResolved: string | null,
+): string | null {
+  for (const candidate of [localPersisted, fileObjectUrl, remoteResolved]) {
+    if (isSafePhotoPreviewSrc(candidate)) return candidate;
+  }
+  return null;
+}
+
+function revokeObjectUrlSafe(url: string | null | undefined): void {
+  if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+}
 
 const genderOptions = [
   { value: "male", label: "gender.male" },
@@ -273,14 +318,16 @@ function extractFaultyColumnNameFromPostgrestMessage(message: string | undefined
   return m?.[1] ?? null;
 }
 
-/** Ordre de retrait défensif + mapping legacy (schéma mixte prod). */
-const PROD_SANITIZE_AGGRESSIVE_STRIP_ORDER = [
-  "practice_preferences",
-  "sport_time",
-  "main_photo_url",
+/** Ordre de retrait défensif + mapping legacy (schéma mixte prod). Les colonnes photo canoniques ne sont jamais retirées ici. */
+const PROD_SANITIZE_AGGRESSIVE_STRIP_ORDER = ["practice_preferences", "sport_time"] as const;
+
+/** Jamais retirées du payload upsert — même si PostgREST signale une colonne absente (mapping legacy à la place). */
+const PROTECTED_PROFILE_PHOTO_COLUMNS = new Set([
   "portrait_url",
   "fullbody_url",
-] as const;
+  "main_photo_url",
+  "avatar_url",
+]);
 
 type ProdPayloadSanitizeContext = {
   interestedIn: string;
@@ -334,18 +381,150 @@ function sanitizeProfilesPayloadForProd(
   const next = { ...payload };
   if (aggressivePhase < 0) {
     const faulty = extractFaultyColumnNameFromPostgrestMessage(errorMessage);
-    if (faulty) {
+    if (faulty && !PROTECTED_PROFILE_PHOTO_COLUMNS.has(faulty)) {
       delete next[faulty];
       applyLegacyMappingAfterRemoval(faulty, next, ctx);
+    } else if (faulty && PROTECTED_PROFILE_PHOTO_COLUMNS.has(faulty)) {
+      applyLegacyMappingAfterRemoval(faulty, next, ctx);
     }
-    return next;
+    return reinjectOnboardingPhotoUrlsInPayload(next, ctx);
   }
   const key = PROD_SANITIZE_AGGRESSIVE_STRIP_ORDER[aggressivePhase];
   if (key) {
     delete next[key];
     applyLegacyMappingAfterRemoval(key, next, ctx);
   }
+  return reinjectOnboardingPhotoUrlsInPayload(next, ctx);
+}
+
+/** Réinjecte les URLs photo canoniques après sanitize / retry upsert. */
+function reinjectOnboardingPhotoUrlsInPayload(
+  payload: Record<string, unknown>,
+  ctx: ProdPayloadSanitizeContext,
+): Record<string, unknown> {
+  const portrait = normalizeProfilePhotoStoredRef(ctx.portraitUrl, supabase).trim();
+  const fullbody = normalizeProfilePhotoStoredRef(ctx.fullbodyUrl, supabase).trim();
+  if (!portrait && !fullbody) return payload;
+  const next = { ...payload };
+  if (portrait) {
+    next.portrait_url = portrait;
+    if (!String(next.avatar_url ?? "").trim()) next.avatar_url = portrait;
+  }
+  if (fullbody) next.fullbody_url = fullbody;
+  next.main_photo_url = portrait || fullbody;
   return next;
+}
+
+function profileRowHasCanonicalPhotos(row: Record<string, unknown> | null | undefined): boolean {
+  if (!row) return false;
+  const portrait = typeof row.portrait_url === "string" ? row.portrait_url.trim() : "";
+  const fullbody = typeof row.fullbody_url === "string" ? row.fullbody_url.trim() : "";
+  const main = typeof row.main_photo_url === "string" ? row.main_photo_url.trim() : "";
+  return portrait.length > 0 || fullbody.length > 0 || main.length > 0;
+}
+
+function mergeOnboardingPhotosIntoProfileRow(
+  row: Record<string, unknown>,
+  portraitUrl: string,
+  fullbodyUrl: string,
+): Record<string, unknown> {
+  const portrait = normalizeProfilePhotoStoredRef(portraitUrl, supabase).trim();
+  const fullbody = normalizeProfilePhotoStoredRef(fullbodyUrl, supabase).trim();
+  if (!portrait && !fullbody) return row;
+  const next = { ...row };
+  if (portrait) {
+    next.portrait_url = portrait;
+    if (!String(next.avatar_url ?? "").trim()) next.avatar_url = portrait;
+  }
+  if (fullbody) next.fullbody_url = fullbody;
+  next.main_photo_url = portrait || fullbody;
+  return next;
+}
+
+/** Écriture dédiée des URLs photo canoniques — indépendante des retries sanitize du gros upsert. */
+async function ensureOnboardingPhotosInProfile(
+  userId: string,
+  portraitUrl: string,
+  fullbodyUrl: string,
+  source: string,
+): Promise<Record<string, unknown> | null> {
+  const portrait = normalizeProfilePhotoStoredRef(portraitUrl, supabase).trim();
+  const fullbody = normalizeProfilePhotoStoredRef(fullbodyUrl, supabase).trim();
+  if (!portrait && !fullbody) return null;
+
+  SPLovePhotoLog.urlGenerated({
+    source,
+    userId,
+    storedRef: portrait || fullbody,
+    displayUrl: portrait || fullbody,
+    extra: { hasPortrait: Boolean(portrait), hasFullbody: Boolean(fullbody) },
+  });
+
+  const payload: Record<string, unknown> = {
+    id: userId,
+    updated_at: new Date().toISOString(),
+    ...(portrait ? { portrait_url: portrait, avatar_url: portrait } : {}),
+    ...(fullbody ? { fullbody_url: fullbody } : {}),
+    main_photo_url: portrait || fullbody,
+  };
+
+  PhotoFlowLog.profilePayloadSent({
+    userId,
+    source,
+    portrait_url: portrait || null,
+    fullbody_url: fullbody || null,
+    main_photo_url: (portrait || fullbody) || null,
+    avatar_url: portrait || null,
+  });
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .upsert(payload, { onConflict: "id" })
+    .select("id, portrait_url, fullbody_url, main_photo_url, avatar_url")
+    .maybeSingle();
+
+  if (error) {
+    SPLovePhotoLog.dbSaveError({
+      source,
+      userId,
+      storedRef: portrait || fullbody,
+      error: error.message,
+    });
+    PhotoFlowLog.profileReadback({
+      userId,
+      source,
+      error: error.message,
+    });
+    console.error("[Onboarding] ensureOnboardingPhotosInProfile failed", { userId, source, error });
+    return null;
+  }
+
+  const savedRow = (data ?? { id: userId, ...payload }) as Record<string, unknown>;
+  PhotoFlowLog.profileReadback({
+    userId,
+    source,
+    portrait_url: typeof savedRow.portrait_url === "string" ? savedRow.portrait_url : null,
+    fullbody_url: typeof savedRow.fullbody_url === "string" ? savedRow.fullbody_url : null,
+    main_photo_url: typeof savedRow.main_photo_url === "string" ? savedRow.main_photo_url : null,
+    avatar_url: typeof savedRow.avatar_url === "string" ? savedRow.avatar_url : null,
+  });
+
+  SPLovePhotoLog.dbSaveSuccess({
+    source,
+    userId,
+    storedRef: portrait || fullbody,
+    profileRow: (data ?? { id: userId, ...payload }) as Record<string, unknown>,
+  });
+  PhotoFlowLog.savedToProfile({
+    userId,
+    profileId: userId,
+    photoField: portrait ? "portrait_url" : "fullbody_url",
+    storedRef: portrait || fullbody,
+    main_photo_url: portrait || fullbody,
+    portrait_url: portrait || null,
+  });
+  clearProfilePhotoResolutionCache();
+  return (data ?? { id: userId, ...payload }) as Record<string, unknown>;
 }
 
 /** Valeurs BDD existantes (`profiles.intent`) — ne pas casser Discover/Matching. */
@@ -403,10 +582,25 @@ function onboardingPulseKey(s: number): string {
 }
 
 const ONBOARDING_RADIUS_KM_OPTIONS = [10, 25, 50, 100] as const;
-const PHOTO_BUCKET = "profile-photos";
 const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 const PHOTO_ACCEPT_MIMES = new Set(["image/jpeg", "image/png"]);
 const ONBOARDING_PHOTO_MAX_MB = Math.round(PHOTO_MAX_BYTES / (1024 * 1024));
+
+function onboardingPhotoSlotFilled(savedUrl: string, file: File | null): boolean {
+  return savedUrl.trim() !== "" || file != null;
+}
+
+function countOnboardingPhotoSlots(
+  portraitSavedUrl: string,
+  portraitFile: File | null,
+  bodySavedUrl: string,
+  bodyFile: File | null,
+): number {
+  let count = 0;
+  if (onboardingPhotoSlotFilled(portraitSavedUrl, portraitFile)) count += 1;
+  if (onboardingPhotoSlotFilled(bodySavedUrl, bodyFile)) count += 1;
+  return count;
+}
 
 const ONBOARDING_SPORT_MATCH_OPTIONS: readonly {
   value: SportMatchPreferenceDb;
@@ -421,74 +615,6 @@ const ONBOARDING_SPORT_MATCH_OPTIONS: readonly {
   },
   { value: "both", labelKey: "sport_match_pref_both_label", descKey: "sport_match_pref_both_desc" },
 ];
-
-async function uploadOnboardingPhoto(
-  userId: string,
-  file: File,
-  kind: "portrait" | "activity"
-): Promise<string | null> {
-  try {
-    if (!(file instanceof File)) {
-      console.error("UPLOAD_FAILED", new Error("Invalid file object"));
-      return null;
-    }
-
-    console.log("UPLOAD_START", file);
-    console.log("FILE_TYPE", file.type);
-    console.log("FILE_SIZE", file.size);
-
-    const fileExtFromName = file.name.split(".").pop()?.trim().toLowerCase();
-    const fileExt =
-      fileExtFromName && /^[a-z0-9]+$/.test(fileExtFromName)
-        ? fileExtFromName
-        : file.type === "image/png"
-          ? "png"
-          : "jpg";
-
-    const fileName = `${kind}_${Date.now()}.${fileExt}`;
-    const filePath = `${userId}/${fileName}`;
-
-    console.log("PHOTO_UPLOAD_START", {
-      userId,
-      fileName: file.name,
-      fileType: file.type || `image/${fileExt}`,
-      fileSize: file.size,
-      bucket: PHOTO_BUCKET,
-      path: filePath,
-    });
-
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from(PHOTO_BUCKET)
-      .upload(filePath, file, {
-        cacheControl: "3600",
-        upsert: true,
-      });
-
-    if (uploadError) {
-      console.error("UPLOAD_ERROR", uploadError);
-      console.error("PHOTO_STORAGE_UPLOAD_ERROR", uploadError);
-      const msg = `${uploadError.message ?? ""} ${(uploadError as { code?: string }).code ?? ""}`.toLowerCase();
-      if (
-        msg.includes("bucket") ||
-        msg.includes("policy") ||
-        msg.includes("permission") ||
-        msg.includes("not found") ||
-        msg.includes("403") ||
-        msg.includes("404")
-      ) {
-        console.error("STORAGE_BUCKET_OR_POLICY_PROBLEM");
-      }
-      throw uploadError;
-    }
-
-    console.log("UPLOAD_SUCCESS", uploadData);
-    console.log("PHOTO_STORAGE_UPLOAD_SUCCESS", uploadData);
-    return supabase.storage.from(PHOTO_BUCKET).getPublicUrl(filePath).data.publicUrl;
-  } catch (err) {
-    console.error("UPLOAD_FAILED", err);
-    return null;
-  }
-}
 
 const BIRTH_YEAR_MIN = 1900;
 
@@ -553,6 +679,8 @@ export default function Onboarding() {
     syncAuthSession,
   } = useAuth();
 
+  console.log("[ReactGuard] onboarding render start");
+
   const [step, setStep] = useState(1);
   /** Sous-étapes de l’étape 1 — une question principale par micro-écran. */
   const [step1SubStep, setStep1SubStep] = useState(0);
@@ -603,8 +731,14 @@ export default function Onboarding() {
   const [sportPhraseOptional, setSportPhraseOptional] = useState("");
   const [portraitFile, setPortraitFile] = useState<File | null>(null);
   const [bodyFile, setBodyFile] = useState<File | null>(null);
+  const [portraitLocalPreviewUrl, setPortraitLocalPreviewUrl] = useState<string | null>(null);
+  const [bodyLocalPreviewUrl, setBodyLocalPreviewUrl] = useState<string | null>(null);
   const [portraitSavedUrl, setPortraitSavedUrl] = useState("");
   const [bodySavedUrl, setBodySavedUrl] = useState("");
+  const [portraitDisplayResolved, setPortraitDisplayResolved] = useState<string | null>(null);
+  const [bodyDisplayResolved, setBodyDisplayResolved] = useState<string | null>(null);
+  const [portraitPreviewLoadFailed, setPortraitPreviewLoadFailed] = useState(false);
+  const [bodyPreviewLoadFailed, setBodyPreviewLoadFailed] = useState(false);
   const [photoUploadingKind, setPhotoUploadingKind] = useState<null | "portrait" | "body">(null);
   const [practicePreferences, setPracticePreferences] = useState<string[]>([]);
   const [adaptedAmenagements, setAdaptedAmenagements] = useState<AdaptedPracticeAmenagements>("");
@@ -693,7 +827,9 @@ export default function Onboarding() {
         portrait_url: portraitSavedUrl || null,
         fullbody_url: bodySavedUrl || null,
       };
-      console.log("STEP_SAVE_START", currentStep, formDataSnapshot);
+      if (import.meta.env.DEV) {
+        console.log("STEP_SAVE_START", currentStep, formDataSnapshot);
+      }
       const nowIso = new Date().toISOString();
       const payload: Record<string, unknown> = {
         id: userId,
@@ -748,7 +884,9 @@ export default function Onboarding() {
       if (currentStep >= 5) payload.sport_match_preference = sportMatchPreference;
       payload.onboarding_sports_count = selectedSportIds.length;
       payload.onboarding_sports_with_level_count = selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length;
-      console.log("PROFILE_UPDATE_PAYLOAD", payload);
+      if (import.meta.env.DEV) {
+        console.log("PROFILE_UPDATE_PAYLOAD", payload);
+      }
 
       let { error: upsertError } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
       if (upsertError) {
@@ -929,6 +1067,7 @@ export default function Onboarding() {
         if (cancelled || !p || typeof p !== "object") return;
         const row = p as Record<string, unknown>;
         Object.assign(row, await mergeOptionalProfileFields(supabase, userId));
+        Object.assign(row, await mergeAdaptedOpennessFields(supabase, userId));
         const profLang = row.language;
         if (profLang === "fr" || profLang === "en") {
           setLanguage(profLang);
@@ -971,10 +1110,17 @@ export default function Onboarding() {
           pl === "spontaneous" || pl === "planned" || pl === "both" ? pl : ""
         );
         setPracticePreferences(Array.isArray(row.practice_preferences) ? (row.practice_preferences as string[]) : []);
-        setOpenToAdaptedPractice(parseHydratedOpenToAdapted(row.open_to_adapted_activities));
+        const opennessRaw =
+          row.open_to_adapted_activities ??
+          (row.pref_open_to_adapted_activity === true
+            ? "yes"
+            : row.pref_open_to_adapted_activity === false
+              ? "no"
+              : null);
+        setOpenToAdaptedPractice(parseHydratedOpenToAdapted(opennessRaw));
         setSportMatchPreference(parseSportMatchPreference(row.sport_match_preference));
         setAdaptedAmenagements(
-          adaptedAmenagementsFromProfile(row.needs_adapted_activities, row.open_to_adapted_activities)
+          adaptedAmenagementsFromProfile(row.needs_adapted_activities, opennessRaw)
         );
         const sp = row.sport_phrase;
         setSportPhraseOptional(typeof sp === "string" ? sp : "");
@@ -986,8 +1132,28 @@ export default function Onboarding() {
           [row.fullbody_url, row.activity_photo_path, row.fullbody_path, row.photo2_path]
             .map((x) => (typeof x === "string" ? x.trim() : ""))
             .find(Boolean) ?? "";
-        setPortraitSavedUrl(firstPortraitRef);
-        setBodySavedUrl(firstBodyRef);
+        const faceRef = normalizeProfilePhotoStoredRef(firstPortraitRef, supabase);
+        const activityRef = normalizeProfilePhotoStoredRef(firstBodyRef, supabase);
+        setPortraitSavedUrl(faceRef);
+        setBodySavedUrl(activityRef);
+        void resolveProfilePhotoDisplayUrl(supabase, faceRef).then((url) => {
+          if (!cancelled) {
+            setPortraitDisplayResolved(url);
+            console.log("[profilePhoto] hydrate facePhotoUrl", {
+              facePhotoUrl: faceRef || null,
+              displayOk: Boolean(url),
+            });
+          }
+        });
+        void resolveProfilePhotoDisplayUrl(supabase, activityRef).then((url) => {
+          if (!cancelled) {
+            setBodyDisplayResolved(url);
+            console.log("[profilePhoto] hydrate activityPhotoUrl", {
+              activityPhotoUrl: activityRef || null,
+              displayOk: Boolean(url),
+            });
+          }
+        });
 
         // height_cm + has_children: probes séparés (colonnes optionnelles, hors tiers).
         // Si la colonne n’existe pas en BDD, on ignore silencieusement (pas de crash).
@@ -1168,21 +1334,92 @@ export default function Onboarding() {
     () => (bodyFile ? URL.createObjectURL(bodyFile) : null),
     [bodyFile]
   );
-  const signedSavedPortrait = useProfilePhotoSignedUrl(
-    portraitPreviewUrl ? null : (portraitSavedUrl.trim() || null),
+  useEffect(() => {
+    if (portraitFile || !portraitSavedUrl.trim()) return;
+    let cancelled = false;
+    void resolveProfilePhotoDisplayUrl(supabase, portraitSavedUrl).then((url) => {
+      if (!cancelled && isSafePhotoPreviewSrc(url)) {
+        setPortraitDisplayResolved(url);
+        console.log("PHOTO_PREVIEW_REMOTE_OK", {
+          slot: "face",
+          facePhotoUrl: portraitSavedUrl,
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [portraitSavedUrl, portraitFile]);
+
+  useEffect(() => {
+    if (bodyFile || !bodySavedUrl.trim()) return;
+    let cancelled = false;
+    void resolveProfilePhotoDisplayUrl(supabase, bodySavedUrl).then((url) => {
+      if (!cancelled && isSafePhotoPreviewSrc(url)) {
+        setBodyDisplayResolved(url);
+        console.log("PHOTO_PREVIEW_REMOTE_OK", {
+          slot: "activity",
+          activityPhotoUrl: bodySavedUrl,
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [bodySavedUrl, bodyFile]);
+
+  const portraitDisplayUrl = useMemo(
+    () =>
+      pickOnboardingPhotoPreviewSrc(
+        portraitLocalPreviewUrl,
+        portraitPreviewUrl,
+        portraitDisplayResolved,
+      ),
+    [portraitLocalPreviewUrl, portraitPreviewUrl, portraitDisplayResolved],
   );
-  const signedSavedBody = useProfilePhotoSignedUrl(
-    bodyPreviewUrl ? null : (bodySavedUrl.trim() || null),
+  const bodyDisplayUrl = useMemo(
+    () =>
+      pickOnboardingPhotoPreviewSrc(bodyLocalPreviewUrl, bodyPreviewUrl, bodyDisplayResolved),
+    [bodyLocalPreviewUrl, bodyPreviewUrl, bodyDisplayResolved],
   );
-  const portraitDisplayUrl = portraitPreviewUrl || signedSavedPortrait || null;
-  const bodyDisplayUrl = bodyPreviewUrl || signedSavedBody || null;
+
+  useEffect(() => {
+    setPortraitPreviewLoadFailed(false);
+  }, [portraitDisplayUrl]);
+
+  useEffect(() => {
+    setBodyPreviewLoadFailed(false);
+  }, [bodyDisplayUrl]);
+
+  useEffect(() => {
+    if (portraitDisplayUrl?.startsWith("blob:")) {
+      console.log("PHOTO_PREVIEW_LOCAL_OK", { slot: "face" });
+    }
+  }, [portraitDisplayUrl]);
+
+  useEffect(() => {
+    if (bodyDisplayUrl?.startsWith("blob:")) {
+      console.log("PHOTO_PREVIEW_LOCAL_OK", { slot: "activity" });
+    }
+  }, [bodyDisplayUrl]);
+
+  useEffect(() => {
+    console.log("[profilePhoto] preview_state", {
+      facePhotoUrl: portraitSavedUrl.trim() || null,
+      activityPhotoUrl: bodySavedUrl.trim() || null,
+      facePreviewSrc: portraitDisplayUrl ? "set" : "missing",
+      activityPreviewSrc: bodyDisplayUrl ? "set" : "missing",
+    });
+  }, [portraitSavedUrl, bodySavedUrl, portraitDisplayUrl, bodyDisplayUrl]);
 
   useEffect(() => {
     return () => {
-      if (portraitPreviewUrl) URL.revokeObjectURL(portraitPreviewUrl);
-      if (bodyPreviewUrl) URL.revokeObjectURL(bodyPreviewUrl);
+      revokeObjectUrlSafe(portraitPreviewUrl);
+      revokeObjectUrlSafe(bodyPreviewUrl);
+      revokeObjectUrlSafe(portraitLocalPreviewUrl);
+      revokeObjectUrlSafe(bodyLocalPreviewUrl);
     };
-  }, [portraitPreviewUrl, bodyPreviewUrl]);
+  }, [portraitPreviewUrl, bodyPreviewUrl, portraitLocalPreviewUrl, bodyLocalPreviewUrl]);
 
   /** Après un submit refusé, `handleSubmit` remplit `stepHint` ; purger quand l’utilisateur corrige la dernière étape. */
   useEffect(() => {
@@ -1227,12 +1464,26 @@ export default function Onboarding() {
     if (import.meta.env.DEV) console.log("SELECTED_SPORTS", selectedSports.map((s) => s.name));
   }, [selectedSports]);
 
-  if (authLoading) {
+  const onboardingPortraitSavedOk = portraitSavedUrl.trim() !== "";
+  const onboardingBodySavedOk = bodySavedUrl.trim() !== "";
+  const onboardingPhotosCanProceed =
+    onboardingPortraitSavedOk && onboardingBodySavedOk && photoUploadingKind === null;
+
+  useEffect(() => {
+    if (step !== 9 || !onboardingPhotosCanProceed || photoUploadingKind !== null) return;
+    setPhotoStepError((prev) => {
+      if (!prev) return prev;
+      if (prev === t("onboarding_photo_upload_progress")) return prev;
+      return null;
+    });
+  }, [step, onboardingPhotosCanProceed, photoUploadingKind, t]);
+
+  if (authLoading || !isAuthInitialized) {
     return <SplashScreen />;
   }
 
-  if (user?.id && isProfileLoading) {
-    return <PostLoginProfileSplash />;
+  if (user?.id && (isProfileLoading || profile == null)) {
+    return <SplashScreen />;
   }
 
   if (
@@ -1245,7 +1496,15 @@ export default function Onboarding() {
     isProfileComplete &&
     profile?.id === user.id
   ) {
-    return <Navigate to="/discover" replace />;
+    const row = profile as unknown as Record<string, unknown>;
+    console.log("[ONBOARDING_GUARD] decision", {
+      profile_completed: row.profile_completed ?? null,
+      onboarding_completed: row.onboarding_completed ?? null,
+      onboarding_done: row.onboarding_done ?? null,
+      is_profile_complete: isProfileComplete,
+      target: "/move",
+    });
+    return <Navigate to="/move" replace />;
   }
 
   const onboardingPreferredAgeDraftOk = (() => {
@@ -1265,17 +1524,6 @@ export default function Onboarding() {
     obLocLat != null &&
     obLocLng != null &&
     [10, 25, 50, 100].includes(obLocRadiusKm);
-
-  /** Deux photos obligatoires : portrait (visage) + corps (silhouette / en pied). */
-  const onboardingPortraitSavedOk = portraitSavedUrl.trim() !== "";
-  const onboardingBodySavedOk = bodySavedUrl.trim() !== "";
-  const onboardingPhotosCanProceed =
-    onboardingPortraitSavedOk && onboardingBodySavedOk && photoUploadingKind === null;
-  const onboardingShowPhotoSploveReminder =
-    photoUploadingKind === null &&
-    !photoStepDraftSaving &&
-    !photoStepError &&
-    !onboardingPhotosCanProceed;
 
   const canSubmit =
     firstName.trim() !== "" &&
@@ -1327,7 +1575,7 @@ export default function Onboarding() {
   const finalStepBlockReason =
     step === TOTAL_STEPS && !canSubmit && !loading ? getCanSubmitBlockReason() : null;
 
-  const onboardingProfileFillPct = computeOnboardingProfileFillPercent({
+  const onboardingFillSnapshot: OnboardingFillSnapshot = {
     firstName,
     birthDate,
     gender,
@@ -1350,7 +1598,49 @@ export default function Onboarding() {
     acceptTerms,
     openToAdaptedPractice,
     optionalPhrase: sportPhraseOptional,
+  };
+
+  const onboardingProfileFillPct = computeOnboardingProfileFillPercent(onboardingFillSnapshot);
+
+  const canSubmitChecks = buildCanSubmitChecks({
+    firstName,
+    birthDate,
+    onboardingPreferredAgeDraftOk,
+    gender,
+    interestedInLength: interestedIn.length,
+    intent,
+    locationReady,
+    selectedSportIds: selectedSportIds.map((id) => String(id)),
+    sportLevelsById,
+    openToAdaptedPractice,
+    portraitSavedUrl,
+    portraitFile,
+    bodySavedUrl,
+    bodyFile,
+    confirm18,
+    acceptTerms,
   });
+
+  function logValidationDiagnostics(
+    phase: string,
+    opts?: {
+      profilePayloadForAudit?: Record<string, unknown>;
+      profileSportsRowCount?: number;
+      blockReason?: string | null;
+      extra?: Record<string, unknown>;
+    },
+  ): void {
+    logOnboardingFinalValidationDiagnostics({
+      phase,
+      fillSnapshot: onboardingFillSnapshot,
+      canSubmitChecks,
+      canSubmit,
+      profilePayloadForAudit: opts?.profilePayloadForAudit,
+      profileSportsRowCount: opts?.profileSportsRowCount,
+      blockReason: opts?.blockReason,
+      extra: opts?.extra,
+    });
+  }
 
   function toggleInterestedInOption(value: InterestedInValue): void {
     setInterestedIn((prev) => {
@@ -1369,25 +1659,53 @@ export default function Onboarding() {
     userId: string,
     kind: "portrait" | "body",
     publicUrl: string
-  ): Promise<void> {
+  ): Promise<Record<string, unknown>> {
+    const storedRef = normalizeProfilePhotoStoredRef(publicUrl, supabase).trim();
+    if (!storedRef) {
+      throw new Error("photo_url_empty");
+    }
+
+    console.log("[Onboarding] persistOnboardingPhotoInProfile", {
+      userId,
+      kind,
+      storedRefPrefix: storedRef.slice(0, 96),
+    });
+
+    SPLovePhotoLog.urlGenerated({
+      source: "Onboarding.persistOnboardingPhotoInProfile",
+      userId,
+      slot: kind === "portrait" ? "portrait" : "activity",
+      storedRef,
+      displayUrl: storedRef,
+    });
+
     const payload: Record<string, unknown> = {
       id: userId,
       updated_at: new Date().toISOString(),
       ...(kind === "portrait"
         ? {
-            portrait_url: publicUrl,
-            avatar_url: publicUrl,
+            portrait_url: storedRef,
+            avatar_url: storedRef,
+            main_photo_url: storedRef,
           }
         : {
-            fullbody_url: publicUrl,
+            fullbody_url: storedRef,
           }),
     };
 
-    if (kind === "portrait") {
-      payload.main_photo_url = publicUrl;
-    } else if (!portraitSavedUrl.trim()) {
-      payload.main_photo_url = publicUrl;
+    if (kind === "body") {
+      const portraitRef = normalizeProfilePhotoStoredRef(portraitSavedUrl, supabase).trim();
+      payload.main_photo_url = portraitRef || storedRef;
     }
+
+    PhotoFlowLog.profilePayloadSent({
+      userId,
+      source: "Onboarding.persistOnboardingPhotoInProfile",
+      portrait_url: typeof payload.portrait_url === "string" ? payload.portrait_url : null,
+      fullbody_url: typeof payload.fullbody_url === "string" ? payload.fullbody_url : null,
+      main_photo_url: typeof payload.main_photo_url === "string" ? payload.main_photo_url : null,
+      avatar_url: typeof payload.avatar_url === "string" ? payload.avatar_url : null,
+    });
 
     const { data: profileUpdateData, error: profileUpdateError } = await supabase
       .from("profiles")
@@ -1396,10 +1714,48 @@ export default function Onboarding() {
       .maybeSingle();
 
     if (profileUpdateError) {
+      SPLovePhotoLog.dbSaveError({
+        source: "Onboarding.persistOnboardingPhotoInProfile",
+        userId,
+        slot: kind === "portrait" ? "portrait" : "activity",
+        storedRef,
+        error: profileUpdateError.message,
+      });
       console.error("PHOTO_PROFILE_UPDATE_ERROR", profileUpdateError);
       throw profileUpdateError;
     }
+    SPLovePhotoLog.dbSaveSuccess({
+      source: "Onboarding.persistOnboardingPhotoInProfile",
+      userId,
+      slot: kind === "portrait" ? "portrait" : "activity",
+      storedRef,
+      profileRow: (profileUpdateData ?? payload) as Record<string, unknown>,
+    });
+    const savedRow = (profileUpdateData ?? payload) as Record<string, unknown>;
+    PhotoFlowLog.profileReadback({
+      userId,
+      source: "Onboarding.persistOnboardingPhotoInProfile",
+      portrait_url: typeof savedRow.portrait_url === "string" ? savedRow.portrait_url : null,
+      fullbody_url: typeof savedRow.fullbody_url === "string" ? savedRow.fullbody_url : null,
+      main_photo_url: typeof savedRow.main_photo_url === "string" ? savedRow.main_photo_url : null,
+      avatar_url: typeof savedRow.avatar_url === "string" ? savedRow.avatar_url : null,
+    });
+    PhotoFlowLog.savedToProfile({
+      userId,
+      profileId: userId,
+      photoField:
+        kind === "portrait"
+          ? "portrait_url"
+          : "fullbody_url",
+      storedRef,
+      main_photo_url:
+        typeof savedRow.main_photo_url === "string" ? savedRow.main_photo_url : null,
+      portrait_url:
+        typeof savedRow.portrait_url === "string" ? savedRow.portrait_url : null,
+    });
+    clearProfilePhotoResolutionCache();
     console.log("PHOTO_PROFILE_UPDATE_SUCCESS", profileUpdateData);
+    return savedRow;
   }
 
   async function assignPhotoFile(
@@ -1411,11 +1767,11 @@ export default function Onboarding() {
     setPhotoStepError(null);
     setError(null);
     if (!PHOTO_ACCEPT_MIMES.has(file.type)) {
-      setPhotoStepError(t("onboarding_photo_err_format_png_jpg_only"));
+      setPhotoStepError(t("onboarding_photo_err_format"));
       return;
     }
     if (file.size > PHOTO_MAX_BYTES) {
-      setPhotoStepError(t("onboarding_photo_err_max_size_mb", { maxMb: ONBOARDING_PHOTO_MAX_MB }));
+      setPhotoStepError(t("onboarding_photo_err_too_large"));
       return;
     }
     if (!user?.id) {
@@ -1423,30 +1779,91 @@ export default function Onboarding() {
       return;
     }
 
+    PhotoFlowLog.fileSelected({
+      userId: user.id,
+      slot: kind === "portrait" ? "portrait" : "activity",
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+    });
+
     if (kind === "portrait") setPortraitFile(file);
     else setBodyFile(file);
+
+    const localPreviewUrl = URL.createObjectURL(file);
+    if (kind === "portrait") {
+      setPortraitLocalPreviewUrl((prev) => {
+        revokeObjectUrlSafe(prev);
+        return localPreviewUrl;
+      });
+      setPortraitPreviewLoadFailed(false);
+      console.log("PHOTO_PREVIEW_LOCAL_OK", { slot: "face", phase: "selected" });
+    } else {
+      setBodyLocalPreviewUrl((prev) => {
+        revokeObjectUrlSafe(prev);
+        return localPreviewUrl;
+      });
+      setBodyPreviewLoadFailed(false);
+      console.log("PHOTO_PREVIEW_LOCAL_OK", { slot: "activity", phase: "selected" });
+    }
     setPhotoUploadingKind(kind);
 
     try {
-      const uploadedUrl = await uploadOnboardingPhoto(
-        user.id,
-        file,
-        kind === "portrait" ? "portrait" : "activity"
-      );
-      if (!uploadedUrl) {
-        setPhotoStepError(t("photo_error"));
-        return;
+      const slot = kind === "portrait" ? "portrait" : "activity";
+      const uploaded = await uploadProfilePhoto(supabase, user.id, file, slot);
+      const savedRow = await persistOnboardingPhotoInProfile(user.id, kind, uploaded.storedRef);
+      if (savedRow) {
+        commitProfileRow(
+          mergeProfileScreenRowPreservingPhotos(
+            (profile ?? { id: user.id }) as Record<string, unknown>,
+            savedRow,
+          ),
+        );
       }
-      await persistOnboardingPhotoInProfile(user.id, kind, uploadedUrl);
       if (kind === "portrait") {
-        setPortraitSavedUrl(uploadedUrl);
+        setPortraitSavedUrl(uploaded.storedRef);
+        if (isSafePhotoPreviewSrc(uploaded.displayUrl)) {
+          setPortraitDisplayResolved(uploaded.displayUrl);
+          console.log("PHOTO_PREVIEW_REMOTE_OK", {
+            slot: "face",
+            facePhotoUrl: uploaded.publicUrl,
+            phase: "upload",
+          });
+        }
         setPortraitFile(null);
+        console.log("[profilePhoto] facePhotoUrl", {
+          facePhotoUrl: uploaded.publicUrl,
+          displayUrl: uploaded.displayUrl.slice(0, 80),
+        });
       } else {
-        setBodySavedUrl(uploadedUrl);
+        setBodySavedUrl(uploaded.storedRef);
+        if (isSafePhotoPreviewSrc(uploaded.displayUrl)) {
+          setBodyDisplayResolved(uploaded.displayUrl);
+          console.log("PHOTO_PREVIEW_REMOTE_OK", {
+            slot: "activity",
+            activityPhotoUrl: uploaded.publicUrl,
+            phase: "upload",
+          });
+        }
         setBodyFile(null);
+        console.log("[profilePhoto] activityPhotoUrl", {
+          activityPhotoUrl: uploaded.publicUrl,
+          displayUrl: uploaded.displayUrl.slice(0, 80),
+        });
       }
       await saveOnboardingDraft(step);
     } catch (uploadErr) {
+      const errMsg = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+      PhotoFlowLog.uploadResult({
+        userId: user.id,
+        slot: kind === "portrait" ? "portrait" : "activity",
+        ok: false,
+        error: errMsg,
+      });
+      console.error("[profilePhoto] upload_error", {
+        kind,
+        error: errMsg,
+      });
       logDetailedError("onboarding immediate photo upload", uploadErr, { kind });
       setPhotoStepError(t("photo_error"));
     } finally {
@@ -1569,12 +1986,18 @@ export default function Onboarding() {
         setPhotoStepError(t("onboarding_photo_upload_progress"));
         return false;
       }
-      if (!portraitFile && portraitSavedUrl.trim() === "") {
-        setPhotoStepError(t("onboarding_photo_add_at_least_one"));
+      const photoCount = countOnboardingPhotoSlots(
+        portraitSavedUrl,
+        portraitFile,
+        bodySavedUrl,
+        bodyFile,
+      );
+      if (photoCount === 0) {
+        setPhotoStepError(t("onboarding_photo_err_none"));
         return false;
       }
-      if (!bodyFile && bodySavedUrl.trim() === "") {
-        setPhotoStepError(t("onboarding_photo_add_at_least_one"));
+      if (photoCount === 1) {
+        setPhotoStepError(t("onboarding_photo_err_one_missing"));
         return false;
       }
       setPhotoStepError(null);
@@ -1775,16 +2198,21 @@ export default function Onboarding() {
       return;
     }
     console.log("[Onboarding] final submit start");
+    logValidationDiagnostics("submit_start");
     if (!canSubmit) {
       onboardingSubmitInFlightRef.current = false;
       const hint = getCanSubmitBlockReason() ?? t("onboarding_err_submit_incomplete");
       setStepHint(hint);
-      console.error("[Onboarding submit] blocked: canSubmit false", { reason: hint });
+      logValidationDiagnostics("blocked_canSubmit", { blockReason: hint });
       return;
     }
     for (let s = 1; s <= TOTAL_STEPS; s++) {
       if (!validateStep(s)) {
         onboardingSubmitInFlightRef.current = false;
+        logValidationDiagnostics("blocked_validateStep", {
+          blockReason: `Étape ${s} invalide (voir stepHint à l’écran)`,
+          extra: { step: s },
+        });
         setStep(s);
         if (s === 1) setStep1SubStep(0);
         return;
@@ -1792,8 +2220,16 @@ export default function Onboarding() {
     }
     if ((portraitSavedUrl.trim() === "" && !portraitFile) || (bodySavedUrl.trim() === "" && !bodyFile)) {
       onboardingSubmitInFlightRef.current = false;
+      const submitPhotoCount = countOnboardingPhotoSlots(
+        portraitSavedUrl,
+        portraitFile,
+        bodySavedUrl,
+        bodyFile,
+      );
       setPhotoStepError(
-        portraitSavedUrl.trim() === "" && !portraitFile ? t("onboarding_avatar_required") : t("onboarding_fullbody_required")
+        submitPhotoCount === 0
+          ? t("onboarding_photo_err_none")
+          : t("onboarding_photo_err_one_missing"),
       );
       setStep(9);
       return;
@@ -1827,24 +2263,48 @@ export default function Onboarding() {
         selectedSportsCount: selectedSportIds.length,
       });
 
-      let portraitUrl: string = portraitSavedUrl.trim();
-      let fullbodyUrl: string = bodySavedUrl.trim();
+      let portraitUrl: string = normalizeProfilePhotoStoredRef(portraitSavedUrl, supabase);
+      let fullbodyUrl: string = normalizeProfilePhotoStoredRef(bodySavedUrl, supabase);
       try {
         if (portraitFile) {
           console.log("[Onboarding submit] start: upload photo portrait");
-          const uploadedPortraitUrl = await uploadOnboardingPhoto(authUserId, portraitFile, "portrait");
-          if (!uploadedPortraitUrl) throw new Error("portrait upload failed");
-          portraitUrl = uploadedPortraitUrl;
-          console.log("[Onboarding submit] result: upload photo portrait", { portraitUrl });
+          const uploadedPortrait = await uploadProfilePhoto(
+            supabase,
+            authUserId,
+            portraitFile,
+            "portrait",
+          );
+          portraitUrl = uploadedPortrait.storedRef;
+          setPortraitSavedUrl(portraitUrl);
+          setPortraitDisplayResolved(uploadedPortrait.displayUrl);
+          console.log("[profilePhoto] facePhotoUrl", { facePhotoUrl: portraitUrl });
         }
         if (bodyFile) {
           console.log("[Onboarding submit] start: upload photo fullbody");
-          const uploadedBodyUrl = await uploadOnboardingPhoto(authUserId, bodyFile, "activity");
-          if (!uploadedBodyUrl) throw new Error("fullbody upload failed");
-          fullbodyUrl = uploadedBodyUrl;
-          console.log("[Onboarding submit] result: upload photo fullbody", { fullbodyUrl });
+          const uploadedBody = await uploadProfilePhoto(supabase, authUserId, bodyFile, "activity");
+          fullbodyUrl = uploadedBody.storedRef;
+          setBodySavedUrl(fullbodyUrl);
+          setBodyDisplayResolved(uploadedBody.displayUrl);
+          console.log("[profilePhoto] activityPhotoUrl", { activityPhotoUrl: fullbodyUrl });
         }
+        if (!portraitUrl.trim() || !fullbodyUrl.trim()) {
+          console.error("[profilePhoto] submit_missing_urls", {
+            facePhotoUrl: portraitUrl || null,
+            activityPhotoUrl: fullbodyUrl || null,
+          });
+          throw new Error("photos_not_saved");
+        }
+
+        await ensureOnboardingPhotosInProfile(
+          authUserId,
+          portraitUrl,
+          fullbodyUrl,
+          "Onboarding.submit.afterUpload",
+        );
       } catch (uploadErr) {
+        console.error("[profilePhoto] upload_error", {
+          error: uploadErr instanceof Error ? uploadErr.message : uploadErr,
+        });
         logDetailedError("upload photos", uploadErr);
         setError(t("photo_error"));
         return;
@@ -1985,16 +2445,31 @@ export default function Onboarding() {
         language,
       };
 
+      logValidationDiagnostics("before_preSubmit_audit", {
+        profilePayloadForAudit: profilePayloadBase,
+        profileSportsRowCount: selectedSportIds.length,
+      });
+
       const preSubmitAudit = auditProfileCriticalDataForDiscover(
         profilePayloadBase,
         selectedSportIds.length,
       );
       if (!preSubmitAudit.ok) {
+        const auditMsg = messageForDiscoverReadinessGap(preSubmitAudit.missingFields, t);
+        logValidationDiagnostics("blocked_preSubmit_audit", {
+          profilePayloadForAudit: profilePayloadBase,
+          profileSportsRowCount: selectedSportIds.length,
+          blockReason: auditMsg,
+          extra: {
+            missingFields: preSubmitAudit.missingFields,
+            suggestedStep: preSubmitAudit.suggestedStep,
+          },
+        });
         setLoading(false);
         onboardingSubmitInFlightRef.current = false;
         setStep(preSubmitAudit.suggestedStep);
         setStepHint(null);
-        setError(messageForDiscoverReadinessGap(preSubmitAudit.missingFields, t));
+        setError(auditMsg);
         return;
       }
 
@@ -2006,6 +2481,12 @@ export default function Onboarding() {
         ...profilePayloadBase,
         ...completionFlags,
       };
+
+      OnboardingFlowLog.finalSubmitPayload({
+        id: authUserId,
+        ...profilePayload,
+        onboarding_step: "completed",
+      });
 
       if (PHOTO_VERIFICATION_PLACEHOLDER) {
         profilePayload.photo1_status = "approved";
@@ -2062,12 +2543,17 @@ export default function Onboarding() {
       };
 
       /** Payload prod : même base que le métier ; retries retirent colonnes / mappent legacy. */
-      let payloadForUpsert: Record<string, unknown> = { ...profilePayload };
+      let payloadForUpsert: Record<string, unknown> = reinjectOnboardingPhotoUrlsInPayload(
+        { ...profilePayload },
+        prodSanitizeCtx,
+      );
       let profileUpsertSelect = PROFILE_UPSERT_ONBOARDING_SELECT;
       let profileError: { message?: string; code?: string | number } | null = null;
       let upsertRow: unknown = null;
       let aggressivePhase = 0;
-      console.log("PROFILE_UPDATE_PAYLOAD", payloadForUpsert);
+      if (import.meta.env.DEV) {
+        console.log("PROFILE_UPDATE_PAYLOAD", payloadForUpsert);
+      }
 
       for (let attempt = 0; attempt < 24; attempt++) {
         console.log("[Onboarding submit] sending data:", {
@@ -2103,6 +2589,12 @@ export default function Onboarding() {
         });
 
         if (!profileError) {
+          SPLovePhotoLog.dbSaveSuccess({
+            source: "Onboarding.submit.upsert",
+            userId: authUserId,
+            profileRow: (upsertRow ?? payloadForUpsert) as Record<string, unknown>,
+            extra: { attempt: attempt + 1 },
+          });
           break;
         }
 
@@ -2221,7 +2713,22 @@ export default function Onboarding() {
         return;
       }
 
-      
+      await ensureOnboardingPhotosInProfile(
+        authUserId,
+        portraitUrl,
+        fullbodyUrl,
+        "Onboarding.submit.postUpsert",
+      );
+
+      const completionWrite = await ensureOnboardingCompletionInProfile(
+        supabase,
+        authUserId,
+        acceptTerms ? nowIso : new Date().toISOString(),
+        "Onboarding.submit.postUpsert",
+      );
+      if (completionWrite.error) {
+        console.error("[Onboarding submit] ensureOnboardingCompletionInProfile failed", completionWrite.error);
+      }
 
       const validSportIds = Array.from(new Set(await resolveSelectedSportIdsForPersistence()));
       console.log("SPORTS_PERSIST_START", selectedSports.map((s) => s.name));
@@ -2281,20 +2788,57 @@ export default function Onboarding() {
         console.log("SPORTS_PERSIST_RESULT", { inserted: 0, ids: [], error: null });
       }
 
-      const { data: profileReloadRow, error: profileReloadError } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", authUserId)
-        .single();
-      if (profileReloadError) {
-        logDetailedError("profiles reload after submit", profileReloadError, { userId: authUserId });
+      let profileReloadRow: Record<string, unknown> | null = null;
+
+      async function reloadOnboardingProfileRow(): Promise<{
+        row: Record<string, unknown> | null;
+        error: { message?: string } | null;
+      }> {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", authUserId)
+          .single();
+        profileReloadRow = (data as Record<string, unknown> | null) ?? null;
+        return { row: profileReloadRow, error };
       }
 
-      let effectiveProfileReloadRow = profileReloadRow;
+      const firstReload = await reloadOnboardingProfileRow();
+      if (firstReload.error) {
+        logDetailedError("profiles reload after submit", firstReload.error, { userId: authUserId });
+        SPLovePhotoLog.profileLoadEmpty({
+          source: "Onboarding.submit.profileReload",
+          userId: authUserId,
+          error: firstReload.error.message ?? "unknown",
+        });
+      } else if (firstReload.row && !profileRowHasCanonicalPhotos(firstReload.row)) {
+        console.warn("[Onboarding submit] profile reload sans URLs photo — nouvelle écriture dédiée");
+        await ensureOnboardingPhotosInProfile(
+          authUserId,
+          portraitUrl,
+          fullbodyUrl,
+          "Onboarding.submit.profileReloadHeal",
+        );
+        await reloadOnboardingProfileRow();
+      }
+
+      if (profileReloadRow) {
+        SPLovePhotoLog.profileLoadSuccess({
+          source: "Onboarding.submit.profileReload.select_star",
+          userId: authUserId,
+          profileRow: profileReloadRow,
+        });
+      }
+
+      let effectiveProfileReloadRow = profileReloadRow
+        ? mergeOnboardingPhotosIntoProfileRow(profileReloadRow, portraitUrl, fullbodyUrl)
+        : null;
       if (effectiveProfileReloadRow && profileRowNeedsOnboardingDoneBackfill(effectiveProfileReloadRow)) {
         const { data: patchedRow, error: odHealErr } = await supabase
           .from("profiles")
           .update({
+            profile_completed: true,
+            onboarding_completed: true,
             onboarding_done: true,
             updated_at: new Date().toISOString(),
           })
@@ -2316,6 +2860,19 @@ export default function Onboarding() {
         onboarding_completed:
           (refreshedProfile as { onboarding_completed?: unknown } | null)?.onboarding_completed ?? null,
       });
+      if (refreshedProfile) {
+        SPLovePhotoLog.profileLoadSuccess({
+          source: "Onboarding.submit.refetchProfile",
+          userId: authUserId,
+          profileRow: refreshedProfile as unknown as Record<string, unknown>,
+        });
+      } else {
+        SPLovePhotoLog.profileLoadEmpty({
+          source: "Onboarding.submit.refetchProfile",
+          userId: authUserId,
+          error: "refetchProfile_returned_null",
+        });
+      }
 
       function rowFlagsOnboardingDone(row: unknown): boolean {
         if (!row || typeof row !== "object") return false;
@@ -2332,6 +2889,15 @@ export default function Onboarding() {
         rowFlagsOnboardingDone(refreshedProfile) ||
         rowFlagsOnboardingDone(upsertRow);
       if (!gateOk) {
+        logValidationDiagnostics("blocked_post_upsert_gate", {
+          profilePayloadForAudit: (effectiveProfileReloadRow ?? upsertRow) as Record<string, unknown>,
+          profileSportsRowCount: selectedSportIds.length,
+          blockReason: t("onboarding_error_profile_gate"),
+          extra: {
+            upsertRow_flags: upsertRow,
+            refreshed_profile_completed: refreshedProfile?.profile_completed ?? null,
+          },
+        });
         console.error("[Onboarding submit] verdict: upsert OK + select OK but gating KO");
         console.error("[Onboarding submit] gating incomplet après upsert — détail diagnostic", {
           profile_completed: upsertRow.profile_completed,
@@ -2363,13 +2929,68 @@ export default function Onboarding() {
         return;
       }
 
-      if (effectiveProfileReloadRow) commitProfileRow(effectiveProfileReloadRow);
-      else if (refreshedProfile) commitProfileRow(refreshedProfile);
-      else commitProfileRow(upsertRow);
+      const commitBaseRow =
+        effectiveProfileReloadRow ??
+        (refreshedProfile as Record<string, unknown> | null) ??
+        (upsertRow as Record<string, unknown>) ??
+        (completionWrite.row ?? {});
+      let rowForCommit = mergeOnboardingPhotosIntoProfileRow(
+        mergeProfileRowPreservingCompletion(
+          { ...profilePayload, id: authUserId },
+          commitBaseRow as Record<string, unknown>,
+        ),
+        portraitUrl,
+        fullbodyUrl,
+      );
+      rowForCommit = mergeProfileRowPreservingCompletion(rowForCommit, {
+        profile_completed: true,
+        onboarding_completed: true,
+        onboarding_done: true,
+        accepted_terms_at: acceptTerms ? nowIso : rowForCommit.accepted_terms_at,
+        accepted_privacy_at: acceptTerms ? nowIso : rowForCommit.accepted_privacy_at,
+      });
 
-      const readinessRow = (effectiveProfileReloadRow ??
+      const reloadedAfterSubmit = await fetchProfileAfterOnboardingSubmit(supabase, authUserId);
+      if (reloadedAfterSubmit) {
+        rowForCommit = mergeProfileRowPreservingCompletion(
+          rowForCommit,
+          mergeOnboardingPhotosIntoProfileRow(reloadedAfterSubmit, portraitUrl, fullbodyUrl),
+        );
+      }
+
+      if (!profileRowOnboardingComplete(rowForCommit)) {
+        const healCompletion = await ensureOnboardingCompletionInProfile(
+          supabase,
+          authUserId,
+          acceptTerms ? nowIso : new Date().toISOString(),
+          "Onboarding.submit.preNavigateHeal",
+        );
+        if (healCompletion.row) {
+          rowForCommit = mergeProfileRowPreservingCompletion(rowForCommit, healCompletion.row);
+        }
+        const reloadedHeal = await fetchProfileAfterOnboardingSubmit(supabase, authUserId);
+        if (reloadedHeal) {
+          rowForCommit = mergeProfileRowPreservingCompletion(rowForCommit, reloadedHeal);
+        }
+      }
+
+      if (isProfileRecord(rowForCommit)) {
+        commitProfileRow(rowForCommit);
+      } else if (isProfileRecord(upsertRow)) {
+        commitProfileRow(upsertRow);
+      }
+
+      const screenRow = await fetchProfileScreenFields(authUserId);
+      if (screenRow && isProfileRecord(rowForCommit)) {
+        const withPhotos = mergeOnboardingPhotosIntoProfileRow(screenRow, portraitUrl, fullbodyUrl);
+        commitProfileRow(mergeProfileRowPreservingCompletion(rowForCommit, withPhotos));
+      }
+
+      const readinessRow = (reloadedAfterSubmit ??
+        effectiveProfileReloadRow ??
         refreshedProfile ??
-        upsertRow) as unknown as Record<string, unknown>;
+        upsertRow ??
+        rowForCommit) as unknown as Record<string, unknown>;
       const { count: discoverSportRowCount, error: discoverSportCountErr } = await supabase
         .from("profile_sports")
         .select("sport_id", { count: "exact", head: true })
@@ -2393,25 +3014,57 @@ export default function Onboarding() {
           suggested_step: readiness.suggestedStep,
           context: "submit_final",
         });
-        await supabase
-          .from("profiles")
-          .update({
-            profile_completed: false,
-            onboarding_completed: false,
-            onboarding_done: false,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", authUserId);
-        setStep(readiness.suggestedStep);
-        setError(messageForDiscoverReadinessGap(readiness.missingFields, t));
+        const flagOnlyMissing = readiness.missingFields.every((f) =>
+          ["profile_completed", "onboarding_completed", "onboarding_done"].includes(f),
+        );
+        if (flagOnlyMissing) {
+          const healCompletion = await ensureOnboardingCompletionInProfile(
+            supabase,
+            authUserId,
+            acceptTerms ? nowIso : new Date().toISOString(),
+            "Onboarding.submit.readinessFlagHeal",
+          );
+          if (healCompletion.row && isProfileRecord(rowForCommit)) {
+            commitProfileRow(
+              mergeProfileRowPreservingCompletion(rowForCommit, healCompletion.row),
+            );
+          }
+        } else {
+          setStep(readiness.suggestedStep);
+          setError(messageForDiscoverReadinessGap(readiness.missingFields, t));
+          return;
+        }
+      }
+
+      if (!profileRowOnboardingComplete(rowForCommit)) {
+        setError(t("onboarding_error_profile_gate"));
+        OnboardingFlowLog.redirectDecision({
+          userId: authUserId,
+          target: "/onboarding",
+          reason: "completion_flags_missing_after_submit",
+          profile_completed: rowForCommit.profile_completed === true,
+          onboarding_completed: rowForCommit.onboarding_completed === true,
+          onboarding_done: rowForCommit.onboarding_done === true,
+        });
         return;
       }
 
       if (moderationBanner) {
         await new Promise((r) => window.setTimeout(r, 1400));
       }
-      console.log("[Onboarding submit] success → discover");
-      navigate("/discover", { replace: true });
+      console.log("[Onboarding submit] success → move");
+      clearOnboardingUiLocalCache();
+      clearProfilePhotoResolutionCache();
+      void offerPushNotificationsAfterOnboarding(authUserId);
+      OnboardingFlowLog.redirectDecision({
+        userId: authUserId,
+        target: "/move",
+        reason: "onboarding_submit_success",
+        profile_completed: rowForCommit.profile_completed === true,
+        onboarding_completed: rowForCommit.onboarding_completed === true,
+        onboarding_done: rowForCommit.onboarding_done === true,
+      });
+      navigate("/move", { replace: true });
     } catch (err) {
       logDetailedError("handleSubmit catch", err);
       console.error("ONBOARDING_SAVE_ERROR", err);
@@ -3198,21 +3851,19 @@ export default function Onboarding() {
 
               {step === 9 && (
                 <div className="space-y-4">
+                  <p className="px-0.5 text-xs leading-snug text-app-muted">{t("onboarding_photo_help_hint")}</p>
                   {photoStepDraftSaving ? (
-                    <p className="rounded-lg border border-app-border bg-app-bg/70 px-3 py-2 text-sm font-medium text-app-text" aria-live="polite">
+                    <p className="px-0.5 text-xs font-medium text-app-muted" aria-live="polite">
                       {t("onboarding_photo_saving_persist")}
                     </p>
                   ) : photoUploadingKind ? (
-                    <p className="rounded-lg border border-app-border bg-app-bg/70 px-3 py-2 text-sm font-medium text-app-text" aria-live="polite">
+                    <p className="px-0.5 text-xs font-medium text-app-muted" aria-live="polite">
                       {t("onboarding_photo_upload_progress")}
                     </p>
-                  ) : photoStepError ? (
-                    <p className="rounded-lg border border-red-100 bg-red-50/90 px-3 py-2 text-sm text-red-700" role="alert">
+                  ) : null}
+                  {photoStepError && !photoUploadingKind && !photoStepDraftSaving ? (
+                    <p className="px-0.5 text-xs font-medium leading-snug" style={{ color: BRAND_BG }} role="alert">
                       {photoStepError}
-                    </p>
-                  ) : onboardingShowPhotoSploveReminder ? (
-                    <p className="px-1 text-sm font-semibold leading-snug" style={{ color: BRAND_BG }}>
-                      {t("onboarding_photo_add_at_least_one")}
                     </p>
                   ) : null}
 
@@ -3235,11 +3886,39 @@ export default function Onboarding() {
                         htmlFor="ob-photo-portrait"
                         className="flex cursor-pointer flex-col overflow-hidden rounded-2xl border-2 border-dashed border-app-border bg-app-bg/80 text-center transition hover:border-app-border"
                       >
-                        {portraitDisplayUrl ? (
+                        {portraitDisplayUrl && !portraitPreviewLoadFailed ? (
                           <img
                             src={portraitDisplayUrl}
                             alt={t("onboarding_photo_face_preview")}
                             className="aspect-[3/4] w-full max-w-[280px] mx-auto object-cover"
+                            onLoad={() => {
+                              if (portraitDisplayUrl.startsWith("blob:")) {
+                                console.log("PHOTO_PREVIEW_LOCAL_OK", { slot: "face", phase: "render" });
+                                return;
+                              }
+                              console.log("PHOTO_PREVIEW_REMOTE_OK", {
+                                slot: "face",
+                                facePhotoUrl: portraitSavedUrl || null,
+                                phase: "render",
+                              });
+                            }}
+                            onError={() => {
+                              console.warn("PHOTO_PREVIEW_ERROR_FULL", {
+                                slot: "face",
+                                src: portraitDisplayUrl,
+                                srcHasRedacted: portraitDisplayUrl.includes("[redacted"),
+                                facePhotoUrl: portraitSavedUrl || null,
+                                hasLocalFallback: Boolean(
+                                  portraitLocalPreviewUrl || portraitPreviewUrl,
+                                ),
+                              });
+                              console.warn("[profilePhoto] preview_image_error", {
+                                slot: "face",
+                                src: portraitDisplayUrl,
+                                facePhotoUrl: portraitSavedUrl || null,
+                              });
+                              setPortraitPreviewLoadFailed(true);
+                            }}
                           />
                         ) : (
                           <span className="flex aspect-[3/4] w-full max-w-[280px] mx-auto flex-col items-center justify-center gap-1 px-2 py-6">
@@ -3282,11 +3961,37 @@ export default function Onboarding() {
                         htmlFor="ob-photo-body"
                         className="flex cursor-pointer flex-col overflow-hidden rounded-2xl border-2 border-dashed border-app-border bg-app-bg/80 text-center transition hover:border-app-border"
                       >
-                        {bodyDisplayUrl ? (
+                        {bodyDisplayUrl && !bodyPreviewLoadFailed ? (
                           <img
                             src={bodyDisplayUrl}
                             alt={t("onboarding_photo_activity_preview")}
                             className="aspect-[3/4] w-full max-w-[280px] mx-auto object-cover"
+                            onLoad={() => {
+                              if (bodyDisplayUrl.startsWith("blob:")) {
+                                console.log("PHOTO_PREVIEW_LOCAL_OK", { slot: "activity", phase: "render" });
+                                return;
+                              }
+                              console.log("PHOTO_PREVIEW_REMOTE_OK", {
+                                slot: "activity",
+                                activityPhotoUrl: bodySavedUrl || null,
+                                phase: "render",
+                              });
+                            }}
+                            onError={() => {
+                              console.warn("PHOTO_PREVIEW_ERROR_FULL", {
+                                slot: "activity",
+                                src: bodyDisplayUrl,
+                                srcHasRedacted: bodyDisplayUrl.includes("[redacted"),
+                                activityPhotoUrl: bodySavedUrl || null,
+                                hasLocalFallback: Boolean(bodyLocalPreviewUrl || bodyPreviewUrl),
+                              });
+                              console.warn("[profilePhoto] preview_image_error", {
+                                slot: "activity",
+                                src: bodyDisplayUrl,
+                                activityPhotoUrl: bodySavedUrl || null,
+                              });
+                              setBodyPreviewLoadFailed(true);
+                            }}
                           />
                         ) : (
                           <span className="flex aspect-[3/4] w-full max-w-[280px] mx-auto flex-col items-center justify-center gap-1 px-2 py-6">
@@ -3433,7 +4138,7 @@ export default function Onboarding() {
                     disabled={
                       authLoading ||
                       photoStepDraftSaving ||
-                      (step === 9 && !onboardingPhotosCanProceed) ||
+                      (step === 9 && photoUploadingKind !== null) ||
                       (step === 4 && !locationReady)
                     }
                     className="flex-1 rounded-2xl py-3.5 text-sm font-semibold text-white shadow-md transition-[transform,box-shadow] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"

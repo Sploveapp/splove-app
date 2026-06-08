@@ -83,5 +83,29 @@ export function computeOnboardingProfileFillPercent(s: OnboardingFillSnapshot): 
   const phrase = (s.optionalPhrase ?? "").trim();
   if (phrase.length >= 8) pts += 2;
 
-  return Math.min(100, Math.round(pts));
+  const raw = Math.min(100, Math.round(pts));
+
+  const submitReady =
+    s.firstName.trim().length >= 1 &&
+    Boolean(s.birthDate && isAdultFromBirthIso(s.birthDate)) &&
+    s.gender.trim() !== "" &&
+    s.interestedIn.length > 0 &&
+    s.intent.trim() !== "" &&
+    preferredAgeOk(s.preferredAgeMinStr, s.preferredAgeMaxStr) &&
+    parseHeightCmOptionalInput(s.heightCmInput) != null &&
+    locOk &&
+    nSports >= 1 &&
+    nSports <= 3 &&
+    s.sportIds.every((id) => Boolean(s.sportLevelsById[String(id)]?.trim())) &&
+    hasPortrait &&
+    hasBody &&
+    s.confirm18 &&
+    s.acceptTerms &&
+    s.openToAdaptedPractice.trim() !== "";
+
+  if (submitReady && raw >= 98) {
+    return 100;
+  }
+
+  return raw;
 }

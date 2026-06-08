@@ -115,16 +115,23 @@ export default function LegalCGU() {
 
   return (
     <div className="min-h-screen bg-app-bg text-app-text">
-      <div className="mx-auto w-full max-w-3xl px-4 pb-10 pt-6">
-        <button
-          type="button"
-          onClick={() => (window.history.length > 1 ? navigate(-1) : navigate("/onboarding"))}
-          className="mb-4 inline-flex items-center gap-2 rounded-xl border border-app-border bg-app-bg/60 px-3 py-2 text-sm font-semibold text-app-text hover:bg-app-border"
-          aria-label={t("back")}
-        >
-          ← {t("back")}
-        </button>
+      <header
+        className="sticky top-0 z-20 border-b border-app-border/30 bg-app-bg/95 backdrop-blur-md"
+        style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 12px)" }}
+      >
+        <div className="mx-auto w-full max-w-3xl px-4 pb-3">
+          <button
+            type="button"
+            onClick={() => (window.history.length > 1 ? navigate(-1) : navigate("/onboarding"))}
+            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-app-border bg-app-bg/60 px-3 py-2 text-sm font-semibold text-app-text hover:bg-app-border"
+            aria-label={t("back")}
+          >
+            ← {t("back")}
+          </button>
+        </div>
+      </header>
 
+      <div className="mx-auto w-full max-w-3xl px-4 pb-10 pt-4">
         <div className="rounded-2xl border border-app-border bg-app-card/70 p-4 sm:p-6">
           <div className="space-y-1">
             <h1 className="text-lg font-bold">{title}</h1>

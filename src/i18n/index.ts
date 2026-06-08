@@ -5,21 +5,32 @@ export type TranslationKey = keyof typeof fr;
 export type Language = "fr" | "en";
 
 export const LANGUAGE_STORAGE_KEY = "splove_language";
-export const DEFAULT_LANGUAGE: Language = "fr";
-export const translations: Record<Language, Record<TranslationKey, string>> = {
-  fr,
-  en: en as Record<TranslationKey, string>,
-};
+export const DEFAULT_LANGUAGE: Language = "en";
 
 function isLanguage(value: unknown): value is Language {
   return value === "fr" || value === "en";
 }
 
+/** Langue appareil / navigateur — `fr*` → français, sinon anglais. */
+export function detectDeviceLanguage(): Language {
+  if (typeof window === "undefined") return DEFAULT_LANGUAGE;
+  const candidates = [...(navigator.languages ?? []), navigator.language].filter(Boolean);
+  for (const tag of candidates) {
+    if (String(tag).trim().toLowerCase().startsWith("fr")) return "fr";
+  }
+  return "en";
+}
+
 export function getLanguage(): Language {
   if (typeof window === "undefined") return DEFAULT_LANGUAGE;
   const saved = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-  return isLanguage(saved) ? saved : DEFAULT_LANGUAGE;
+  return isLanguage(saved) ? saved : detectDeviceLanguage();
 }
+
+export const translations: Record<Language, Record<TranslationKey, string>> = {
+  fr,
+  en: en as Record<TranslationKey, string>,
+};
 
 export function setLanguage(language: Language): void {
   if (typeof window === "undefined") return;

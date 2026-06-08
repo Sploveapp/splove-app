@@ -18,6 +18,12 @@ function hasPortraitOrMainPhoto(row: Record<string, unknown>): boolean {
   return Boolean(p.length > 0 || m.length > 0);
 }
 
+function hasFullbodyPhoto(row: Record<string, unknown>): boolean {
+  const raw = row.fullbody_url;
+  const f = typeof raw === "string" ? raw.trim() : "";
+  return f.length > 0;
+}
+
 function isFiniteCoordinate(v: unknown): boolean {
   if (typeof v === "number") return Number.isFinite(v);
   if (typeof v === "string") {
@@ -39,6 +45,7 @@ const FIELD_TO_STEP: Record<string, number> = {
   sport_match_preference: 6,
   profile_sports_rows: 5,
   portrait_or_main_photo: 9,
+  fullbody_photo: 9,
   profile_completed: 11,
   onboarding_completed: 11,
   onboarding_done: 11,
@@ -54,6 +61,7 @@ const MISSING_FIELD_I18N: Record<string, string> = {
   sport_match_preference: "onboarding_completion_field_sport_pref",
   profile_sports_rows: "onboarding_completion_field_sports",
   portrait_or_main_photo: "onboarding_completion_field_photo",
+  fullbody_photo: "onboarding_completion_field_photo_activity",
 };
 
 function hasTrimmedText(value: unknown, minLen = 1): boolean {
@@ -100,6 +108,7 @@ export function collectProfileCriticalDataGaps(
   }
   if (sportsCount < 1) missing.push("profile_sports_rows");
   if (!hasPortraitOrMainPhoto(profileRow)) missing.push("portrait_or_main_photo");
+  if (!hasFullbodyPhoto(profileRow)) missing.push("fullbody_photo");
 
   return missing;
 }
