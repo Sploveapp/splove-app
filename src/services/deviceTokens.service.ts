@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { resolvePushEnvironment } from "../lib/pushEnvironment";
 
 export type DeviceTokenPlatform = "ios" | "android";
 
@@ -19,21 +20,26 @@ export async function upsertDevicePushToken(
     return { ok: false, error: "no_auth_session", code: "no_session" };
   }
   if (session.user.id !== userId) {
-    console.warn("[device_tokens] upsert userId mismatch", {
-      sessionUserId: session.user.id,
-      requestedUserId: userId,
-    });
+    if (import.meta.env.DEV) {
+      console.warn("[device_tokens] upsert blocked — userId mismatch", {
+        sessionUserId: session.user.id,
+        requestedUserId: userId,
+      });
+    }
+    return { ok: false, error: "user_id_mismatch", code: "user_id_mismatch" };
   }
 
+  const pushEnvironment = resolvePushEnvironment();
   const now = new Date().toISOString();
   const { error } = await supabase.from("device_tokens").upsert(
     {
       user_id: userId,
       token: trimmed,
       platform,
+      push_environment: pushEnvironment,
       updated_at: now,
     },
-    { onConflict: "user_id,platform" },
+    { onConflict: "user_id,platform,push_environment" },
   );
 
   if (error) {
@@ -59,11 +65,13 @@ export async function fetchDevicePushTokenStatus(
   userId: string,
   platform: DeviceTokenPlatform,
 ): Promise<{ hasToken: boolean }> {
+  const pushEnvironment = resolvePushEnvironment();
   const { data, error } = await supabase
     .from("device_tokens")
     .select("id")
     .eq("user_id", userId)
     .eq("platform", platform)
+    .eq("push_environment", pushEnvironment)
     .maybeSingle();
 
   if (error) {
@@ -80,6 +88,7 @@ export async function updateDevicePushPresence(
 ): Promise<void> {
   if (!userId || !activeRoute) return;
 
+  const pushEnvironment = resolvePushEnvironment();
   const now = new Date().toISOString();
   const { error } = await supabase
     .from("device_tokens")
@@ -89,7 +98,8 @@ export async function updateDevicePushPresence(
       presence_updated_at: now,
       updated_at: now,
     })
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .eq("push_environment", pushEnvironment);
 
   if (error) {
     console.warn("[device_tokens] presence update failed", error.message);

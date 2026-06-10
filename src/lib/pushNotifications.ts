@@ -17,6 +17,11 @@ import {
   upsertDevicePushToken,
   type DeviceTokenPlatform,
 } from "../services/deviceTokens.service";
+import {
+  isProductionPushBuild,
+  isPushRegistrationAllowed,
+  resolvePushEnvironment,
+} from "./pushEnvironment";
 
 const ONBOARDING_PUSH_OFFER_KEY = "splove_push_onboarding_offer_v1";
 const LOGIN_PUSH_OFFER_KEY = "splove_push_login_offer_v1";
@@ -47,6 +52,7 @@ function isPushSupportedNative(): boolean {
 }
 
 function logPush(event: string, detail?: Record<string, unknown>): void {
+  if (isProductionPushBuild() && !import.meta.env.DEV) return;
   if (detail) console.log(event, detail);
   else console.log(event);
 }
@@ -58,6 +64,14 @@ function readRouteFromPayload(notification: PushNotificationSchema): string | nu
 async function persistToken(userId: string, token: string): Promise<void> {
   const platform = pushPlatform();
   if (!platform) return;
+
+  if (!isPushRegistrationAllowed()) {
+    logPush("PUSH_TOKEN_SKIPPED", {
+      reason: "registration_disabled_in_development",
+      pushEnvironment: resolvePushEnvironment(),
+    });
+    return;
+  }
 
   const result = await upsertDevicePushToken(userId, token, platform);
   if (result.ok) {
@@ -192,6 +206,13 @@ export async function requestPushNotificationsPermission(
   userId: string,
 ): Promise<PushPermissionState> {
   if (!userId || !isPushSupportedNative()) return "unsupported";
+  if (!isPushRegistrationAllowed()) {
+    logPush("PUSH_PERMISSION_SKIPPED", {
+      reason: "registration_disabled_in_development",
+      pushEnvironment: resolvePushEnvironment(),
+    });
+    return "unsupported";
+  }
 
   await attachPushListeners(userId);
 
