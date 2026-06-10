@@ -886,10 +886,65 @@ export default function Onboarding() {
 
   const SPORTS_FETCH_TIMEOUT_MS = 2_000;
 
-  async function saveOnboardingDraft(currentStep: number): Promise<void> {
+  type OnboardingDraftPhotoOverrides = {
+    portraitUrl?: string;
+    fullbodyUrl?: string;
+  };
+
+  function pickOnboardingDraftPhotoRef(...candidates: (string | null | undefined)[]): string {
+    for (const candidate of candidates) {
+      const normalized = normalizeProfilePhotoStoredRef(candidate, supabase).trim();
+      if (normalized) return normalized;
+    }
+    return "";
+  }
+
+  /** Overrides frais > état React > cache profil auth — jamais `null` dans le payload upsert. */
+  function resolveOnboardingDraftPhotoRefs(photoOverrides?: OnboardingDraftPhotoOverrides): {
+    portrait: string;
+    fullbody: string;
+    main: string;
+  } {
+    const profileRow = profile as Record<string, unknown> | null | undefined;
+    const portrait = pickOnboardingDraftPhotoRef(
+      photoOverrides?.portraitUrl,
+      portraitSavedUrl,
+      typeof profileRow?.portrait_url === "string" ? profileRow.portrait_url : null,
+      typeof profileRow?.main_photo_url === "string" ? profileRow.main_photo_url : null,
+      typeof profileRow?.avatar_url === "string" ? profileRow.avatar_url : null,
+    );
+    const fullbody = pickOnboardingDraftPhotoRef(
+      photoOverrides?.fullbodyUrl,
+      bodySavedUrl,
+      typeof profileRow?.fullbody_url === "string" ? profileRow.fullbody_url : null,
+    );
+    return { portrait, fullbody, main: portrait || fullbody };
+  }
+
+  function applyOnboardingDraftCanonicalPhotoFields(
+    payload: Record<string, unknown>,
+    photoOverrides?: OnboardingDraftPhotoOverrides,
+  ): void {
+    for (const key of ["portrait_url", "fullbody_url", "main_photo_url", "avatar_url"] as const) {
+      delete payload[key];
+    }
+    const { portrait, fullbody, main } = resolveOnboardingDraftPhotoRefs(photoOverrides);
+    if (portrait) {
+      payload.portrait_url = portrait;
+      payload.avatar_url = portrait;
+    }
+    if (fullbody) payload.fullbody_url = fullbody;
+    if (main) payload.main_photo_url = main;
+  }
+
+  async function saveOnboardingDraft(
+    currentStep: number,
+    photoOverrides?: OnboardingDraftPhotoOverrides,
+  ): Promise<void> {
     if (!user?.id) return;
     const userId = user.id;
     try {
+      const draftPhotos = resolveOnboardingDraftPhotoRefs(photoOverrides);
       const formDataSnapshot = {
         first_name: firstName.trim() || null,
         birth_date: birthDate || null,
@@ -899,8 +954,8 @@ export default function Onboarding() {
         intent: intent ? dbIntentFromUiIntent(intent) : null,
         city: normalizeProfileCityForStorage(obLocCity) ?? null,
         selectedSports: selectedSports.map((s) => s.name),
-        portrait_url: portraitSavedUrl || null,
-        fullbody_url: bodySavedUrl || null,
+        portrait_url: draftPhotos.portrait || null,
+        fullbody_url: draftPhotos.fullbody || null,
       };
       if (import.meta.env.DEV) {
         console.log("STEP_SAVE_START", currentStep, formDataSnapshot);
@@ -951,9 +1006,7 @@ export default function Onboarding() {
       }
       if (currentStep >= 9) {
         payload.sport_phrase = sportPhraseOptional.trim() || null;
-        payload.portrait_url = portraitSavedUrl.trim() || null;
-        payload.fullbody_url = bodySavedUrl.trim() || null;
-        payload.main_photo_url = portraitSavedUrl.trim() || bodySavedUrl.trim() || null;
+        applyOnboardingDraftCanonicalPhotoFields(payload, photoOverrides);
       }
       if (currentStep >= 10) payload.practice_preferences = practicePreferences;
       if (currentStep >= 5) payload.sport_match_preference = sportMatchPreference;
@@ -1926,7 +1979,12 @@ export default function Onboarding() {
           displayUrl: uploaded.displayUrl.slice(0, 80),
         });
       }
-      await saveOnboardingDraft(step);
+      await saveOnboardingDraft(
+        step,
+        kind === "portrait"
+          ? { portraitUrl: uploaded.storedRef }
+          : { fullbodyUrl: uploaded.storedRef },
+      );
     } catch (uploadErr) {
       const errMsg = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
       PhotoFlowLog.uploadResult({
