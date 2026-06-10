@@ -423,6 +423,81 @@ function profileRowHasCanonicalPhotos(row: Record<string, unknown> | null | unde
   return portrait.length > 0 || fullbody.length > 0 || main.length > 0;
 }
 
+const ONBOARDING_PHOTO_READBACK_SELECT =
+  "id, portrait_url, fullbody_url, main_photo_url, avatar_url";
+
+/** Retire les champs photo vides du payload pour qu’un upsert ne force pas `null` en BDD. */
+function omitEmptyCanonicalPhotoUrlsFromPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const next = { ...payload };
+  for (const key of PROTECTED_PROFILE_PHOTO_COLUMNS) {
+    const v = next[key];
+    if (v == null || (typeof v === "string" && !v.trim())) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+async function readbackOnboardingProfilePhotos(
+  userId: string,
+): Promise<Record<string, unknown> | null> {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select(ONBOARDING_PHOTO_READBACK_SELECT)
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) {
+    console.error("[Onboarding] photo readback failed", {
+      userId,
+      message: error.message,
+      code: error.code,
+    });
+    return null;
+  }
+  return (data as Record<string, unknown> | null) ?? null;
+}
+
+type OnboardingPhotoPersistOutcome =
+  | { ok: true; row: Record<string, unknown> }
+  | { ok: false; error: string };
+
+/** Écriture dédiée + readback : au moins une URL canonique doit exister en BDD. */
+async function ensureOnboardingPhotosPersistedWithReadback(
+  userId: string,
+  portraitUrl: string,
+  fullbodyUrl: string,
+  source: string,
+): Promise<OnboardingPhotoPersistOutcome> {
+  await ensureOnboardingPhotosInProfile(userId, portraitUrl, fullbodyUrl, source);
+  let row = await readbackOnboardingProfilePhotos(userId);
+  if (row && profileRowHasCanonicalPhotos(row)) {
+    return { ok: true, row };
+  }
+
+  await ensureOnboardingPhotosInProfile(userId, portraitUrl, fullbodyUrl, `${source}.retry`);
+  row = await readbackOnboardingProfilePhotos(userId);
+  if (row && profileRowHasCanonicalPhotos(row)) {
+    return { ok: true, row };
+  }
+
+  console.error("[Onboarding] photo persistence readback failed", {
+    userId,
+    source,
+    portraitPresent: Boolean(portraitUrl?.trim()),
+    fullbodyPresent: Boolean(fullbodyUrl?.trim()),
+    readback: row
+      ? {
+          portrait_url: row.portrait_url ?? null,
+          fullbody_url: row.fullbody_url ?? null,
+          main_photo_url: row.main_photo_url ?? null,
+        }
+      : null,
+  });
+  return { ok: false, error: "photo_readback_missing_canonical_urls" };
+}
+
 function mergeOnboardingPhotosIntoProfileRow(
   row: Record<string, unknown>,
   portraitUrl: string,
@@ -2295,12 +2370,15 @@ export default function Onboarding() {
           throw new Error("photos_not_saved");
         }
 
-        await ensureOnboardingPhotosInProfile(
+        const afterUploadPhotos = await ensureOnboardingPhotosPersistedWithReadback(
           authUserId,
           portraitUrl,
           fullbodyUrl,
           "Onboarding.submit.afterUpload",
         );
+        if (!afterUploadPhotos.ok) {
+          throw new Error("photos_not_persisted_after_upload");
+        }
       } catch (uploadErr) {
         console.error("[profilePhoto] upload_error", {
           error: uploadErr instanceof Error ? uploadErr.message : uploadErr,
@@ -2556,6 +2634,11 @@ export default function Onboarding() {
       }
 
       for (let attempt = 0; attempt < 24; attempt++) {
+        payloadForUpsert = reinjectOnboardingPhotoUrlsInPayload(
+          omitEmptyCanonicalPhotoUrlsFromPayload(payloadForUpsert),
+          prodSanitizeCtx,
+        );
+
         console.log("[Onboarding submit] sending data:", {
           table: "profiles",
           operation: attempt === 0 ? "upsert" : "upsert retry",
@@ -2641,7 +2724,10 @@ export default function Onboarding() {
             ? stripOptionalColumnsFromSelect(PROFILE_UPSERT_ONBOARDING_SELECT)
             : stripOptionalColumnsFromSelect(PROFILE_UPSERT_ONBOARDING_SELECT_CORE);
           const prevSerialized = JSON.stringify(payloadForUpsert);
-          payloadForUpsert = payloadStripped;
+          payloadForUpsert = reinjectOnboardingPhotoUrlsInPayload(
+            omitEmptyCanonicalPhotoUrlsFromPayload(payloadStripped),
+            prodSanitizeCtx,
+          );
           if (JSON.stringify(payloadForUpsert) !== prevSerialized) {
             setOptionalProfileWarning(t("onboarding_optional_fields_warning"));
           }
@@ -2713,12 +2799,16 @@ export default function Onboarding() {
         return;
       }
 
-      await ensureOnboardingPhotosInProfile(
+      const postUpsertPhotos = await ensureOnboardingPhotosPersistedWithReadback(
         authUserId,
         portraitUrl,
         fullbodyUrl,
         "Onboarding.submit.postUpsert",
       );
+      if (!postUpsertPhotos.ok) {
+        setError(t("photo_error"));
+        return;
+      }
 
       const completionWrite = await ensureOnboardingCompletionInProfile(
         supabase,
@@ -2813,12 +2903,16 @@ export default function Onboarding() {
         });
       } else if (firstReload.row && !profileRowHasCanonicalPhotos(firstReload.row)) {
         console.warn("[Onboarding submit] profile reload sans URLs photo — nouvelle écriture dédiée");
-        await ensureOnboardingPhotosInProfile(
+        const reloadHealPhotos = await ensureOnboardingPhotosPersistedWithReadback(
           authUserId,
           portraitUrl,
           fullbodyUrl,
           "Onboarding.submit.profileReloadHeal",
         );
+        if (!reloadHealPhotos.ok) {
+          setError(t("photo_error"));
+          return;
+        }
         await reloadOnboardingProfileRow();
       }
 
@@ -2974,10 +3068,40 @@ export default function Onboarding() {
         }
       }
 
+      const preNavigatePhotos = await ensureOnboardingPhotosPersistedWithReadback(
+        authUserId,
+        portraitUrl,
+        fullbodyUrl,
+        "Onboarding.submit.preNavigate",
+      );
+      if (!preNavigatePhotos.ok) {
+        OnboardingFlowLog.redirectDecision({
+          userId: authUserId,
+          target: "/onboarding",
+          reason: "photo_readback_missing_canonical_urls",
+          profile_completed: rowForCommit.profile_completed === true,
+          onboarding_completed: rowForCommit.onboarding_completed === true,
+          onboarding_done: rowForCommit.onboarding_done === true,
+        });
+        setError(t("photo_error"));
+        return;
+      }
+
+      const confirmedPhotoRow = mergeOnboardingPhotosIntoProfileRow(
+        preNavigatePhotos.row,
+        portraitUrl,
+        fullbodyUrl,
+      );
+      rowForCommit = mergeProfileRowPreservingCompletion(rowForCommit, confirmedPhotoRow);
+
       if (isProfileRecord(rowForCommit)) {
         commitProfileRow(rowForCommit);
       } else if (isProfileRecord(upsertRow)) {
-        commitProfileRow(upsertRow);
+        commitProfileRow(
+          mergeOnboardingPhotosIntoProfileRow(upsertRow as Record<string, unknown>, portraitUrl, fullbodyUrl),
+        );
+      } else {
+        commitProfileRow(confirmedPhotoRow);
       }
 
       const screenRow = await fetchProfileScreenFields(authUserId);
