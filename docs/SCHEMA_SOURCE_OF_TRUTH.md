@@ -1,7 +1,7 @@
 # Schéma Supabase — source de vérité
 
 > Généré par `npm run schema:check` — ne pas éditer les sections « Inventaire » à la main.
-> Dernière vérification : 2026-06-08
+> Dernière vérification : 2026-06-11
 
 ## Rôle
 
@@ -129,8 +129,9 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 - `112_profile_views.sql`
 - `113_push_notifications.sql`
 - `114_profiles_rls_conversation_windows_security.sql`
+- `117_push_environment_security.sql`
 
-## Tables officielles (46)
+## Tables officielles (47)
 
 | Table | Colonnes | Aperçu |
 | --- | --- | --- |
@@ -144,7 +145,7 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 | conversation_windows | 9 | allowed_first_sender_id, conversation_id, created_at, extended_by, extended_once, match_initiator_id, updated_at, window_expires_at… |
 | conversations | 5 | created_at, id, last_reply_at, match_id, messages_count |
 | credit_ledger | 9 | balance_after, created_at, credit_type, id, metadata, purchase_id, quantity_delta, reason… |
-| device_tokens | 9 | active_conversation_id, active_route, created_at, id, platform, presence_updated_at, token, updated_at… |
+| device_tokens | 10 | active_conversation_id, active_route, created_at, id, platform, presence_updated_at, push_environment, token… |
 | discover_profile_crossings | 6 | expires_at, first_seen_at, last_interaction_at, state, target_id, viewer_id |
 | discover_rewind_ledger | 3 | created_at, id, user_id |
 | discover_swipe_events | 7 | action, created_at, decision_time_ms, id, is_match, target_id, viewer_id |
@@ -168,7 +169,8 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 | profile_views | 5 | action_taken, id, viewed_at, viewed_profile_id, viewer_id |
 | profiles | 87 | accepted_privacy_at, accepted_terms_at, activity_photo_path, activity_proposals_count, available_now_until, avatar_url, beta_splove_plus_unlocked, birth_date… |
 | purchases | 9 | created_at, id, metadata, platform, product_id, receipt_token, status, user_id… |
-| push_webhook_settings | 3 | functions_base_url, id, webhook_secret |
+| push_send_audit_log | 15 | admin_user_id, body, created_at, errors, id, kind, payload, push_environment… |
+| push_webhook_settings | 4 | functions_base_url, id, push_environment, webhook_secret |
 | real_life_session_checkins | 12 | activity_proposal_id, attendance_user_a_at, attendance_user_b_at, created_at, feedback_user_a, feedback_user_b, partner_invite_dismissed_a, partner_invite_dismissed_b… |
 | referral_conversions | 5 | created_at, id, referee_id, referral_code, referrer_id |
 | referral_events | 5 | created_at, event_name, id, payload, user_id |
@@ -226,7 +228,7 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 
 ### device_tokens
 
-`active_conversation_id`, `active_route`, `created_at`, `id`, `platform`, `presence_updated_at`, `token`, `updated_at`, `user_id`
+`active_conversation_id`, `active_route`, `created_at`, `id`, `platform`, `presence_updated_at`, `push_environment`, `token`, `updated_at`, `user_id`
 
 ### discover_profile_crossings
 
@@ -320,9 +322,13 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 
 `created_at`, `id`, `metadata`, `platform`, `product_id`, `receipt_token`, `status`, `user_id`, `verified_at`
 
+### push_send_audit_log
+
+`admin_user_id`, `body`, `created_at`, `errors`, `id`, `kind`, `payload`, `push_environment`, `recipient_count`, `recipient_user_id`, `route`, `sent_count`, `skipped_count`, `title`, `trigger_source`
+
 ### push_webhook_settings
 
-`functions_base_url`, `id`, `webhook_secret`
+`functions_base_url`, `id`, `push_environment`, `webhook_secret`
 
 ### real_life_session_checkins
 
@@ -496,6 +502,7 @@ _… et 41 autres fonctions (triggers, internes)._
 | device_tokens | active_route | src/services/deviceTokens.service.ts |
 | device_tokens | id | src/services/deviceTokens.service.ts |
 | device_tokens | presence_updated_at | src/services/deviceTokens.service.ts |
+| device_tokens | push_environment | src/services/deviceTokens.service.ts |
 | device_tokens | token | src/services/deviceTokens.service.ts |
 | device_tokens | updated_at | src/services/deviceTokens.service.ts |
 | device_tokens | user_id | src/services/deviceTokens.service.ts |
@@ -507,10 +514,9 @@ _… et 41 autres fonctions (triggers, internes)._
 | feature_activations | feature_type | src/components/splovePlus/SplovePlusScreen.tsx |
 | feature_purchases | created_at | src/services/features.service.ts |
 | feature_purchases | feature_key | src/services/features.service.ts |
-| feature_purchases | id | src/services/features.service.ts |
 
 
-_… et 182 autres accès._
+_… et 183 autres accès._
 
 ## Allowlists (exceptions documentées)
 

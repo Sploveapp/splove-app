@@ -1,3 +1,21 @@
+/**
+ * OAuth Google natif Capacitor (iOS / Android).
+ *
+ * iOS : ASWebAuthenticationSession (`SploveOAuth`) — évite SFSafariViewController et le flash
+ *       *.supabase.co après validation Google.
+ * Android : `@capacitor/browser` + `appUrlOpen` sur splove://.
+ *
+ * Règles visuelles (non-régression) :
+ * - accounts.google.com → visible, OK
+ * - *.supabase.co / callback / tokens → `isOAuthTechnicalUrl` → fermer le browser immédiatement
+ * - Overlay noir SPLove (`beginPostOAuthSplash`) pendant tout le callback
+ * - Dismiss overlay : succès via PostOAuthSplashGate seulement ; abort via `abortPostOAuthSplash`
+ * - Annulation / erreur → fermer browser + retour /auth
+ *
+ * @see oauthBrowserIntercept.ts — `isOAuthTechnicalUrl`
+ * @see postOAuthSplash.ts — cycle de vie overlay
+ */
+
 import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
 import { Capacitor } from "@capacitor/core";
@@ -9,20 +27,33 @@ import {
   isNativeOAuthCallbackUrl,
   NATIVE_OAUTH_CALLBACK,
   NATIVE_OAUTH_CALLBACK_LEGACY,
+  NATIVE_OAUTH_SCHEME,
   oauthRedirectUrl,
+  replaceWithHashRoute,
 } from "./authRedirect";
 import { isOauthProcessingLocked, setOauthProcessingLock } from "./oauthCallbackLock";
 import { GOOGLE_OAUTH_USER_ERROR_MSG } from "./googleOAuthFlow";
-import { dismissPostOAuthSplash } from "./postOAuthSplash";
+import { abortPostOAuthSplash, beginPostOAuthSplash } from "./postOAuthSplash";
+import { isOAuthTechnicalUrl } from "./oauthBrowserIntercept";
+import { isSploveOAuthWebAuthAvailable, SploveOAuth } from "./sploveOAuthNative";
+import { redactOAuthUrl } from "./oauthLogSanitize";
 
 const OAUTH_CALLBACK_STORAGE_KEY = "splove_oauth_callback_url";
 export const SPLOVE_OAUTH_BROWSER_CLOSED_EVENT = "splove-oauth-browser-closed";
 
-/** iOS only — test: window-location | browser-fullscreen | supabase-redirect */
-type IosGoogleOAuthOpenMode = "window-location" | "browser-fullscreen" | "supabase-redirect";
-const IOS_GOOGLE_OAUTH_OPEN_MODE: IosGoogleOAuthOpenMode = "browser-fullscreen";
+/** iOS only — prod : as-web-auth | fallback : browser-fullscreen */
+type IosGoogleOAuthOpenMode =
+  | "window-location"
+  | "browser-fullscreen"
+  | "supabase-redirect"
+  | "as-web-auth";
+
+const IOS_GOOGLE_OAUTH_OPEN_MODE: IosGoogleOAuthOpenMode = "as-web-auth";
 
 export const GOOGLE_OAUTH_INTERRUPTED_MSG = GOOGLE_OAUTH_USER_ERROR_MSG;
+
+let googleOAuthInFlight = false;
+let oauthUsesAsWebAuth = false;
 
 export function stashOAuthCallbackUrl(url: string): void {
   try {
@@ -61,14 +92,21 @@ export function subscribeGoogleOAuthBrowserTimeout(
 }
 
 export function isGoogleOAuthInFlight(): boolean {
-  return false;
+  return googleOAuthInFlight;
 }
 
 export function releaseGoogleOAuthFlowLock(): void {
-  /* no-op — rollback flux OAuth simple */
+  googleOAuthInFlight = false;
+  oauthUsesAsWebAuth = false;
 }
 
+function notifyOAuthBrowserClosed(): void {
+  window.dispatchEvent(new CustomEvent(SPLOVE_OAUTH_BROWSER_CLOSED_EVENT));
+}
+
+/** Ferme SFSafariViewController / Custom Tabs — no-op si ASWebAuth (déjà fermé par iOS). */
 async function closeOAuthBrowser(): Promise<void> {
+  if (oauthUsesAsWebAuth) return;
   try {
     await Browser.close();
   } catch {
@@ -130,6 +168,19 @@ export async function closeCapacitorOAuthBrowser(): Promise<void> {
   await closeOAuthBrowser();
 }
 
+/**
+ * Intercepte une URL technique Supabase : fermeture browser immédiate (sans attendre le chargement).
+ * L’overlay SPLove reste actif — dismiss uniquement après route finale (PostOAuthSplashGate).
+ */
+async function interceptOAuthTechnicalUrl(url: string, source: string): Promise<boolean> {
+  if (!isOAuthTechnicalUrl(url)) return false;
+  console.log("OAUTH_INTERCEPT_TECHNICAL", source, redactOAuthUrl(url));
+  beginPostOAuthSplash();
+  await closeOAuthBrowser();
+  return true;
+}
+
+/** Deep link splove:// → hash /auth/callback ; overlay actif, pas de dismiss ici. */
 async function routeOAuthDeepLink(url: string): Promise<void> {
   const trimmed = url.trim();
   if (!trimmed) {
@@ -144,6 +195,7 @@ async function routeOAuthDeepLink(url: string): Promise<void> {
 
   logUrlForXcode("OAUTH_RETURN", trimmed);
 
+  beginPostOAuthSplash();
   await closeOAuthBrowser();
   stashOAuthCallbackUrl(trimmed);
   setOauthProcessingLock();
@@ -153,8 +205,57 @@ async function routeOAuthDeepLink(url: string): Promise<void> {
   window.location.hash = hash;
 }
 
+/** Annulation utilisateur ou erreur avant callback terminé — abort overlay + /auth. */
+function handleOAuthCanceled(): void {
+  googleOAuthInFlight = false;
+  oauthUsesAsWebAuth = false;
+  notifyOAuthBrowserClosed();
+  if (isOauthProcessingLocked()) return;
+  abortPostOAuthSplash();
+  replaceWithHashRoute("/auth", { force: true });
+}
+
+function isUserCanceledOAuthError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: string }).code;
+  if (code === "USER_CANCELED") return true;
+  const message = String((error as { message?: string }).message ?? "");
+  return /cancel/i.test(message);
+}
+
+/** iOS : ASWebAuthenticationSession — session fermée dès splove://, sans page Supabase persistante. */
+async function startIosAsWebAuthSession(url: string): Promise<{ error: Error | null }> {
+  googleOAuthInFlight = true;
+  oauthUsesAsWebAuth = true;
+  console.log("OAUTH_OPEN_MODE", "as-web-auth");
+
+  try {
+    const result = await SploveOAuth.startWebAuthSession({
+      url,
+      callbackScheme: NATIVE_OAUTH_SCHEME,
+    });
+    googleOAuthInFlight = false;
+    oauthUsesAsWebAuth = false;
+    notifyOAuthBrowserClosed();
+    await routeOAuthDeepLink(result.callbackUrl);
+    return { error: null };
+  } catch (error: unknown) {
+    console.log("OAUTH_AS_WEB_AUTH_ERROR", error);
+    if (isUserCanceledOAuthError(error)) {
+      handleOAuthCanceled();
+      return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
+    }
+    handleOAuthCanceled();
+    return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
+  }
+}
+
 let capacitorAuthBridgeReady = false;
 
+/**
+ * Pont natif : appUrlOpen (deep link), browserFinished (annulation Android).
+ * browserPageLoaded ne fournit pas l’URL sur iOS — ne pas s’y fier pour l’intercept Supabase.
+ */
 export function initCapacitorAuthBridge(): void {
   if (capacitorAuthBridgeReady || !isGoogleOAuthNativePlatform()) return;
   capacitorAuthBridgeReady = true;
@@ -163,14 +264,24 @@ export function initCapacitorAuthBridge(): void {
     const opened = event.url?.trim() ?? "";
     console.log("APP_URL_OPEN_RECEIVED", true);
     logUrlForXcode("APP_URL_OPEN", opened);
-    void routeOAuthDeepLink(event.url);
+    void (async () => {
+      if (await interceptOAuthTechnicalUrl(opened, "appUrlOpen")) return;
+      await routeOAuthDeepLink(opened);
+    })();
+  });
+
+  void Browser.addListener("browserPageLoaded", () => {
+    console.log("OAUTH_BROWSER_PAGE_LOADED");
   });
 
   void Browser.addListener("browserFinished", () => {
     console.log("OAUTH_BROWSER_FINISHED");
+    if (oauthUsesAsWebAuth) return;
+    notifyOAuthBrowserClosed();
     if (isOauthProcessingLocked()) return;
-    dismissPostOAuthSplash();
-    window.dispatchEvent(new CustomEvent(SPLOVE_OAUTH_BROWSER_CLOSED_EVENT));
+    if (googleOAuthInFlight) {
+      handleOAuthCanceled();
+    }
   });
 }
 
@@ -181,6 +292,7 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
     const isIos = Capacitor.getPlatform() === "ios";
     const openMode: IosGoogleOAuthOpenMode = isIos ? IOS_GOOGLE_OAUTH_OPEN_MODE : "browser-fullscreen";
     const useSupabaseRedirect = openMode === "supabase-redirect";
+    const useAsWebAuth = isIos && openMode === "as-web-auth" && isSploveOAuthWebAuthAvailable();
 
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
@@ -206,12 +318,16 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
       return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
     }
 
+    if (useAsWebAuth) {
+      return startIosAsWebAuthSession(url);
+    }
+
     console.log("OAUTH_OPEN_MODE", openMode);
     logGoogleAuthUrlDiagnostics(url, "BROWSER_OPEN");
     console.log("BROWSER_OPEN_START");
+    googleOAuthInFlight = true;
 
     if (useSupabaseRedirect) {
-      // signInWithOAuth a déjà appelé window.location.assign(url) côté client Supabase.
       console.log("BROWSER_OPEN_DONE");
       return { error: null };
     }
