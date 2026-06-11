@@ -147,15 +147,18 @@ function syncFallbackForRef(ref: string | null | undefined): string | null {
   return buildSyncProfilePhotoDisplaySrc(ref);
 }
 
-async function urlsForStoredRef(storedRef: string): Promise<string[]> {
+/** Résolution ref BDD → URLs `<img>` (tests de non-régression iOS signed URL). */
+export async function resolveProfilePhotoStoredRefDisplayUrls(storedRef: string): Promise<string[]> {
   const sync = buildSyncProfilePhotoDisplayCandidates(storedRef);
-  if (sync.length === 0) return [];
-
   const normalized = normalizeProfilePhotoStoredRef(storedRef, supabase);
-  if (!normalized) return sync;
 
-  if (shouldPassThroughProfilePhotoDisplayUrl(normalized)) {
+  if (!normalized) {
     return sync;
+  }
+
+  // URL déjà affichable (avatar externe, blob, signed URL en BDD).
+  if (shouldPassThroughProfilePhotoDisplayUrl(normalized)) {
+    return sync.length > 0 ? sync : [normalized];
   }
 
   const out = [...sync];
@@ -167,6 +170,7 @@ async function urlsForStoredRef(storedRef: string): Promise<string[]> {
     out.push(t);
   };
 
+  // iOS : sync vide (skipSyncPublic) — signed URL depuis la ref stockée (URL publique ou path).
   push(await getProfilePhotoSignedUrl(supabase, normalized));
   push(await getProfilePhotoSignedUrl(supabase, normalized, 3600));
 
@@ -206,7 +210,7 @@ export function useProfilePhotoDisplaySrc(
       photoField: field,
       storedRef: photoUrlPrefix(ref),
     });
-    const candidates = await urlsForStoredRef(ref);
+    const candidates = await resolveProfilePhotoStoredRefDisplayUrls(ref);
     if (candidates.length === 0) {
       emitConnectedPhotoLog(ctx, "field_no_display_url", {
         photoField: field,
