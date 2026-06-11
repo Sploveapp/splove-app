@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Bike, CircleDot, Footprints, Mountain, Waves } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import { abortPostOAuthSplash, beginPostOAuthSplash } from "../lib/postOAuthSplash";
+import { beginPostOAuthSplash } from "../lib/postOAuthSplash";
 import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
 import { isAppAuthReady } from "../lib/isAppAuthReady";
 import { APP_BORDER, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
@@ -186,7 +186,6 @@ export default function WelcomeSPLove() {
       const { error } = await signInWithGoogleOAuth();
       if (error) throw error;
     } catch (err: unknown) {
-      abortPostOAuthSplash();
       setOauthBanner(oauthErrorToUserMessage(err, language));
     } finally {
       setOauthLoading(null);

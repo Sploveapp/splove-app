@@ -80,10 +80,6 @@ import { SPLovePhotoLog } from "../lib/profilePhotoPipelineLog";
 import { PhotoFlowLog } from "../lib/photoFlowLog";
 import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
 import {
-  mergeOnboardingPhotosIntoProfileRow,
-  profileRowHasCanonicalPhotos,
-} from "../lib/onboardingProfilePhotos";
-import {
   ensureOnboardingCompletionInProfile,
   fetchProfileAfterOnboardingSubmit,
   mergeProfileRowPreservingCompletion,
@@ -419,6 +415,13 @@ function reinjectOnboardingPhotoUrlsInPayload(
   return next;
 }
 
+function profileRowHasCanonicalPhotos(row: Record<string, unknown> | null | undefined): boolean {
+  if (!row) return false;
+  const portrait = typeof row.portrait_url === "string" ? row.portrait_url.trim() : "";
+  const fullbody = typeof row.fullbody_url === "string" ? row.fullbody_url.trim() : "";
+  const main = typeof row.main_photo_url === "string" ? row.main_photo_url.trim() : "";
+  return portrait.length > 0 || fullbody.length > 0 || main.length > 0;
+}
 
 const ONBOARDING_PHOTO_READBACK_SELECT =
   "id, portrait_url, fullbody_url, main_photo_url, avatar_url";
@@ -493,6 +496,24 @@ async function ensureOnboardingPhotosPersistedWithReadback(
       : null,
   });
   return { ok: false, error: "photo_readback_missing_canonical_urls" };
+}
+
+function mergeOnboardingPhotosIntoProfileRow(
+  row: Record<string, unknown>,
+  portraitUrl: string,
+  fullbodyUrl: string,
+): Record<string, unknown> {
+  const portrait = normalizeProfilePhotoStoredRef(portraitUrl, supabase).trim();
+  const fullbody = normalizeProfilePhotoStoredRef(fullbodyUrl, supabase).trim();
+  if (!portrait && !fullbody) return row;
+  const next = { ...row };
+  if (portrait) {
+    next.portrait_url = portrait;
+    if (!String(next.avatar_url ?? "").trim()) next.avatar_url = portrait;
+  }
+  if (fullbody) next.fullbody_url = fullbody;
+  next.main_photo_url = portrait || fullbody;
+  return next;
 }
 
 /** Écriture dédiée des URLs photo canoniques — indépendante des retries sanitize du gros upsert. */

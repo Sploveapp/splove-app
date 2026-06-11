@@ -31,6 +31,7 @@ import {
 } from "../lib/profilePhotoDisplayUrl";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
 import { coerceProfileHeightCm, parseHeightCmOptionalInput } from "../lib/profileHeightCm";
+import { uploadProfilePhoto } from "../lib/profilePhotoUpload";
 
 type SportOption = { id: string | number; name: string; category?: string | null };
 type LookingForValue =
@@ -70,9 +71,7 @@ const EDIT_SPORT_MATCH_OPTIONS: readonly {
   { value: "both", labelKey: "sport_match_pref_both_label", descKey: "sport_match_pref_both_desc" },
 ];
 
-const PHOTO_BUCKET = "profile-photos";
 const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
-const PHOTO_ACCEPT_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function EditProfilePhotoPlaceholder({
   hint,
@@ -430,19 +429,6 @@ export default function EditProfile() {
     setBodyFile(file);
   }
 
-  async function uploadPhoto(userId: string, file: File, kind: "portrait" | "full"): Promise<string> {
-    if (!PHOTO_ACCEPT_MIMES.has(file.type)) throw new Error("Formats acceptés : JPG, PNG, WebP.");
-    if (file.size > PHOTO_MAX_BYTES) throw new Error(t("photos.file_too_large"));
-    const ext = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
-    const path = `${userId}/${kind}-${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from(PHOTO_BUCKET).upload(path, file, {
-      upsert: true,
-      contentType: file.type,
-    });
-    if (error) throw error;
-    return supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl;
-  }
-
   async function handleSave(): Promise<void> {
     if (!user?.id) return;
     setLoading(true);
@@ -457,8 +443,14 @@ export default function EditProfile() {
 
       let nextPortraitUrl: string | null = null;
       let nextBodyUrl: string | null = null;
-      if (portraitFile) nextPortraitUrl = await uploadPhoto(user.id, portraitFile, "portrait");
-      if (bodyFile) nextBodyUrl = await uploadPhoto(user.id, bodyFile, "full");
+      if (portraitFile) {
+        const uploaded = await uploadProfilePhoto(supabase, user.id, portraitFile, "portrait");
+        nextPortraitUrl = uploaded.storedRef;
+      }
+      if (bodyFile) {
+        const uploaded = await uploadProfilePhoto(supabase, user.id, bodyFile, "activity");
+        nextBodyUrl = uploaded.storedRef;
+      }
 
       // Keep PATCH payload minimal and schema-safe to avoid PostgREST 400 on unknown columns.
       // Never send portrait_url / fullbody_url / main_photo_url as null or "" unless we are

@@ -24,7 +24,7 @@ import {
 } from "../lib/authRedirect";
 import { setOAuthSessionWithTimeout } from "../lib/supabaseSetSession";
 import { logOAuthRedirect, markOAuthSessionAt } from "../lib/postLoginPerf";
-import { abortPostOAuthSplash } from "../lib/postOAuthSplash";
+import { dismissPostOAuthSplash } from "../lib/postOAuthSplash";
 import { resolvePostOAuthPath } from "../lib/profileSelect";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { hideCapacitorSplashWhenReady } from "../lib/capacitorNativeSplash";
@@ -154,8 +154,9 @@ export default function AuthCallback() {
     releaseOauthLock();
     clearAllOAuthSessionLocks();
     releaseGoogleOAuthFlowLock();
+    dismissPostOAuthSplash();
     finish();
-    await closeCapacitorOAuthBrowser();
+    void closeCapacitorOAuthBrowser();
     navigateAfterOAuth(path);
     logOAuthRedirect();
   };
@@ -199,7 +200,7 @@ export default function AuthCallback() {
     finish();
     releaseGoogleOAuthFlowLock();
     releaseOauthLockAndStorage();
-    abortPostOAuthSplash();
+    dismissPostOAuthSplash();
     void closeCapacitorOAuthBrowser();
     stashAuthOAuthUserMessage(GOOGLE_OAUTH_USER_ERROR_MSG);
     replaceWithHashRoute("/auth", { force: true });

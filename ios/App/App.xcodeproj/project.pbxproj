@@ -22,7 +22,6 @@
 		SPL0VE009A1FED79650016851F /* BottomNavigationBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0VE00AA1FED79650016851F /* BottomNavigationBar.swift */; };
 		SPL0VE00BA1FED79650016851F /* NativeNavigationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0VE00CA1FED79650016851F /* NativeNavigationBridge.swift */; };
 		SPL0VE00DA1FED79650016851F /* NativeShellState.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0VE00EA1FED79650016851F /* NativeShellState.swift */; };
-		SPL0VE00FA1FED79650016851F /* SploveOAuthPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPL0VE010A1FED79650016851F /* SploveOAuthPlugin.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,7 +45,6 @@
 		SPL0VE00AA1FED79650016851F /* BottomNavigationBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BottomNavigationBar.swift; sourceTree = "<group>"; };
 		SPL0VE00CA1FED79650016851F /* NativeNavigationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeNavigationBridge.swift; sourceTree = "<group>"; };
 		SPL0VE00EA1FED79650016851F /* NativeShellState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeShellState.swift; sourceTree = "<group>"; };
-		SPL0VE010A1FED79650016851F /* SploveOAuthPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SploveOAuthPlugin.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,7 +98,6 @@
 				SPL0VE00AA1FED79650016851F /* BottomNavigationBar.swift */,
 				SPL0VE00CA1FED79650016851F /* NativeNavigationBridge.swift */,
 				SPL0VE00EA1FED79650016851F /* NativeShellState.swift */,
-				SPL0VE010A1FED79650016851F /* SploveOAuthPlugin.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -243,7 +240,6 @@
 				SPL0VE009A1FED79650016851F /* BottomNavigationBar.swift in Sources */,
 				SPL0VE00BA1FED79650016851F /* NativeNavigationBridge.swift in Sources */,
 				SPL0VE00DA1FED79650016851F /* NativeShellState.swift in Sources */,
-				SPL0VE00FA1FED79650016851F /* SploveOAuthPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

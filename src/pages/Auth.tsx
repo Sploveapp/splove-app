@@ -5,7 +5,7 @@ import { signInWithGoogleOAuth, subscribeGoogleOAuthBrowserTimeout, SPLOVE_OAUTH
 import { consumeAuthOAuthUserMessage } from "../lib/authOAuthUserMessage";
 import { GOOGLE_OAUTH_USER_ERROR_MSG } from "../lib/googleOAuthFlow";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
-import { abortPostOAuthSplash, beginPostOAuthSplash } from "../lib/postOAuthSplash";
+import { beginPostOAuthSplash } from "../lib/postOAuthSplash";
 import { useAuth } from "../contexts/AuthContext";
 import { APP_BG, APP_TEXT_MUTED, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { isAppAuthReady } from "../lib/isAppAuthReady";
@@ -268,12 +268,10 @@ export default function Auth() {
     try {
       const { error } = await signInWithGoogleOAuth();
       if (error) {
-        abortPostOAuthSplash();
         setMessage({ type: "error", text: GOOGLE_OAUTH_USER_ERROR_MSG });
         setOauthLoading(null);
       }
     } catch (err: unknown) {
-      abortPostOAuthSplash();
       setMessage({ type: "error", text: GOOGLE_OAUTH_USER_ERROR_MSG });
       setOauthLoading(null);
     }

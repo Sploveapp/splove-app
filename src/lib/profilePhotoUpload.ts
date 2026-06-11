@@ -8,6 +8,11 @@ import {
 } from "./profilePhotoSignedUrl";
 import { SPLovePhotoLog } from "./profilePhotoPipelineLog";
 import { PhotoFlowLog } from "./photoFlowLog";
+import {
+  PROFILE_PHOTO_JPEG_EXT,
+  PROFILE_PHOTO_JPEG_MIME,
+  normalizeProfilePhotoForUpload,
+} from "./profilePhotoNormalize";
 export type ProfilePhotoSlot = "portrait" | "activity";
 
 export type ProfilePhotoUploadResult = {
@@ -22,14 +27,6 @@ export type ProfilePhotoUploadResult = {
 };
 
 const LOG = "[profilePhoto]";
-
-function fileExtension(file: File): string {
-  const fromName = file.name.split(".").pop()?.trim().toLowerCase();
-  if (fromName && /^[a-z0-9]+$/.test(fromName)) return fromName;
-  if (file.type === "image/png") return "png";
-  if (file.type === "image/webp") return "webp";
-  return "jpg";
-}
 
 export function buildProfilePhotoObjectPath(
   userId: string,
@@ -189,30 +186,35 @@ export async function uploadProfilePhoto(
     throw new Error("invalid_file");
   }
 
-  const ext = fileExtension(file);
-  const objectPath = buildProfilePhotoObjectPath(userId, slot, ext);
+  const normalizedFile = await normalizeProfilePhotoForUpload(file);
+  const objectPath = buildProfilePhotoObjectPath(userId, slot, PROFILE_PHOTO_JPEG_EXT);
 
   SPLovePhotoLog.uploadStarted({
     source: "uploadProfilePhoto",
     userId,
     slot,
     objectPath,
-    fileSize: file.size,
-    fileType: file.type,
+    fileSize: normalizedFile.size,
+    fileType: normalizedFile.type,
+    extra: {
+      originalFileSize: file.size,
+      originalFileType: file.type || null,
+      originalFileName: file.name,
+    },
   });
   PhotoFlowLog.onboardingUploadStart({
     userId,
     slot,
-    fileSize: file.size,
-    fileType: file.type,
+    fileSize: normalizedFile.size,
+    fileType: normalizedFile.type,
   });
 
   const { data: uploadData, error: uploadError } = await supabase.storage
     .from(PROFILE_PHOTOS_BUCKET)
-    .upload(objectPath, file, {
+    .upload(objectPath, normalizedFile, {
       cacheControl: "3600",
       upsert: true,
-      contentType: file.type || `image/${ext}`,
+      contentType: PROFILE_PHOTO_JPEG_MIME,
     });
 
   if (uploadError) {
