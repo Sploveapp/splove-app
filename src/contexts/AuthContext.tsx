@@ -28,7 +28,13 @@ import {
   sameAuthUserId,
 } from "../lib/authNetwork";
 import { mergeAdaptedOpennessFields } from "../lib/profileAdaptedOpenness";
+import { registerAuthSessionSyncHandler } from "../lib/authSessionSyncBridge";
+import {
+  mergeAuthProfileRow,
+  mergeProfileScreenRowPreservingPhotos,
+} from "../lib/profileScreenHydrate";
 import { deferSecondaryWork } from "../lib/deferSecondaryWork";
+import { resolveAppShellState, type AppShellState } from "../lib/appShellState";
 import type { AppProfile } from "../lib/appProfile";
 import { isProfileRecord } from "../lib/appProfile";
 import { isProfileReadyForDiscover } from "../lib/onboardingDiscoverReadiness";
@@ -91,6 +97,8 @@ type AuthState = {
   isProfileLoading: boolean;
   error: string | null;
   /** Recharge le profil depuis Supabase ; n’efface pas le profil en cache si la lecture échoue. */
+  /** État shell global (splash / skeleton / contenu). */
+  appShell: AppShellState;
   refetchProfile: () => Promise<Profile | null>;
   /** Met à jour le profil depuis une ligne serveur (ex. retour d’upsert onboarding), avec flushSync. */
   commitProfileRow: (row: unknown) => void;
@@ -313,7 +321,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (fast?.id) {
           setProfileLoadError(null);
           lastLoadedUserIdRef.current = fast.id;
-          setProfile((prev) => (prev?.id === fast.id ? { ...prev, ...fast } : fast));
+          setProfile((prev) =>
+            profileRowToProfile(
+              mergeAuthProfileRow(
+                prev as Record<string, unknown> | null,
+                fast as unknown as Record<string, unknown>,
+              ) as AppProfile,
+            ),
+          );
           console.log("AUTH_PROFILE_READY", { userId: fast.id.slice(0, 8) });
         }
         if (!DISCOVER_BETA_SIMPLE_PIPELINE && fast?.id) {
@@ -321,7 +336,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             void enrichProfileOptionalFields(userId, fast)
               .then((enriched) => {
                 if (gen !== profileLoadGenRef.current) return;
-                setProfile((prev) => (prev?.id === enriched.id ? { ...prev, ...enriched } : enriched));
+                setProfile((prev) =>
+                  profileRowToProfile(
+                    mergeAuthProfileRow(
+                      prev as Record<string, unknown> | null,
+                      enriched as unknown as Record<string, unknown>,
+                    ) as AppProfile,
+                  ),
+                );
               })
               .catch(() => undefined);
           }, 5_000);
@@ -345,7 +367,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       lastLoadedUserIdRef.current = normalized.id;
     }
     flushSync(() => {
-      setProfile(normalized);
+      setProfile((prev) => {
+        if (!prev?.id || prev.id !== normalized.id) {
+          return normalized;
+        }
+        const merged = mergeProfileScreenRowPreservingPhotos(
+          prev as Record<string, unknown>,
+          normalized as Record<string, unknown>,
+        );
+        return profileRowToProfile(merged as AppProfile);
+      });
     });
   }, []);
 
@@ -366,7 +397,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       if (p) {
         flushSync(() => {
-          setProfile(p);
+          setProfile((prev) =>
+            profileRowToProfile(
+              mergeAuthProfileRow(
+                prev as Record<string, unknown> | null,
+                p as unknown as Record<string, unknown>,
+              ) as AppProfile,
+            ),
+          );
         });
       } else if (import.meta.env.DEV) {
         console.log("[PROFILE_CORE_LOAD_FAILED]", {
@@ -405,6 +443,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     return Boolean(next?.user?.id);
   }, []);
+
+  useEffect(() => {
+    registerAuthSessionSyncHandler(syncAuthSession);
+    return () => registerAuthSessionSyncHandler(null);
+  }, [syncAuthSession]);
 
   const signOut = useCallback(async (options?: { scope?: "global" | "local" | "others" }) => {
     if (signOutInFlightRef.current) {
@@ -684,6 +727,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const profileIncompleteReason = isProfileComplete ? null : "profile_not_completed";
 
+  const appShell = useMemo(
+    (): AppShellState =>
+      resolveAppShellState({
+        isAuthInitialized,
+        isLoading,
+        sessionUserId: session?.user?.id,
+        profileId: profile?.id,
+      }),
+    [isAuthInitialized, isLoading, session?.user?.id, profile?.id],
+  );
+
   useEffect(() => {
     if (!import.meta.env.DEV || profile == null) return;
     if (profile.profile_completed !== true || isProfileComplete) return;
@@ -708,6 +762,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthInitialized,
     isLoading,
     isProfileLoading,
+    appShell,
     error,
     refetchProfile,
     commitProfileRow,

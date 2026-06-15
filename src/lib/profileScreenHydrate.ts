@@ -26,6 +26,22 @@ export function mergeProfileScreenRowPreservingPhotos(
   return merged;
 }
 
+/**
+ * Fusion profil Auth : remplace la row entrante sauf si une photo valide en cache
+ * serait écrasée par null / chaîne vide (refetch / loadProfile).
+ */
+export function mergeAuthProfileRow(
+  prev: Record<string, unknown> | null | undefined,
+  incoming: Record<string, unknown>,
+): Record<string, unknown> {
+  const prevId = typeof prev?.id === "string" ? prev.id.trim() : "";
+  const incomingId = typeof incoming.id === "string" ? incoming.id.trim() : "";
+  if (!prevId || prevId !== incomingId) {
+    return incoming;
+  }
+  return mergeProfileScreenRowPreservingPhotos(prev, incoming);
+}
+
 /** Champs affichés sur Profil / EditProfile — indépendants du palier FAST auth post-OAuth. */
 const PROFILE_SCREEN_SELECT_TIERS: string[] = [
   "id, portrait_url, fullbody_url, main_photo_url, avatar_url, city, latitude, longitude, discovery_radius_km, location_source, preferred_age_min, preferred_age_max, sport_phrase, intent, looking_for, sport_match_preference, height_cm, updated_at",
