@@ -2,7 +2,9 @@ import { useEffect } from "react";
 import { hideCapacitorSplashWhenReady } from "../lib/capacitorNativeSplash";
 import { BRAND_BG } from "../constants/theme";
 
-const LOGO_SRC = `${import.meta.env.BASE_URL}logo.png`.replace(/\/{2,}/g, "/");
+import { publicAssetUrl } from "../lib/publicAssetUrl";
+
+const LOGO_SRC = publicAssetUrl("logo.png");
 
 type Props = {
   /** Plein écran au-dessus de l’app (cold start / post-login). */

@@ -1,9 +1,11 @@
+import { publicAssetUrl } from "../lib/publicAssetUrl";
+
 type Props = {
   size?: number;
 };
 
 /** Logo officiel SPLove (cœur + orbite) — asset `public/logo.png`, identique AppIcon / Splash. */
-const LOGO_SRC = `${import.meta.env.BASE_URL}logo.png`.replace(/\/{2,}/g, "/");
+const LOGO_SRC = publicAssetUrl("logo.png");
 
 export function SploveSplashMark({ size = 112 }: Props) {
   return (

@@ -3,11 +3,13 @@ import { Link, useNavigate } from "react-router-dom";
 import { Bike, CircleDot, Footprints, Mountain, Waves } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { beginPostOAuthSplash } from "../lib/postOAuthSplash";
+import { isIosGoogleNativeEnabled } from "../lib/googleNativeSignIn";
 import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
 import { isAppAuthReady } from "../lib/isAppAuthReady";
 import { APP_BORDER, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import { useTranslation } from "../i18n/useTranslation";
 import welcomeLogoMark from "../assets/welcome/splove-mark.png";
+import { publicAssetUrl } from "../lib/publicAssetUrl";
 import {
   GOOGLE_OAUTH_INTERRUPTED_MSG,
   signInWithGoogleOAuth,
@@ -107,8 +109,8 @@ function WelcomeSportIconRow({ stroke }: { stroke: string }) {
   );
 }
 
-const LOGO_PUBLIC_FALLBACK = `${import.meta.env.BASE_URL}logo.png`.replace(/\/{2,}/g, "/");
-const WELCOME_BG_IMAGE = `${import.meta.env.BASE_URL}welcome-sport-clean.png?v=2`;
+const LOGO_PUBLIC_FALLBACK = publicAssetUrl("logo.png");
+const WELCOME_BG_IMAGE = publicAssetUrl("welcome-sport-clean.png?v=2");
 
 export default function WelcomeSPLove() {
   const navigate = useNavigate();
@@ -181,7 +183,9 @@ export default function WelcomeSPLove() {
     if (!navigationReady) return;
     setOauthBanner(null);
     setOauthLoading("google");
-    beginPostOAuthSplash();
+    if (!isIosGoogleNativeEnabled()) {
+      beginPostOAuthSplash();
+    }
     try {
       const { error } = await signInWithGoogleOAuth();
       if (error) throw error;
