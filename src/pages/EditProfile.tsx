@@ -13,6 +13,10 @@ import {
   CTA_DISABLED_BG,
   TEXT_ON_BRAND,
 } from "../constants/theme";
+import {
+  SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK,
+  SPLOVE_BOTTOM_NAV_HEIGHT_VAR,
+} from "../constants/appBottomNavLayout";
 import { normalizePreferredAgeRange } from "../lib/profileAge";
 import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/sportMatchPreference";
 import { useTranslation } from "../i18n/useTranslation";
@@ -555,7 +559,15 @@ export default function EditProfile() {
 
   return (
     <div style={{ minHeight: "100vh", background: APP_BG, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" }}>
-      <main style={{ padding: "24px", maxWidth: "560px", margin: "0 auto" }}>
+      <main
+        style={{
+          padding: "24px",
+          paddingBottom: `calc(24px + var(${SPLOVE_BOTTOM_NAV_HEIGHT_VAR}, ${SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK}))`,
+          maxWidth: "560px",
+          margin: "0 auto",
+          boxSizing: "border-box",
+        }}
+      >
         <h1 style={{ margin: "0 0 18px 0", fontSize: "22px", fontWeight: 700, color: APP_TEXT }}>{t("edit_profile")}</h1>
 
         {user?.id ? (
