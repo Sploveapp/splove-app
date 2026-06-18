@@ -22,15 +22,11 @@ import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/s
 import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
 import {
-  primaryProfilePhotoRefs,
-  secondaryProfilePhotoRefs,
   useProfilePhotoDisplaySrc,
 } from "../hooks/useProfilePhotoDisplaySrc";
 import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
 import {
   logProfilePhotoUiDecision,
-  pickPrimaryProfilePhotoStoredRef,
-  pickSecondaryProfilePhotoStoredRef,
   resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
@@ -76,6 +72,71 @@ const EDIT_SPORT_MATCH_OPTIONS: readonly {
 ];
 
 const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+
+type EditProfilePhotoFields = {
+  portrait_url?: string | null;
+  main_photo_url?: string | null;
+  avatar_url?: string | null;
+  fullbody_url?: string | null;
+};
+
+/** EditProfile : portrait d’abord (slot upload), puis repli main / avatar. */
+function buildEditPrimaryPhotoCandidates(
+  profile: EditProfilePhotoFields | null | undefined,
+  localSavedUrl: string,
+): { refs: string[]; fieldByRef: Record<string, string> } {
+  const fieldOrder = ["portrait_url", "main_photo_url", "avatar_url"] as const;
+  const refs: string[] = [];
+  const fieldByRef: Record<string, string> = {};
+  const seen = new Set<string>();
+  const push = (key: (typeof fieldOrder)[number], value: unknown) => {
+    const t = typeof value === "string" ? value.trim() : "";
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    refs.push(t);
+    fieldByRef[t] = key;
+  };
+  for (const key of fieldOrder) {
+    push(key, profile?.[key]);
+  }
+  const local = localSavedUrl.trim();
+  if (local && !seen.has(local)) {
+    refs.push(local);
+    fieldByRef[local] = "portrait_url";
+  }
+  return { refs, fieldByRef };
+}
+
+/** EditProfile : fullbody uniquement (+ URL locale post-upload). */
+function buildEditSecondaryPhotoCandidates(
+  profile: EditProfilePhotoFields | null | undefined,
+  localSavedUrl: string,
+): { refs: string[]; fieldByRef: Record<string, string> } {
+  const refs: string[] = [];
+  const fieldByRef: Record<string, string> = {};
+  const fullbody =
+    typeof profile?.fullbody_url === "string" ? profile.fullbody_url.trim() : "";
+  if (fullbody) {
+    refs.push(fullbody);
+    fieldByRef[fullbody] = "fullbody_url";
+  }
+  const local = localSavedUrl.trim();
+  if (local && local !== fullbody) {
+    refs.push(local);
+    fieldByRef[local] = "fullbody_url";
+  }
+  return { refs, fieldByRef };
+}
+
+function mergeBlobPreviewWithSavedRefs(
+  previewUrl: string,
+  hasPendingFile: boolean,
+  savedRefs: string[],
+): string[] {
+  if (!hasPendingFile || !previewUrl.trim()) return savedRefs;
+  const blob = previewUrl.trim();
+  return [blob, ...savedRefs.filter((r) => r !== blob)];
+}
 
 function EditProfilePhotoPlaceholder({
   hint,
@@ -183,29 +244,75 @@ export default function EditProfile() {
   const profileRef = useRef(profile);
   profileRef.current = profile;
 
-  const primaryStoredRef = useMemo(() => pickPrimaryProfilePhotoStoredRef(profile), [profile]);
-  const secondaryStoredRef = useMemo(() => pickSecondaryProfilePhotoStoredRef(profile), [profile]);
+  const primaryEditCandidates = useMemo(
+    () => buildEditPrimaryPhotoCandidates(profile, portraitUrl),
+    [profile, portraitUrl],
+  );
+  const secondaryEditCandidates = useMemo(
+    () => buildEditSecondaryPhotoCandidates(profile, bodyUrl),
+    [profile, bodyUrl],
+  );
 
-  const portraitRefs = useMemo(() => {
-    if (portraitPreviewUrl) return [portraitPreviewUrl];
-    const fromProfile = primaryProfilePhotoRefs(profile);
-    const extra = portraitUrl.trim();
-    if (extra && !fromProfile.includes(extra)) return [extra, ...fromProfile];
-    return fromProfile;
-  }, [portraitPreviewUrl, portraitUrl, profile]);
+  const portraitRefs = useMemo(
+    () =>
+      mergeBlobPreviewWithSavedRefs(
+        portraitPreviewUrl,
+        Boolean(portraitFile),
+        primaryEditCandidates.refs,
+      ),
+    [portraitPreviewUrl, portraitFile, primaryEditCandidates.refs],
+  );
 
-  const bodyRefs = useMemo(() => {
-    if (bodyPreviewUrl) return [bodyPreviewUrl];
-    const fromProfile = secondaryProfilePhotoRefs(profile);
-    const extra = bodyUrl.trim();
-    if (extra && !fromProfile.includes(extra)) return [extra, ...fromProfile];
-    return fromProfile;
-  }, [bodyPreviewUrl, bodyUrl, profile]);
+  const bodyRefs = useMemo(
+    () =>
+      mergeBlobPreviewWithSavedRefs(bodyPreviewUrl, Boolean(bodyFile), secondaryEditCandidates.refs),
+    [bodyPreviewUrl, bodyFile, secondaryEditCandidates.refs],
+  );
 
-  const primaryPhoto = useProfilePhotoDisplaySrc(portraitRefs);
-  const secondaryPhoto = useProfilePhotoDisplaySrc(bodyRefs);
-  const primaryImgSrc = resolveProfilePhotoUiSrc(primaryStoredRef, primaryPhoto.src);
-  const secondaryImgSrc = resolveProfilePhotoUiSrc(secondaryStoredRef, secondaryPhoto.src);
+  const primaryPhotoLogContext = useMemo(
+    () => ({
+      userId: user?.id ?? null,
+      profileId: profile?.id ?? user?.id ?? null,
+      source: "edit_profile.screen",
+      fieldByRef: primaryEditCandidates.fieldByRef,
+    }),
+    [user?.id, profile?.id, primaryEditCandidates.fieldByRef],
+  );
+
+  const secondaryPhotoLogContext = useMemo(
+    () => ({
+      userId: user?.id ?? null,
+      profileId: profile?.id ?? user?.id ?? null,
+      source: "edit_profile.screen",
+      fieldByRef: secondaryEditCandidates.fieldByRef,
+    }),
+    [user?.id, profile?.id, secondaryEditCandidates.fieldByRef],
+  );
+
+  const primaryPhoto = useProfilePhotoDisplaySrc(portraitRefs, {
+    logContext: primaryPhotoLogContext,
+  });
+  const secondaryPhoto = useProfilePhotoDisplaySrc(bodyRefs, {
+    logContext: secondaryPhotoLogContext,
+  });
+
+  const primaryStoredRef = primaryEditCandidates.refs[0] ?? null;
+  const secondaryStoredRef = secondaryEditCandidates.refs[0] ?? null;
+
+  const primaryResolvedSrc = resolveProfilePhotoUiSrc(primaryStoredRef, primaryPhoto.src);
+  const secondaryResolvedSrc = resolveProfilePhotoUiSrc(secondaryStoredRef, secondaryPhoto.src);
+
+  const primaryImgSrc =
+    primaryPhoto.isFailed || (primaryPhoto.isLoading && primaryEditCandidates.refs.length > 0)
+      ? null
+      : primaryResolvedSrc;
+  const secondaryImgSrc =
+    secondaryPhoto.isFailed || (secondaryPhoto.isLoading && secondaryEditCandidates.refs.length > 0)
+      ? null
+      : secondaryResolvedSrc;
+
+  const showPrimaryImg = Boolean(primaryImgSrc);
+  const showSecondaryImg = Boolean(secondaryImgSrc);
 
   useEffect(() => {
     logProfilePhotoUiDecision("edit_profile.screen", profile, primaryImgSrc, "primary");
@@ -328,15 +435,9 @@ export default function EditProfile() {
     const hCoerced = coerceProfileHeightCm((profile as Record<string, unknown>).height_cm);
     setHeightCmInput(hCoerced != null ? String(hCoerced) : "");
     setBio(String((profile as Record<string, unknown>).sport_phrase ?? ""));
-    const portraitFromDb =
-      primaryProfilePhotoRefs(profile)[0] ||
-      (typeof profile.portrait_url === "string" && profile.portrait_url.trim()) ||
-      (typeof profile.main_photo_url === "string" && profile.main_photo_url.trim()) ||
-      "";
+    const portraitFromDb = buildEditPrimaryPhotoCandidates(profile, "").refs[0] ?? "";
     setPortraitUrl(portraitFromDb);
-    const bodyFromDb =
-      secondaryProfilePhotoRefs(profile)[0] ||
-      (typeof profile.fullbody_url === "string" ? profile.fullbody_url.trim() : "");
+    const bodyFromDb = buildEditSecondaryPhotoCandidates(profile, "").refs[0] ?? "";
     setBodyUrl(bodyFromDb);
     setSportMatchPreference(parseSportMatchPreference((profile as Record<string, unknown>).sport_match_preference));
   }, [profile]);
@@ -546,6 +647,25 @@ export default function EditProfile() {
 
       await refetchProfile();
       await syncProfileForScreen();
+      if (nextPortraitUrl) {
+        setPortraitUrl(nextPortraitUrl);
+        setPortraitFile(null);
+        setPortraitPreviewUrl("");
+      }
+      if (nextBodyUrl) {
+        setBodyUrl(nextBodyUrl);
+        setBodyFile(null);
+        setBodyPreviewUrl("");
+      }
+      if (profile && (nextPortraitUrl || nextBodyUrl)) {
+        commitProfileRow({
+          ...profile,
+          ...(nextPortraitUrl
+            ? { portrait_url: nextPortraitUrl, main_photo_url: nextPortraitUrl }
+            : {}),
+          ...(nextBodyUrl ? { fullbody_url: nextBodyUrl } : {}),
+        });
+      }
       setPortraitFile(null);
       setBodyFile(null);
       navigate("/move", { replace: true });
@@ -693,10 +813,10 @@ export default function EditProfile() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
             <div style={{ border: `1px solid ${APP_BORDER}`, borderRadius: 14, padding: 10, background: APP_BG }}>
               <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.primary")}</p>
-              {primaryImgSrc ? (
+              {showPrimaryImg ? (
                 <img
                   key={`primary-${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}`}
-                  src={primaryImgSrc}
+                  src={primaryImgSrc ?? undefined}
                   alt={t("photos.primary")}
                   onLoad={editPrimaryImgHandlers.onLoad}
                   onError={editPrimaryImgHandlers.onError}
@@ -739,10 +859,10 @@ export default function EditProfile() {
             </div>
             <div style={{ border: `1px solid ${APP_BORDER}`, borderRadius: 14, padding: 10, background: APP_BG }}>
               <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.secondary")}</p>
-              {secondaryImgSrc ? (
+              {showSecondaryImg ? (
                 <img
                   key={`secondary-${secondaryPhoto.activeRef ?? secondaryStoredRef ?? "none"}-${secondaryPhoto.urlIndex}`}
-                  src={secondaryImgSrc}
+                  src={secondaryImgSrc ?? undefined}
                   alt={t("photos.secondary")}
                   onLoad={editSecondaryImgHandlers.onLoad}
                   onError={editSecondaryImgHandlers.onError}
