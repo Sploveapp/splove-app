@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -29,6 +29,8 @@ import { resolvePostOAuthPath } from "../lib/profileSelect";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { hideCapacitorSplashWhenReady } from "../lib/capacitorNativeSplash";
 import { OAuthConnectingSplash } from "../components/OAuthConnectingSplash";
+import { completeNativeOAuthReturn } from "../lib/completeNativeOAuthReturn";
+import { scrubOAuthTokensFromNativeWindow } from "../lib/scrubOAuthUrlFromWindow";
 
 const GOOGLE_SET_SESSION_MS = 8000;
 const isDev = import.meta.env.DEV;
@@ -102,7 +104,31 @@ function DevDebugPanel({ debug }: { debug: CallbackDebug }) {
 }
 
 
+/** Garde-fou iOS : ne jamais traiter #/auth/callback dans le WebView (flux natif dédié). */
+function NativeOAuthCallbackGuard() {
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    scrubOAuthTokensFromNativeWindow("#/auth");
+    const stashed = peekOAuthCallbackUrl();
+    if (stashed) {
+      void completeNativeOAuthReturn(stashed);
+      return;
+    }
+    window.location.hash = "#/auth";
+  }, []);
+
+  return <OAuthConnectingSplash />;
+}
+
 export default function AuthCallback() {
+  const nativeCapacitor = isNativeCapacitorApp();
+  if (nativeCapacitor) {
+    return <NativeOAuthCallbackGuard />;
+  }
+
   setOauthProcessingLock();
   const oauthLockLoggedRef = useRef(false);
   if (!oauthLockLoggedRef.current) {
@@ -111,28 +137,23 @@ export default function AuthCallback() {
   }
 
   const location = useLocation();
-  const navigate = useNavigate();
   const { syncAuthSession } = useAuth();
-  const nativeCapacitor = isNativeCapacitorApp();
 
   const clearOauthCallbackStorage = () => {
     clearOAuthCallbackUrl();
-    if (!nativeCapacitor) {
-      scrubOAuthTokensFromBrowserUrl();
-    }
+    scrubOAuthTokensFromBrowserUrl();
   };
 
-  const navigateAfterOAuth = (path: "/move" | "/onboarding") => {
-    if (path === "/move") {
+  const navigateAfterOAuth = (path: "/move" | "/onboarding" | "/") => {
+    const target = path === "/move" ? "/move" : path === "/onboarding" ? "/onboarding" : "/";
+    if (target === "/move") {
       console.log("REDIRECT_MOVE");
-    } else {
+    } else if (target === "/onboarding") {
       console.log("REDIRECT_ONBOARDING");
+    } else {
+      console.log("REDIRECT_ROOT_BOOT");
     }
-    if (nativeCapacitor) {
-      navigate(path, { replace: true });
-      return;
-    }
-    replaceWithHashRoute(path, { force: true });
+    replaceWithHashRoute(target, { force: true });
   };
 
   const finalizeOAuthSuccess = async (sessionUserId: string) => {
@@ -149,17 +170,24 @@ export default function AuthCallback() {
     await syncAuthSession();
     await ensureProfileRowForAuthUserId(sessionUserId);
     const path = await resolvePostOAuthPath(supabase, sessionUserId);
-    console.log("[BOOT] route decision", { status: "ready", route: path, reason: "oauth_callback" });
-    console.log("[BOOT] redirect to", path);
+    const navTarget = path === "/move" ? "/move" : path === "/onboarding" ? "/onboarding" : "/";
+    console.log("[BOOT] route decision", { status: "ready", route: navTarget, oauthRoute: path, reason: "oauth_callback" });
+    console.log("[BOOT] redirect to", navTarget);
+    finish();
+    void closeCapacitorOAuthBrowser();
+    navigateAfterOAuth(navTarget);
+    logOAuthRedirect();
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+
     releaseOauthLock();
     clearAllOAuthSessionLocks();
     releaseGoogleOAuthFlowLock();
     dismissPostOAuthSplash();
-    finish();
-    void closeCapacitorOAuthBrowser();
-    navigateAfterOAuth(path);
-    logOAuthRedirect();
   };
+
   const [debug, setDebug] = useState<CallbackDebug>(() => emptyDebug());
   const doneRef = useRef(false);
   const processingRef = useRef(false);

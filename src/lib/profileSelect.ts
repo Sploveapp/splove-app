@@ -3,6 +3,12 @@
  * compatibilité local / Render si certaines migrations ne sont pas appliquées.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  areProfileCompletionFlagsUnsettled,
+  isProfileCompleteForMove,
+} from "./profileBootCompletion";
+
+export { areProfileCompletionFlagsUnsettled, isProfileCompleteForMove } from "./profileBootCompletion";
 
 /** Noyau auth / routing : sans colonnes optionnelles parfois absentes (accessibilité, créneau). */
 const PROFILE_COLUMNS_CORE =
@@ -67,11 +73,11 @@ export const PROFILE_LOAD_TIERS_FOR_AUTH: string[] = [
   PROFILE_SELECT_ULTRA_FLAGS,
 ];
 
-/** Post-login OAuth : paliers sans colonnes optionnelles d’abord (évite 42703 lents). */
+/** Post-login OAuth : drapeaux + champs audit en premier (évite faux « incomplet »). */
 export const PROFILE_LOAD_TIERS_FAST_AUTH: string[] = [
-  PROFILE_SELECT_ULTRA_FLAGS,
-  PROFILE_SELECT_GATE_FLAGS_NAMES,
   PROFILE_SELECT_OAUTH_DISCOVER_GATE,
+  PROFILE_SELECT_GATE_FLAGS_NAMES,
+  PROFILE_SELECT_ULTRA_FLAGS,
 ];
 
 /** Timeout fetch profil fast (background, non bloquant UI). */
@@ -132,21 +138,13 @@ export function canShowDiscoverShell(
 /** Délai max pour décider /move vs /onboarding après OAuth (non bloquant feed). */
 export const OAUTH_ROUTE_RESOLVE_MS = 500;
 
-export function isProfileCompleteForMove(
-  profile: Record<string, unknown> | null | undefined,
-): boolean {
-  if (!profile) return false;
-  if (profile.profile_completed === true) return true;
-  if (profile.onboarding_completed === true) return true;
-  if (profile.onboarding_done === true) return true;
-  return false;
-}
+export type PostOAuthRoute = "/move" | "/onboarding" | "/";
 
-/** Route post-OAuth : /move si profil terminé, sinon /onboarding (attend le profil). */
+/** Route post-OAuth : /move si confirmé, /onboarding si incomplet confirmé, / sinon (guards boot). */
 export async function resolvePostOAuthPath(
   client: SupabaseClient,
   userId: string,
-): Promise<"/move" | "/onboarding"> {
+): Promise<PostOAuthRoute> {
   const result = await selectProfilesFirstMatch(
     client,
     userId,
@@ -155,10 +153,15 @@ export async function resolvePostOAuthPath(
   );
   const row = (result.data as Record<string, unknown> | null) ?? null;
   if (!row) {
-    console.warn("[BOOT] resolvePostOAuthPath — profil absent, onboarding par défaut");
-    return "/onboarding";
+    console.warn("[BOOT] resolvePostOAuthPath — profil absent, route racine (guards décident)");
+    return "/";
   }
-  return isProfileCompleteForMove(row) ? "/move" : "/onboarding";
+  if (isProfileCompleteForMove(row)) return "/move";
+  if (areProfileCompletionFlagsUnsettled(row)) {
+    console.log("[BOOT] resolvePostOAuthPath — drapeaux non résolus, route racine");
+    return "/";
+  }
+  return "/onboarding";
 }
 
 const OPTIONAL_COLS_SKIP_STORAGE_KEY = "splove_profile_optional_cols_skip_v1";
@@ -397,6 +400,52 @@ export async function mergeOptionalProfileFields(
 
 /** @deprecated Utiliser mergeOptionalProfileFields — alias compat. */
 export const tryMergeOptionalAuthProfileFields = mergeOptionalProfileFields;
+
+function optionalProfileColumnSkipKey(column: string): string {
+  return `splove_profile_col_skip_${column}`;
+}
+
+function shouldSkipOptionalProfileColumn(column: string): boolean {
+  try {
+    return sessionStorage.getItem(optionalProfileColumnSkipKey(column)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markOptionalProfileColumnSkipped(column: string): void {
+  try {
+    sessionStorage.setItem(optionalProfileColumnSkipKey(column), "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * SELECT d’une colonne `profiles` optionnelle — une seule tentative ;
+ * mémorise l’absence (42703 / PGRST204) pour ne plus re-requêter en session.
+ */
+export async function probeOptionalProfileColumn(
+  client: SupabaseClient,
+  userId: string,
+  column: string,
+): Promise<unknown | undefined> {
+  if (!userId || !column || shouldSkipOptionalProfileColumn(column)) {
+    return undefined;
+  }
+  const { data, error } = await client
+    .from("profiles")
+    .select(column)
+    .eq("id", userId)
+    .maybeSingle();
+  if (!error && data && typeof data === "object" && column in (data as Record<string, unknown>)) {
+    return (data as Record<string, unknown>)[column];
+  }
+  if (error && isRecoverableUnknownColumnError(error)) {
+    markOptionalProfileColumnSkipped(column);
+  }
+  return undefined;
+}
 
 /**
  * Premier `select` de la liste qui réussit. Erreur schéma → palier suivant. RLS → arrêt.

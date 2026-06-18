@@ -6,13 +6,16 @@ import { consumeAuthOAuthUserMessage } from "../lib/authOAuthUserMessage";
 import { GOOGLE_OAUTH_USER_ERROR_MSG } from "../lib/googleOAuthFlow";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { beginPostOAuthSplash } from "../lib/postOAuthSplash";
+import { isIosGoogleNativeEnabled } from "../lib/googleNativeSignIn";
+import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
 import { useAuth } from "../contexts/AuthContext";
 import { APP_BG, APP_TEXT_MUTED, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
-import { isAppAuthReady } from "../lib/isAppAuthReady";
 import { IconEye, IconEyeOff } from "../components/ui/Icon";
 import { useTranslation } from "../i18n/useTranslation";
 import { stashPendingReferralCodeFromSearch } from "../services/referral.service";
 import { clearOnboardingUiLocalCache } from "../lib/onboardingUiLocalCache";
+import { resolveBootRoute } from "../lib/bootRouteDecision";
+import { SplashScreen } from "../components/SplashScreen";
 function signupModeFromSearchParams(sp: URLSearchParams): boolean {
   return sp.get("signup") === "1" || sp.get("mode") === "signup";
 }
@@ -165,9 +168,8 @@ export default function Auth() {
   const { t, language } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { user, session, profile, isProfileComplete, isLoading, isAuthInitialized, isProfileLoading } =
+  const { user, session, profile, isProfileComplete, isLoading, isAuthInitialized, isProfileLoading, profileBootstrapSettled } =
     useAuth();
-  const appAuthReady = isAppAuthReady({ isAuthInitialized, session, profile });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -235,36 +237,84 @@ export default function Auth() {
   const showEmailFormBlock = showEmailForm || emailDirect;
   const authBootstrapping = !isAuthInitialized || isLoading;
 
-  if (user?.id && isProfileLoading && !appAuthReady) {
-    console.log("AUTH_REDIRECT_MOVE", { phase: "auth_page_session_pending_profile" });
-    return <Navigate to="/move" replace />;
-  }
-
   if (user) {
     const pr = profile as Record<string, unknown> | null | undefined;
-    if (isProfileComplete) {
+    const bootDecision = resolveBootRoute({
+      isAuthInitialized,
+      isLoading,
+      isProfileLoading,
+      profileBootstrapSettled,
+      session,
+      profile,
+      isProfileComplete,
+    });
+    if (bootDecision.status === "loading") {
+      logOAuthLoaderDiag("AuthRedirect/Auth", "splash (boot loading)", {
+        authLoading: isLoading,
+        profileLoading: isProfileLoading,
+        isAuthInitialized,
+        decisionReason: bootDecision.reason,
+      });
+      return <SplashScreen overlay />;
+    }
+    if (bootDecision.status === "ready" && bootDecision.route === "/move") {
       console.log("AUTH_REDIRECT_MOVE", {
         userId: user.id,
         profile_completed: pr?.profile_completed ?? null,
         onboarding_completed: pr?.onboarding_completed ?? null,
         onboarding_done: pr?.onboarding_done ?? null,
       });
+      logOAuthLoaderDiag("AuthRedirect/Auth", "navigate /move (profile complete)", {
+        authLoading: isLoading,
+        profileLoading: isProfileLoading,
+        isAuthInitialized,
+        isProfileComplete,
+        onboardingCompleted: pr?.onboarding_completed ?? null,
+      });
       return <Navigate to="/move" replace />;
     }
-    console.log("AUTH_REDIRECT_ONBOARDING", {
-      userId: user.id,
-      profile_completed: pr?.profile_completed ?? null,
-      onboarding_completed: pr?.onboarding_completed ?? null,
-      onboarding_done: pr?.onboarding_done ?? null,
+    if (bootDecision.status === "ready" && bootDecision.route === "/onboarding") {
+      console.log("AUTH_REDIRECT_ONBOARDING", {
+        userId: user.id,
+        profile_completed: pr?.profile_completed ?? null,
+        onboarding_completed: pr?.onboarding_completed ?? null,
+        onboarding_done: pr?.onboarding_done ?? null,
+        isProfileComplete,
+      });
+      logOAuthLoaderDiag("AuthRedirect/Auth", "navigate /onboarding", {
+        authLoading: isLoading,
+        profileLoading: isProfileLoading,
+        isAuthInitialized,
+        isProfileComplete,
+        onboardingCompleted: pr?.onboarding_completed ?? null,
+      });
+      return <Navigate to="/onboarding" replace />;
+    }
+    logOAuthLoaderDiag("AuthRedirect/Auth", "splash (boot unresolved)", {
+      authLoading: isLoading,
+      profileLoading: isProfileLoading,
+      isAuthInitialized,
       isProfileComplete,
+      decisionReason: bootDecision.reason,
+      onboardingCompleted: pr?.onboarding_completed ?? null,
     });
-    return <Navigate to="/onboarding" replace />;
+    return <SplashScreen overlay />;
   }
+
+  logOAuthLoaderDiag("AuthRedirect/Auth", "render auth form (no redirect)", {
+    authLoading: isLoading,
+    profileLoading: isProfileLoading,
+    isAuthInitialized,
+    authBootstrapping,
+    oauthLoading,
+  });
 
   async function signInWithGoogle() {
     setMessage(null);
     setOauthLoading("google");
-    beginPostOAuthSplash();
+    if (!isIosGoogleNativeEnabled()) {
+      beginPostOAuthSplash();
+    }
     try {
       const { error } = await signInWithGoogleOAuth();
       if (error) {

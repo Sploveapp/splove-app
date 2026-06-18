@@ -1,24 +1,26 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
-import { isOauthProcessingLocked } from "../lib/oauthCallbackLock";
-import { resolveBootRoute } from "../lib/bootRouteDecision";
 import { BOOT_SPLASH_MIN_MS } from "../lib/bootSplashTiming";
+import { resolveBootRoute } from "../lib/bootRouteDecision";
+import { isOAuthUxOverlayActive } from "../lib/oauthUxOverlay";
+import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
+import { SploveOAuthLoadingScreen } from "./SploveOAuthLoadingScreen";
 import { SplashScreen } from "./SplashScreen";
 
 type Props = {
   children: ReactNode;
 };
 
-function isBooting(auth: ReturnType<typeof useAuth>, oauthLocked: boolean, isAuthCallbackRoute: boolean): boolean {
-  if (oauthLocked || isAuthCallbackRoute) return true;
-  if (!auth.isAuthInitialized || auth.isLoading) return true;
-  const decision = resolveBootRoute(auth);
-  return decision.status === "loading";
+function isBooting(auth: ReturnType<typeof useAuth>, oauthUxActive: boolean, isAuthCallbackRoute: boolean): boolean {
+  if (oauthUxActive || isAuthCallbackRoute) return true;
+  if (resolveBootRoute(auth).status === "loading") return true;
+  return false;
 }
 
 /**
  * Splash visible par défaut pendant boot — routes masquées en dessous.
+ * Jamais de passthrough onboarding : évite le flash « prénom » pendant la vérif profil.
  */
 export function BootSplashGate({ children }: Props) {
   const auth = useAuth();
@@ -26,10 +28,11 @@ export function BootSplashGate({ children }: Props) {
   const [minElapsed, setMinElapsed] = useState(false);
 
   const hash = location.hash || "";
+  const pathname = location.pathname || "/";
   const isAuthCallbackRoute =
     location.pathname === "/auth/callback" || hash.startsWith("#/auth/callback");
-  const oauthLocked = isOauthProcessingLocked();
-  const booting = isBooting(auth, oauthLocked, isAuthCallbackRoute);
+  const oauthUxActive = isOAuthUxOverlayActive();
+  const booting = isBooting(auth, oauthUxActive, isAuthCallbackRoute);
   const showSplash = booting || !minElapsed;
 
   useEffect(() => {
@@ -37,27 +40,52 @@ export function BootSplashGate({ children }: Props) {
     return () => window.clearTimeout(timer);
   }, []);
 
+  useEffect(() => {
+    if (!showSplash) {
+      logOAuthLoaderDiag("WhiteScreenGuard/BootSplashGate", "render children (splash hidden)", {
+        booting,
+        minElapsed,
+        oauthUxActive,
+        authLoading: auth.isLoading,
+        isAuthInitialized: auth.isAuthInitialized,
+      });
+      return;
+    }
+    logOAuthLoaderDiag(
+      "WhiteScreenGuard/BootSplashGate",
+      oauthUxActive || isAuthCallbackRoute ? "show SploveOAuthLoadingScreen" : "show SplashScreen",
+      {
+        booting,
+        minElapsed,
+        oauthUxActive,
+        isAuthCallbackRoute,
+        authLoading: auth.isLoading,
+        isAuthInitialized: auth.isAuthInitialized,
+        profileLoading: auth.isProfileLoading,
+        pathname,
+        hash,
+      },
+    );
+  }, [
+    showSplash,
+    booting,
+    minElapsed,
+    oauthUxActive,
+    isAuthCallbackRoute,
+    auth.isLoading,
+    auth.isAuthInitialized,
+    auth.isProfileLoading,
+    pathname,
+    hash,
+  ]);
+
+  if (!showSplash) {
+    return <>{children}</>;
+  }
+
   return (
     <>
-      {showSplash ? <SplashScreen overlay /> : null}
-      <div
-        aria-hidden={showSplash}
-        style={
-          showSplash
-            ? {
-                visibility: "hidden",
-                pointerEvents: "none",
-                position: "fixed",
-                inset: 0,
-                overflow: "hidden",
-                width: 0,
-                height: 0,
-              }
-            : undefined
-        }
-      >
-        {children}
-      </div>
+      {oauthUxActive || isAuthCallbackRoute ? <SploveOAuthLoadingScreen /> : <SplashScreen overlay />}
     </>
   );
 }
