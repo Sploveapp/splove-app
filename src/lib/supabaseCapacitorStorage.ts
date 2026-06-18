@@ -22,6 +22,9 @@ export function createCapacitorAuthStorage(): SupabaseAuthStorage {
   };
 }
 
+/** No-op — compat tests / futur cache mémoire. */
+export function clearCapacitorAuthStorageMemoryCache(): void {}
+
 export async function logAuthStorageState(storageKey: string): Promise<void> {
   console.log("AUTH_STORAGE_READ_START", { storageKey });
   try {
