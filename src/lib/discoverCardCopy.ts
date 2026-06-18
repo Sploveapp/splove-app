@@ -2,8 +2,8 @@
  * SPLove Discover / Match — formulations orientées action, sans lieu précis ni horaire exact.
  */
 
-import { parseProfileIntent, PROFILE_INTENT_AMICAL } from "./profileIntent";
 import { formatCityDisplay } from "./formatCityDisplay";
+import { profileMeetingIntentBadgeLabel } from "./profileMeetingIntentDisplay";
 
 /** Phrase guidée unique (remplace la bio) — priorité au contenu saisi, puis ressenti court. */
 export function guidedProfileSentence(
@@ -26,11 +26,12 @@ export function guidedProfileSentence(
   return input.genericFallback ?? "Envie de bouger ensemble, sans attendre.";
 }
 
-/** Libellé court d’intention (BDD : Amical | Amoureux). */
-export function intentLabelShort(intent: unknown): string | null {
-  const p = parseProfileIntent(intent);
-  if (!p) return null;
-  return p === PROFILE_INTENT_AMICAL ? "Amical" : "Amoureux";
+/** Libellé badge intention de rencontre (emoji + i18n). */
+export function intentLabelShort(
+  intent: unknown,
+  t: (key: string) => string,
+): string | null {
+  return profileMeetingIntentBadgeLabel(intent, t);
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   type CSSProperties,
   type Dispatch,
   type PointerEvent,
+  type ReactEventHandler,
   type SetStateAction,
 } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -34,6 +35,7 @@ import { useTranslation } from "../../i18n/useTranslation";
 import { formatHeightCmForDisplay } from "../../lib/profileHeightCm";
 import { formatCityDisplay } from "../../lib/formatCityDisplay";
 import { BLOCK_PROFILE_LINK_LABEL, REPORT_LINK_LABEL } from "../../constants/copy";
+import { SPLOVE_PROFILE_PHOTO_FALLBACK_SRC } from "../../lib/userMainPhoto";
 import { SPLOVE_BOTTOM_CLEARANCE } from "../../constants/appBottomNavLayout";
 import { usesNativeBottomNavigation } from "../../lib/nativeBottomNav";
 
@@ -88,9 +90,9 @@ export type DiscoverProfileCardProps = {
   onLike: (decisionTimeMs?: number) => void | Promise<void>;
   onReport: () => void;
   /** Repli URL photo (public → signée) après échec `<img>`. */
-  onPhotoError?: () => void;
+  onPhotoError?: ReactEventHandler<HTMLImageElement>;
   /** Diagnostic `[PhotoRender] img_onload` — sans effet métier. */
-  onPhotoLoad?: () => void;
+  onPhotoLoad?: ReactEventHandler<HTMLImageElement>;
   /** Carte Discover plein focus — photo plus haute, rythme immersif. */
   immersive?: boolean;
 };
@@ -151,7 +153,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
     profile.discover_reasons ?? [],
     locLines.line1,
   );
-  const intentShort = intentLabelShort(profile.intent);
+  const intentShort = intentLabelShort(profile.intent, t);
   const sportChips = getDiscoverSportChips(profile, mySportMatchKeys);
   const strongAffinity = profile.commonSportsCount >= 2;
 
@@ -211,7 +213,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
             }}
           >
             <img
-              src="/logo.png"
+              src={SPLOVE_PROFILE_PHOTO_FALLBACK_SRC}
               alt=""
               aria-hidden
               className="h-14 w-14 object-contain opacity-70"
@@ -434,7 +436,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
                 ) : null}
               </h2>
               {intentShort ? (
-                <span className="mb-0.5 rounded-full bg-white/12 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white/88 ring-1 ring-white/22">
+                <span className="mb-0.5 rounded-full bg-white/12 px-2.5 py-1 text-[11px] font-medium leading-tight text-white/92 ring-1 ring-white/22">
                   {intentShort}
                 </span>
               ) : null}

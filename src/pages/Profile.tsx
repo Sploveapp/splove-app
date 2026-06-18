@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { ACTIVITY_PROPOSALS_REFRESH_EVENT } from "../constants";
@@ -27,38 +27,25 @@ import { forwardGeocodeFirst, reverseGeocodeCity } from "../lib/geocoding";
 import { formatCityDisplay, normalizePrimaryLocalityLabel } from "../lib/formatCityDisplay";
 import { updateProfileLocation } from "../lib/profileLocation";
 import { dismissKeyboardAndBlurInputs } from "../lib/dismissKeyboardFocus";
-import { IconSignOut } from "../components/ui/Icon";
+import { IconProfileAvatarPlaceholder, IconSignOut } from "../components/ui/Icon";
 
 const SPORT_PHRASE_MAX_LEN = 120;
 
 const SPORT_PHRASE_SAVED_FLAG = "__phrase_saved__";
 const ACCESSIBILITY_SAVE_SUCCESS = "Preferences enregistrees.";
 
-const sectionHeadingButtonStyle: CSSProperties = {
-  margin: "0 0 12px 0",
-  padding: 0,
-  border: "none",
-  background: "none",
-  cursor: "pointer",
-  display: "block",
-  width: "100%",
-  textAlign: "left",
-  fontSize: "16px",
-  fontWeight: 600,
-  color: APP_TEXT,
-};
 import { useTranslation } from "../i18n/useTranslation";
 import { buildAuthReferralLink, fetchGrowthProfileFields, type GrowthProfileRow } from "../services/referral.service";
-import {
-  primaryProfilePhotoRefCandidates,
-  useProfilePhotoDisplaySrc,
-} from "../hooks/useProfilePhotoDisplaySrc";
+import { ProfileScreenSkeleton } from "../components/skeletons/ProfileScreenSkeleton";
+import { useIosCapacitorImageDisplay } from "../hooks/useIosCapacitorImageDisplay";
+import { useUserMainPhotoDisplay } from "../hooks/useUserMainPhotoDisplay";
+import { useBrokenProfilePhotoReuploadHint } from "../hooks/useBrokenProfilePhotoReuploadHint";
+import { SPLOVE_PROFILE_PHOTO_FALLBACK_SRC } from "../lib/userMainPhoto";
 import { snapshotProfilePhotoFields } from "../lib/profilePhotoPipelineLog";
 import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
 import {
+  directMainPhotoUrlFromProfile,
   logProfilePhotoUiDecision,
-  pickPrimaryProfilePhotoStoredRef,
-  resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
 import LanguageSwitcher from "../components/LanguageSwitcher";
@@ -69,70 +56,31 @@ import {
 import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
 import { normalizeDiscoveryRadiusKm } from "../constants/discoverGeo";
 import { normalizePreferredAgeRange } from "../lib/profileAge";
+import { profileMeetingIntentBadgeLabel } from "../lib/profileMeetingIntentDisplay";
 
-function ProfilePhotoPlaceholder({
-  aspectRatio = "3 / 4",
-  hint,
-  loading = false,
-}: {
-  aspectRatio?: string;
-  hint?: string;
-  loading?: boolean;
-}) {
-  return (
-    <div
-      style={{
-        width: "100%",
-        aspectRatio,
-        borderRadius: 16,
-        border: `1px dashed ${APP_BORDER}`,
-        background: APP_BG,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 10,
-        padding: 16,
-        boxSizing: "border-box",
-      }}
-    >
-      <img
-        src="/logo.png"
-        alt=""
-        aria-hidden
-        style={{
-          width: 48,
-          height: 48,
-          objectFit: "contain",
-          opacity: loading ? 0.45 : 0.72,
-        }}
-      />
-      {hint ? (
-        <span style={{ fontSize: 12, fontWeight: 500, color: APP_TEXT_MUTED, textAlign: "center" }}>
-          {hint}
-        </span>
-      ) : null}
-    </div>
-  );
-}
+const PROFILE_AVATAR_SIZE_PX = 96;
 
 export default function Profile() {
   const { t, language } = useTranslation();
   const navigate = useNavigate();
   const { user, profile, refetchProfile, commitProfileRow, signOut, isSigningOut } = useAuth();
-  const photoCandidates = useMemo(() => primaryProfilePhotoRefCandidates(profile), [profile]);
-  const primaryStoredRef = useMemo(() => pickPrimaryProfilePhotoStoredRef(profile), [profile]);
-  const hasProfilePhotoRef = Boolean(primaryStoredRef);
-  const primaryPhoto = useProfilePhotoDisplaySrc(photoCandidates.refs, {
-    logContext: {
-      userId: user?.id ?? null,
-      profileId: profile?.id ?? user?.id ?? null,
-      source: "profile.screen",
-      fieldByRef: photoCandidates.fieldByRef,
-    },
+  const brokenPhotoHint = useBrokenProfilePhotoReuploadHint(user?.id ?? null);
+  const [screenReady, setScreenReady] = useState(false);
+  const directMainPhotoUrl = useMemo(
+    () => directMainPhotoUrlFromProfile(profile),
+    [profile?.main_photo_url],
+  );
+  const primaryPhoto = useUserMainPhotoDisplay(profile, {
+    userId: user?.id ?? null,
+    context: "profile.screen",
   });
-  const primaryImgSrc = resolveProfilePhotoUiSrc(primaryStoredRef, primaryPhoto.src);
-  const [selectedPhotoUrl, setSelectedPhotoUrl] = useState<string | null>(null);
+  const primaryImgSrcBase = directMainPhotoUrl ?? primaryPhoto.displaySrc;
+  const iosAvatarPhoto = useIosCapacitorImageDisplay(primaryImgSrcBase);
+  const primaryImgSrc = iosAvatarPhoto.displaySrc;
+  const showAvatarImg =
+    Boolean(primaryImgSrc) &&
+    !(iosAvatarPhoto.resolutionFailed && !iosAvatarPhoto.usingDataUrl);
+  const primaryStoredRef = directMainPhotoUrl ?? primaryPhoto.storedRef;
   const profileRef = useRef(profile);
   profileRef.current = profile;
 
@@ -149,7 +97,15 @@ export default function Profile() {
   }, [user?.id, commitProfileRow]);
 
   useEffect(() => {
-    void syncProfileForScreen();
+    let cancelled = false;
+    setScreenReady(false);
+    void (async () => {
+      await syncProfileForScreen();
+      if (!cancelled) setScreenReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [syncProfileForScreen]);
 
   useEffect(() => {
@@ -158,26 +114,38 @@ export default function Profile() {
     PhotoRenderLog.displaySrc({
       screen: "Profile",
       displaySrc: primaryImgSrc,
-      resolvedUrl: primaryPhoto.src,
+      resolvedUrl: directMainPhotoUrl ?? primaryPhoto.src,
       profile,
-      extra: { profileId: profile?.id ?? user.id, slot: "primary" },
+      extra: {
+        profileId: profile?.id ?? user.id,
+        slot: "primary",
+        directMainPhoto: Boolean(directMainPhotoUrl),
+        iosCapacitorDataUrl: iosAvatarPhoto.usingDataUrl,
+      },
     });
     PhotoRenderLog.resolvedUrl({
       screen: "Profile",
       displaySrc: primaryImgSrc,
-      resolvedUrl: primaryPhoto.src,
+      resolvedUrl: directMainPhotoUrl ?? primaryPhoto.src,
       profile,
-      extra: { profileId: profile?.id ?? user.id, slot: "primary", urlIndex: primaryPhoto.urlIndex },
+      extra: {
+        profileId: profile?.id ?? user.id,
+        slot: "primary",
+        urlIndex: primaryPhoto.urlIndex,
+        directMainPhoto: Boolean(directMainPhotoUrl),
+        iosCapacitorDataUrl: iosAvatarPhoto.usingDataUrl,
+      },
     });
     console.log("[SPLovePhoto][connected-profile] profile_snapshot", {
       userId: user.id,
       profileId: profile?.id ?? user.id,
       source: "profile.screen",
       photos: snapshotProfilePhotoFields(profile as Record<string, unknown> | null | undefined),
-      activeField: primaryPhoto.activeField,
+      directMainPhotoUrl: directMainPhotoUrl ? directMainPhotoUrl.slice(0, 96) : null,
+      activeField: directMainPhotoUrl ? "main_photo_url" : primaryPhoto.activeField,
       hasDisplaySrc: Boolean(primaryImgSrc),
-      isLoading: primaryPhoto.isLoading,
-      isFailed: primaryPhoto.isFailed,
+      isLoading: directMainPhotoUrl ? false : primaryPhoto.isLoading,
+      isFailed: directMainPhotoUrl ? false : primaryPhoto.isFailed,
     });
   }, [
     user?.id,
@@ -186,6 +154,9 @@ export default function Profile() {
     profile?.portrait_url,
     profile?.fullbody_url,
     profile?.avatar_url,
+    directMainPhotoUrl,
+    iosAvatarPhoto.usingDataUrl,
+    iosAvatarPhoto.resolutionFailed,
     primaryPhoto.activeField,
     primaryImgSrc,
     primaryPhoto.src,
@@ -195,35 +166,26 @@ export default function Profile() {
     profile,
   ]);
 
-  useEffect(() => {
-    if (!selectedPhotoUrl) return;
-    PhotoRenderLog.displaySrc({
-      screen: "Profile",
-      displaySrc: selectedPhotoUrl,
-      resolvedUrl: primaryPhoto.src,
-      profile,
-      extra: { profileId: profile?.id ?? user?.id ?? null, view: "fullscreen_modal" },
-    });
-  }, [selectedPhotoUrl, primaryPhoto.src, profile, user?.id]);
-
-  const profilePrimaryImgHandlers = chainPhotoRenderHandlers(
+  const profileAvatarImgHandlers = chainPhotoRenderHandlers(
     {
       screen: "Profile",
       displaySrc: primaryImgSrc,
-      resolvedUrl: primaryPhoto.src,
+      resolvedUrl: directMainPhotoUrl ?? primaryPhoto.src,
       profile,
-      extra: { profileId: profile?.id ?? user?.id ?? null, slot: "primary" },
+      extra: {
+        profileId: profile?.id ?? user?.id ?? null,
+        slot: "primary",
+        view: "avatar",
+        directMainPhoto: Boolean(directMainPhotoUrl),
+        iosCapacitorDataUrl: iosAvatarPhoto.usingDataUrl,
+      },
     },
-    { onLoad: primaryPhoto.onImageLoad, onError: primaryPhoto.onImageError },
-  );
-
-  const profileFullscreenImgHandlers = chainPhotoRenderHandlers(
     {
-      screen: "Profile",
-      displaySrc: selectedPhotoUrl,
-      resolvedUrl: primaryPhoto.src,
-      profile,
-      extra: { profileId: profile?.id ?? user?.id ?? null, view: "fullscreen_modal" },
+      onLoad: directMainPhotoUrl ? undefined : primaryPhoto.onImageLoad,
+      onError: () => {
+        iosAvatarPhoto.onImageError();
+        if (!directMainPhotoUrl) primaryPhoto.onImageError();
+      },
     },
   );
   const [growth, setGrowth] = useState<GrowthProfileRow | null>(null);
@@ -301,15 +263,6 @@ export default function Profile() {
     const ua = pr ? String(pr.updated_at ?? "") : "";
     return `profile-meet-age-${user?.id ?? ""}-${ua}-${preferredMeetingAgeBounds.min}-${preferredMeetingAgeBounds.max}`;
   }, [user?.id, profile, preferredMeetingAgeBounds.min, preferredMeetingAgeBounds.max]);
-
-  useEffect(() => {
-    if (!selectedPhotoUrl) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelectedPhotoUrl(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selectedPhotoUrl]);
 
   useEffect(() => {
     if (accessibilityMessage !== ACCESSIBILITY_SAVE_SUCCESS) return;
@@ -476,6 +429,12 @@ export default function Profile() {
     }
   }
 
+  const meetingIntentBadge = profileMeetingIntentBadgeLabel(profile?.intent, t);
+
+  if (!screenReady) {
+    return <ProfileScreenSkeleton />;
+  }
+
   return (
     <div
       style={{
@@ -496,7 +455,7 @@ export default function Profile() {
       >
         <h1
           style={{
-            margin: "0 0 24px 0",
+            margin: "0 0 20px 0",
             fontSize: "14px",
             fontWeight: 600,
             color: APP_TEXT_MUTED,
@@ -506,6 +465,114 @@ export default function Profile() {
         >
           {t("profile_title")}
         </h1>
+
+        {brokenPhotoHint.messageKey ? (
+          <div
+            style={{
+              marginBottom: 16,
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: `1px solid ${APP_BORDER}`,
+              background: APP_CARD,
+              color: APP_TEXT,
+              fontSize: 13,
+              lineHeight: 1.45,
+            }}
+          >
+            <p style={{ margin: 0 }}>{t(brokenPhotoHint.messageKey)}</p>
+            <button
+              type="button"
+              onClick={() => navigate("/profile/edit")}
+              style={{
+                marginTop: 10,
+                border: "none",
+                borderRadius: 10,
+                background: BRAND_BG,
+                color: TEXT_ON_BRAND,
+                padding: "10px 14px",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {t("edit_profile")}
+            </button>
+          </div>
+        ) : null}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            marginBottom: "24px",
+          }}
+        >
+          <div
+            style={{
+              width: PROFILE_AVATAR_SIZE_PX,
+              height: PROFILE_AVATAR_SIZE_PX,
+              borderRadius: "50%",
+              overflow: "hidden",
+              flexShrink: 0,
+              border: `2px solid ${APP_BORDER}`,
+              background: APP_CARD,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            aria-hidden={!primaryImgSrc}
+          >
+            {showAvatarImg ? (
+              <img
+                key={
+                  iosAvatarPhoto.usingDataUrl
+                    ? `ios-data-${primaryStoredRef ?? "none"}`
+                    : directMainPhotoUrl ?? `${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}`
+                }
+                src={primaryImgSrc!}
+                alt=""
+                onLoad={profileAvatarImgHandlers.onLoad}
+                onError={profileAvatarImgHandlers.onError}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                  display: "block",
+                }}
+              />
+            ) : primaryPhoto.isLoading || iosAvatarPhoto.isResolving ? (
+              <img
+                src={SPLOVE_PROFILE_PHOTO_FALLBACK_SRC}
+                alt=""
+                aria-hidden
+                style={{ width: 40, height: 40, objectFit: "contain", opacity: 0.45 }}
+              />
+            ) : (
+              <IconProfileAvatarPlaceholder className="text-app-muted/70" size={52} />
+            )}
+          </div>
+        </div>
+
+        {meetingIntentBadge ? (
+          <div style={{ display: "flex", justifyContent: "center", margin: "-8px 0 20px" }}>
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                borderRadius: 9999,
+                padding: "6px 12px",
+                fontSize: 13,
+                fontWeight: 500,
+                lineHeight: 1.25,
+                color: APP_TEXT,
+                background: APP_CARD,
+                border: `1px solid ${APP_BORDER}`,
+              }}
+            >
+              {meetingIntentBadge}
+            </span>
+          </div>
+        ) : null}
 
         <button
           type="button"
@@ -595,75 +662,16 @@ export default function Profile() {
           >
             <span
               style={{
-                ...sectionHeadingButtonStyle,
-                cursor: "default",
+                display: "block",
+                margin: "0 0 12px 0",
+                fontSize: "16px",
+                fontWeight: 600,
+                color: APP_TEXT,
               }}
-              className="select-none"
             >
-              {t("photos.primary")}
+              {t("profile_verification.title")}
             </span>
-            {hasProfilePhotoRef ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (primaryImgSrc) setSelectedPhotoUrl(primaryImgSrc);
-                }}
-                aria-label={t("view_photo")}
-                disabled={!primaryImgSrc}
-                style={{
-                  marginBottom: "16px",
-                  padding: 0,
-                  border: "none",
-                  borderRadius: "16px",
-                  overflow: "hidden",
-                  maxWidth: "220px",
-                  cursor: primaryImgSrc ? "pointer" : "default",
-                  display: "block",
-                  background: "none",
-                }}
-              >
-                {primaryImgSrc ? (
-                  <img
-                    key={`${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}`}
-                    src={primaryImgSrc}
-                    alt="Votre photo de profil — appuyez pour les options"
-                    onLoad={profilePrimaryImgHandlers.onLoad}
-                    onError={profilePrimaryImgHandlers.onError}
-                    style={{
-                      width: "100%",
-                      aspectRatio: "3 / 4",
-                      objectFit: "cover",
-                      display: "block",
-                      pointerEvents: "none",
-                    }}
-                  />
-                ) : (
-                  <ProfilePhotoPlaceholder
-                    aspectRatio="3 / 4"
-                    loading={primaryPhoto.isLoading}
-                  />
-                )}
-              </button>
-            ) : (
-              <div style={{ marginBottom: "16px", maxWidth: "220px" }}>
-                <ProfilePhotoPlaceholder
-                  aspectRatio="3 / 4"
-                  hint="Aucune photo principale enregistrée"
-                />
-              </div>
-            )}
             <div>
-              <span
-                style={{
-                  display: "block",
-                  margin: "0 0 12px 0",
-                  fontSize: "16px",
-                  fontWeight: 600,
-                  color: APP_TEXT,
-                }}
-              >
-                {t("profile_verification.title")}
-              </span>
               {profile && isIdentityVerified(profile) ? (
                 <>
                   <div
@@ -1369,40 +1377,6 @@ export default function Profile() {
           </>
         )}
       </main>
-      {selectedPhotoUrl ? (
-        <div
-          role="presentation"
-          className="fixed inset-0 z-50 bg-black/80"
-          onClick={() => setSelectedPhotoUrl(null)}
-        >
-          <button
-            type="button"
-            className="absolute right-4 top-4 z-[60] flex h-11 min-h-[44px] min-w-[44px] items-center justify-center rounded-full border border-white/20 bg-black/60 text-[28px] font-light leading-none text-white shadow-lg hover:bg-black/75 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
-            aria-label={t("close")}
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedPhotoUrl(null);
-            }}
-          >
-            ×
-          </button>
-          <div className="pointer-events-none flex h-full w-full touch-manipulation items-center justify-center p-4">
-            <div
-              className="pointer-events-auto"
-              role="presentation"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <img
-                src={selectedPhotoUrl}
-                alt=""
-                className="max-h-[85vh] max-w-[95vw] object-contain shadow-2xl"
-                onLoad={profileFullscreenImgHandlers.onLoad}
-                onError={profileFullscreenImgHandlers.onError}
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

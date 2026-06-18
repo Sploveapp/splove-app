@@ -67,10 +67,11 @@ import { useTranslation } from "../i18n/useTranslation";
 import { useProfilePhotoResolvedDisplay, resolveProfilePhotoFieldFromStoredRef } from "../hooks/useProfilePhotoSignedUrl";
 import {
   logProfilePhotoUiDecision,
-  pickPrimaryProfilePhotoStoredRef,
   pickSecondaryProfilePhotoStoredRef,
   resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
+import { getUserMainPhotoUrl } from "../lib/userMainPhoto";
+import { logPhotoPublicProfileResolve } from "../lib/profilePhotoMainLog";
 import { DiscoverProfileCard } from "../components/discover/DiscoverProfileCard";
 import { MoveProfileSkeleton } from "../components/discover/MoveProfileSkeleton";
 import { EmptyDiscoverState } from "../components/discover/EmptyDiscoverState";
@@ -94,6 +95,14 @@ import {
   rotateProfileToEndOfStack,
   type DiscoverProfileViewOrderingState,
 } from "../lib/discoverProfileViewOrdering";
+import {
+  buildDiscoverFeedSessionSnapshot,
+  clearDiscoverFeedSessionCache,
+  deserializeProfileViewOrdering,
+  readDiscoverFeedSessionCache,
+  writeDiscoverFeedSessionCache,
+  type DiscoverFeedSessionSnapshot,
+} from "../lib/discoverFeedSessionCache";
 import {
   fetchDiscoverProfileViewOrderingState,
   markProfileViewActionTaken,
@@ -223,7 +232,7 @@ type Profile = {
 
 /** Resolve photo URL from whatever columns the feed view row actually includes. */
 function getProfileDisplayPhotoUrl(p: Profile): string | null {
-  return pickPrimaryProfilePhotoStoredRef(p);
+  return getUserMainPhotoUrl(p);
 }
 
 /** Deuxième visuel pour l’aperçu (évite le doublon de la photo principale). */
@@ -306,6 +315,21 @@ function DiscoverProfileDetailPreview({
   });
   const photoMain = resolveProfilePhotoUiSrc(photoMainRaw, photoMainDisplay.src) ?? "";
   const photoSecond = resolveProfilePhotoUiSrc(photoSecondRaw, photoSecondDisplay.src) ?? "";
+
+  useEffect(() => {
+    logPhotoPublicProfileResolve("discover.preview", {
+      profileId: profile.id,
+      storedRef: photoMainRaw,
+      displaySrc: photoMain || null,
+      isLoading: photoMainDisplay.isLoading,
+      isFailed: Boolean(photoMainRaw && !photoMain && !photoMainDisplay.isLoading),
+    });
+  }, [
+    profile.id,
+    photoMainRaw,
+    photoMain,
+    photoMainDisplay.isLoading,
+  ]);
   const galleryRawRefs = useMemo(
     () => uniqueProfilePhotoRefsOrdered(profile),
     [
@@ -322,7 +346,7 @@ function DiscoverProfileDetailPreview({
   const age = getAgeFromBirthDate(profile.birth_date ?? null);
   const phraseTrimPreview = (profile.sport_phrase ?? "").trim();
   const sportChipsPreview = getDiscoverSportChips(profile, mySportMatchKeys);
-  const intentPreview = intentLabelShort(profile.intent);
+  const intentPreview = intentLabelShort(profile.intent, t);
   const heightPreview = formatHeightCmForDisplay(profile.height_cm ?? null);
   function openPhotoViewerFromRaw(raw: string | null) {
     if (raw == null) return;
@@ -357,10 +381,22 @@ function DiscoverProfileDetailPreview({
                   openPhotoViewerFromRaw(photoMainRaw);
                 }}
               />
-            ) : (
+            ) : photoMainRaw && photoMainDisplay.isLoading ? (
+              <div
+                className="absolute inset-0 bg-zinc-900"
+                style={{ background: "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)" }}
+                aria-busy
+              />
+            ) : !photoMainRaw ? (
               <div className="absolute inset-0 flex items-center justify-center bg-zinc-900">
                 <img src="/logo.png" alt="" aria-hidden className="h-10 w-10 object-contain opacity-70" />
               </div>
+            ) : (
+              <div
+                className="absolute inset-0 bg-zinc-900"
+                style={{ background: "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)" }}
+                aria-hidden
+              />
             )}
             <div className="absolute right-1.5 top-1.5 z-20" data-discover-menu-root>
               <button
@@ -434,7 +470,7 @@ function DiscoverProfileDetailPreview({
               ) : null}
             </h2>
             {intentPreview ? (
-              <span className="rounded-full bg-app-border/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-app-text ring-1 ring-app-border">
+              <span className="rounded-full bg-app-border/90 px-2.5 py-1 text-[11px] font-medium leading-tight text-app-text ring-1 ring-app-border">
                 {intentPreview}
               </span>
             ) : null}
@@ -1372,12 +1408,27 @@ export default function Discover() {
     return `${pr.preferred_age_min ?? "ø"}:${pr.preferred_age_max ?? "ø"}`;
   }, [profile]);
   const currentUserId = user?.id ?? session?.user?.id ?? "";
+  const mountFeedCacheRef = useRef<DiscoverFeedSessionSnapshot | null>(null);
+  const didReadMountCacheRef = useRef(false);
+  if (!didReadMountCacheRef.current) {
+    didReadMountCacheRef.current = true;
+    mountFeedCacheRef.current = currentUserId
+      ? readDiscoverFeedSessionCache(currentUserId, discoverPreferredAgeFingerprint)
+      : null;
+  }
+  const mountFeedCache = mountFeedCacheRef.current;
   const { hasPlus } = usePremium(currentUserId || null);
-  const [profiles, setProfiles] = useState<ProfileWithAffinity[]>([]);
+  const [profiles, setProfiles] = useState<ProfileWithAffinity[]>(
+    () => (mountFeedCache?.profiles as ProfileWithAffinity[] | undefined) ?? [],
+  );
   /** Pile affichée — remplie une seule fois à MOVE_FEED_READY (évite flash profils intermédiaires). */
-  const [stableProfiles, setStableProfiles] = useState<ProfileWithAffinity[]>([]);
-  const [feedReady, setFeedReady] = useState(false);
-  const [mySportMatchKeys, setMySportMatchKeys] = useState<Set<string>>(new Set());
+  const [stableProfiles, setStableProfiles] = useState<ProfileWithAffinity[]>(
+    () => (mountFeedCache?.stableProfiles as ProfileWithAffinity[] | undefined) ?? [],
+  );
+  const [feedReady, setFeedReady] = useState(() => mountFeedCache?.feedReady ?? false);
+  const [mySportMatchKeys, setMySportMatchKeys] = useState<Set<string>>(
+    () => new Set(mountFeedCache?.mySportMatchKeys ?? []),
+  );
   const myCity = useMemo(() => {
     const raw = profile && typeof profile === "object" ? (profile as { city?: string | null }).city : null;
     if (typeof raw !== "string") return null;
@@ -1385,11 +1436,13 @@ export default function Discover() {
     return short !== "" ? short : null;
   }, [profile]);
   const [myDiscoveryRadiusKm] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !(mountFeedCache?.feedReady ?? false));
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState(() => mountFeedCache?.errorMessage ?? "");
   /** Viewer sans lat/lng valides : aucun candidat, état vide dédié (pas d’erreur réseau). */
-  const [viewerGeoBlocked, setViewerGeoBlocked] = useState(false);
+  const [viewerGeoBlocked, setViewerGeoBlocked] = useState(
+    () => mountFeedCache?.viewerGeoBlocked ?? false,
+  );
   const [reportProfileId, setReportProfileId] = useState<string | null>(null);
   const [reportPhotoTarget, setReportPhotoTarget] = useState<{
     profileId: string;
@@ -1479,9 +1532,11 @@ export default function Discover() {
   );
 
   const moveFeedLoading = loading;
+  const hasMoveFeedInMemory = feedReady && stableProfiles.length > 0;
   /** Bloque tout rendu de profil réel (cartes, preview, ids UI). */
-  const blockProfileUi =
-    !feedReady || moveFeedLoading || isProfileLoading;
+  const blockProfileUi = hasMoveFeedInMemory
+    ? false
+    : !feedReady || moveFeedLoading || isProfileLoading;
   /** Skeleton neutre — aucune donnée utilisateur tant que le feed n’est pas prêt. */
   const showMoveSkeleton =
     !errorMessage && !loadingTimedOut && blockProfileUi;
@@ -1519,13 +1574,6 @@ export default function Discover() {
       return rotated;
     });
   }, []);
-
-  useEffect(() => {
-    if (!isMoveRoute) return;
-    return () => {
-      rotateCurrentProfileWithoutAction();
-    };
-  }, [isMoveRoute, rotateCurrentProfileWithoutAction]);
 
   useEffect(() => {
     if (!isMoveRoute) return;
@@ -1719,15 +1767,81 @@ export default function Discover() {
     return () => window.clearTimeout(timer);
   }, [showDiscoverShell, hasSessionUser, profileCompletedReady, session?.user?.id]);
 
+  const discoverAgeFingerprintRef = useRef(discoverPreferredAgeFingerprint);
+  discoverAgeFingerprintRef.current = discoverPreferredAgeFingerprint;
+  const profilesPersistRef = useRef(profiles);
+  profilesPersistRef.current = profiles;
+  const stableProfilesPersistRef = useRef(stableProfiles);
+  stableProfilesPersistRef.current = stableProfiles;
+  const errorMessagePersistRef = useRef(errorMessage);
+  errorMessagePersistRef.current = errorMessage;
+  const viewerGeoBlockedPersistRef = useRef(viewerGeoBlocked);
+  viewerGeoBlockedPersistRef.current = viewerGeoBlocked;
+  const mySportMatchKeysPersistRef = useRef(mySportMatchKeys);
+  mySportMatchKeysPersistRef.current = mySportMatchKeys;
+  const hydratedMountCacheRef = useRef(false);
+  const prevDiscoverUserIdRef = useRef<string | null>(null);
+  const prevAgeFingerprintRef = useRef<string | null>(null);
+
   useEffect(() => {
-    firstStableProfileLoggedRef.current = false;
-    skeletonLogKeyRef.current = null;
-    neutralSkeletonLogKeyRef.current = null;
-    setFeedReady(false);
-    setStableProfiles([]);
-    setProfiles([]);
-    setLoading(true);
-  }, [currentUserId]);
+    if (hydratedMountCacheRef.current || !mountFeedCache) return;
+    hydratedMountCacheRef.current = true;
+    passedProfileIdsRef.current = new Set(mountFeedCache.passedProfileIds);
+    profileViewOrderingRef.current = deserializeProfileViewOrdering(
+      mountFeedCache.profileViewOrdering,
+    );
+    undoStackRef.current = mountFeedCache.undoStack as ProfileWithAffinity[];
+    swipeHistoryRef.current = mountFeedCache.swipeHistory as DiscoverSwipeHistoryEntry[];
+    setSwipeHistory(swipeHistoryRef.current);
+    setPassedFilterTick((n) => n + 1);
+    setProfileViewOrderTick((n) => n + 1);
+    setUndoStackTick((n) => n + 1);
+    console.log("MOVE_FEED_CACHE_RESTORE", { count: mountFeedCache.stableProfiles.length });
+  }, [mountFeedCache]);
+
+  useEffect(() => {
+    return () => {
+      const uid = currentUserIdRef.current;
+      if (!uid || !feedReadyRef.current) return;
+      writeDiscoverFeedSessionCache(
+        buildDiscoverFeedSessionSnapshot({
+          userId: uid,
+          ageFingerprint: discoverAgeFingerprintRef.current,
+          profiles: profilesPersistRef.current,
+          stableProfiles: stableProfilesPersistRef.current,
+          feedReady: feedReadyRef.current,
+          errorMessage: errorMessagePersistRef.current,
+          viewerGeoBlocked: viewerGeoBlockedPersistRef.current,
+          passedProfileIds: passedProfileIdsRef.current,
+          profileViewOrdering: profileViewOrderingRef.current,
+          swipeHistory: swipeHistoryRef.current,
+          undoStack: undoStackRef.current,
+          mySportMatchKeys: mySportMatchKeysPersistRef.current,
+        }),
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!currentUserId) {
+      clearDiscoverFeedSessionCache();
+      prevDiscoverUserIdRef.current = null;
+      return;
+    }
+    const prev = prevDiscoverUserIdRef.current;
+    if (prev && prev !== currentUserId) {
+      clearDiscoverFeedSessionCache();
+      beginMoveFeedLoad();
+      passedProfileIdsRef.current = new Set();
+      profileViewOrderingRef.current = createEmptyProfileViewOrderingState();
+      undoStackRef.current = [];
+      swipeHistoryRef.current = [];
+      setSwipeHistory([]);
+      setPassedFilterTick((n) => n + 1);
+      setProfileViewOrderTick((n) => n + 1);
+    }
+    prevDiscoverUserIdRef.current = currentUserId;
+  }, [currentUserId, beginMoveFeedLoad]);
 
   useEffect(() => {
     if (!showMoveSkeleton) {
@@ -2144,6 +2258,16 @@ export default function Discover() {
       }, 700);
       return () => cancelDefer();
     }
+
+    const cached = readDiscoverFeedSessionCache(
+      user.id,
+      discoverAgeFingerprintRef.current,
+    );
+    if (cached) {
+      console.log("MOVE_FEED_CACHE_SKIP_LOAD", { count: cached.stableProfiles.length });
+      return;
+    }
+
     beginMoveFeedLoad();
     let cancelled = false;
     let raf2 = 0;
@@ -2160,7 +2284,19 @@ export default function Discover() {
       cancelAnimationFrame(raf1);
       if (raf2) cancelAnimationFrame(raf2);
     };
-  }, [authLoading, user?.id, profile, discoverPreferredAgeFingerprint, beginMoveFeedLoad]);
+  }, [authLoading, user?.id, beginMoveFeedLoad]);
+
+  useEffect(() => {
+    const prev = prevAgeFingerprintRef.current;
+    prevAgeFingerprintRef.current = discoverPreferredAgeFingerprint;
+    if (prev === null || prev === discoverPreferredAgeFingerprint) return;
+    if (!user?.id) return;
+    clearDiscoverFeedSessionCache();
+    beginMoveFeedLoad();
+    void loadProfiles({ force: true }).catch((e) => {
+      console.warn("[Discover diagnostics] loadProfiles age pref change rejected", e);
+    });
+  }, [discoverPreferredAgeFingerprint, user?.id, beginMoveFeedLoad]);
 
   useEffect(() => {
     if (!user?.id || !loading) return;
@@ -2181,14 +2317,18 @@ export default function Discover() {
     });
   }, [hasPlus, feedReady, patchDiscoverStackProfiles, currentUserId]);
 
-  async function loadProfiles() {
+  async function loadProfiles(options?: { force?: boolean }) {
+    const force = options?.force ?? false;
+    if (force) {
+      clearDiscoverFeedSessionCache();
+    }
     if (loadProfilesInFlightRef.current) {
       loadProfilesPendingReloadRef.current = true;
-      beginMoveFeedLoad();
+      if (force) beginMoveFeedLoad();
       return;
     }
     loadProfilesInFlightRef.current = true;
-    console.log("MOVE_FEED_LOADING");
+    console.log("MOVE_FEED_LOADING", { force });
     beginMoveFeedLoad();
     if (!currentUserId) {
       if (import.meta.env.DEV) {
@@ -3116,7 +3256,7 @@ export default function Discover() {
       if (loadProfilesPendingReloadRef.current) {
         loadProfilesPendingReloadRef.current = false;
         reapplyRotationOnNextCommitRef.current = true;
-        void loadProfiles().catch((e) => {
+        void loadProfiles({ force: true }).catch((e) => {
           console.warn("[Discover diagnostics] loadProfiles pending reload rejected", e);
         });
       }
@@ -3817,7 +3957,7 @@ export default function Discover() {
                   onClick={() => {
                     setLoadingTimedOut(false);
                     setErrorMessage("");
-                    void loadProfiles().catch((e) => console.warn("[Discover] loadProfiles retry", e));
+                    void loadProfiles({ force: true }).catch((e) => console.warn("[Discover] loadProfiles retry", e));
                   }}
                   className="mt-5 rounded-xl bg-black px-5 py-2.5 text-sm font-semibold text-white"
                 >
@@ -3839,7 +3979,7 @@ export default function Discover() {
                   type="button"
                   onClick={() => {
                     setErrorMessage("");
-                    void loadProfiles();
+                    void loadProfiles({ force: true });
                   }}
                   className="mx-auto mt-5 block w-full max-w-xs rounded-xl px-4 py-3 text-[15px] font-bold shadow-md transition hover:opacity-95 active:scale-[0.99]"
                   style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
@@ -3921,7 +4061,7 @@ export default function Discover() {
               <div className="flex min-h-[min(50dvh,420px)] flex-1 items-center">
                 <EmptyDiscoverState
                   variant={viewerGeoBlocked ? "viewer_geo" : "default"}
-                  onRefresh={() => void loadProfiles()}
+                  onRefresh={() => void loadProfiles({ force: true })}
                 />
               </div>
             ) : null}
