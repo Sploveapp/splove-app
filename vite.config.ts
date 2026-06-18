@@ -3,8 +3,9 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 
 export default defineConfig({
-  // Relative assets: required for Capacitor WebView; compatible with Render static hosting.
-  base: './',
+  // Chemins absolus depuis la racine — évite /auth/assets/* sur Render (routes SPA directes).
+  // Compatible Capacitor (origin https://localhost/assets/…).
+  base: '/',
   plugins: [
     react(),
     {
