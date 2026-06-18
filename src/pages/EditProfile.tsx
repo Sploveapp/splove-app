@@ -30,6 +30,7 @@ import {
   resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
+import { useIosCapacitorImageDisplay } from "../hooks/useIosCapacitorImageDisplay";
 import { coerceProfileHeightCm, parseHeightCmOptionalInput } from "../lib/profileHeightCm";
 import { uploadProfilePhoto } from "../lib/profilePhotoUpload";
 
@@ -299,19 +300,28 @@ export default function EditProfile() {
   const primaryStoredRef = primaryEditCandidates.refs[0] ?? null;
   const secondaryStoredRef = secondaryEditCandidates.refs[0] ?? null;
 
-  const primaryResolvedSrc = resolveProfilePhotoUiSrc(primaryStoredRef, primaryPhoto.src);
+  const primaryResolvedSrc = resolveProfilePhotoUiSrc(primaryPhoto.activeRef, primaryPhoto.src);
   const secondaryResolvedSrc = resolveProfilePhotoUiSrc(secondaryStoredRef, secondaryPhoto.src);
 
-  const primaryImgSrc =
-    primaryPhoto.isFailed || (primaryPhoto.isLoading && primaryEditCandidates.refs.length > 0)
-      ? null
-      : primaryResolvedSrc;
+  /** URL distante résolue (signed/public) — afficher dès que le hook a un src, sans bloquer sur isLoading. */
+  const primaryRemoteBase =
+    primaryPhoto.isFailed && !primaryPhoto.src ? null : primaryResolvedSrc;
+
+  /** iOS WKWebView : repli CapacitorHttp → data URL (même pattern que Profil). */
+  const iosPrimaryPhoto = useIosCapacitorImageDisplay(
+    portraitFile ? null : primaryRemoteBase,
+  );
+
+  const primaryImgSrc = portraitFile ? primaryRemoteBase : iosPrimaryPhoto.displaySrc;
   const secondaryImgSrc =
     secondaryPhoto.isFailed || (secondaryPhoto.isLoading && secondaryEditCandidates.refs.length > 0)
       ? null
       : secondaryResolvedSrc;
 
-  const showPrimaryImg = Boolean(primaryImgSrc);
+  const showPrimaryImg = portraitFile
+    ? Boolean(primaryImgSrc)
+    : Boolean(primaryImgSrc) &&
+      !(iosPrimaryPhoto.resolutionFailed && !iosPrimaryPhoto.usingDataUrl);
   const showSecondaryImg = Boolean(secondaryImgSrc);
 
   useEffect(() => {
@@ -364,7 +374,13 @@ export default function EditProfile() {
       profile,
       extra: { profileId: profile?.id ?? user?.id ?? null, slot: "primary" },
     },
-    { onLoad: primaryPhoto.onImageLoad, onError: primaryPhoto.onImageError },
+    {
+      onLoad: primaryPhoto.onImageLoad,
+      onError: () => {
+        if (!portraitFile) iosPrimaryPhoto.onImageError();
+        primaryPhoto.onImageError();
+      },
+    },
   );
 
   const editSecondaryImgHandlers = chainPhotoRenderHandlers(
@@ -815,7 +831,7 @@ export default function EditProfile() {
               <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.primary")}</p>
               {showPrimaryImg ? (
                 <img
-                  key={`primary-${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}`}
+                  key={`primary-${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}-${iosPrimaryPhoto.usingDataUrl ? "data" : "remote"}`}
                   src={primaryImgSrc ?? undefined}
                   alt={t("photos.primary")}
                   onLoad={editPrimaryImgHandlers.onLoad}
@@ -824,7 +840,11 @@ export default function EditProfile() {
                 />
               ) : (
                 <EditProfilePhotoPlaceholder
-                  loading={primaryPhoto.isLoading && Boolean(primaryStoredRef)}
+                  loading={
+                    primaryPhoto.isLoading &&
+                    Boolean(primaryStoredRef) &&
+                    !primaryImgSrc
+                  }
                 />
               )}
               <input
