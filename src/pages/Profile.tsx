@@ -74,7 +74,7 @@ export default function Profile() {
     userId: user?.id ?? null,
     context: "profile.screen",
   });
-  const primaryImgSrcBase = directMainPhotoUrl ?? primaryPhoto.displaySrc;
+  const primaryImgSrcBase = primaryPhoto.displaySrc;
   const iosAvatarPhoto = useIosCapacitorImageDisplay(primaryImgSrcBase);
   const primaryImgSrc = iosAvatarPhoto.displaySrc;
   const showAvatarImg =
@@ -184,7 +184,7 @@ export default function Profile() {
       onLoad: directMainPhotoUrl ? undefined : primaryPhoto.onImageLoad,
       onError: () => {
         iosAvatarPhoto.onImageError();
-        if (!directMainPhotoUrl) primaryPhoto.onImageError();
+        primaryPhoto.onImageError();
       },
     },
   );
