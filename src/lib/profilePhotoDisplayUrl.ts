@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { isNativeCapacitorApp } from "./authRedirect";
 import {
   buildProfilePhotoPublicUrl,
@@ -55,11 +56,34 @@ export function pickSecondaryProfilePhotoStoredRef(
   return t || null;
 }
 
+/** URL publique Storage directe (pas signée, pas avatar OAuth externe). */
+export function isDirectPublicProfilePhotoUrl(url: string | null | undefined): boolean {
+  const t = typeof url === "string" ? url.trim() : "";
+  if (!t) return false;
+  if (t.includes("/object/sign/")) return false;
+  if (t.includes("/object/public/") && t.includes("/profile-photos/")) return true;
+  if (t.startsWith("http://") || t.startsWith("https://")) return false;
+  return false;
+}
+
+/** `main_photo_url` affichable en `<img src>` sans résolution async (URL publique uniquement). */
+export function directMainPhotoUrlFromProfile(
+  profile: ProfilePhotoUrlFields | null | undefined,
+): string | null {
+  const raw = pickPrimaryProfilePhotoStoredRef(profile);
+  if (!raw) return null;
+  const direct = raw.trim();
+  if (isDirectPublicProfilePhotoUrl(direct)) return direct;
+  const built = buildSyncProfilePhotoDisplaySrc(raw);
+  return built && isDirectPublicProfilePhotoUrl(built) ? built : null;
+}
+
 /** Candidates `<img src>` synchrones (public URL / référence http) — sans attendre signed URL. */
 export function buildSyncProfilePhotoDisplayCandidates(
   storedRef: string | null | undefined,
+  client: SupabaseClient = supabase,
 ): string[] {
-  const normalized = normalizeProfilePhotoStoredRef(storedRef, supabase);
+  const normalized = normalizeProfilePhotoStoredRef(storedRef, client);
   if (!normalized) return [];
 
   if (skipSyncPublicProfilePhotoUrl(storedRef)) {
@@ -86,7 +110,7 @@ export function buildSyncProfilePhotoDisplayCandidates(
 
   const objectPath = profilePhotoObjectPathFromStoredValue(normalized);
   if (objectPath) {
-    push(buildProfilePhotoPublicUrl(supabase, objectPath));
+    push(buildProfilePhotoPublicUrl(client, objectPath));
   }
 
   return out;

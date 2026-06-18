@@ -95,6 +95,8 @@ type AuthState = {
   isLoading: boolean;
   /** True while the initial / refetch of `profile` is in flight. Never used for session/auth. */
   isProfileLoading: boolean;
+  /** True après le premier fetch profil terminé (succès ou absence confirmée). */
+  profileBootstrapSettled: boolean;
   error: string | null;
   /** Recharge le profil depuis Supabase ; n’efface pas le profil en cache si la lecture échoue. */
   /** État shell global (splash / skeleton / contenu). */
@@ -276,6 +278,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
+  const [profileBootstrapSettled, setProfileBootstrapSettled] = useState(false);
   /** Incrémenté à chaque loadProfile — ignore les réponses obsolètes. */
   const profileLoadGenRef = useRef(0);
   /** Évite les fetch profil concurrents / boucles. */
@@ -311,6 +314,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     fetchProfileInFlightRef.current = true;
     const gen = ++profileLoadGenRef.current;
+    setProfileBootstrapSettled(false);
     setIsProfileLoading(false);
 
     void (async () => {
@@ -352,6 +356,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.warn("[AuthContext] profile load error", e);
       } finally {
         fetchProfileInFlightRef.current = false;
+        setProfileBootstrapSettled(true);
         setIsProfileLoading(false);
       }
     })();
@@ -389,6 +394,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return null;
     }
     fetchProfileInFlightRef.current = true;
+    setProfileBootstrapSettled(false);
     setIsProfileLoading(true);
     try {
       const p = await fetchProfileFastWithTimeout(user.id);
@@ -418,6 +424,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw e;
     } finally {
       fetchProfileInFlightRef.current = false;
+      setProfileBootstrapSettled(true);
       setIsProfileLoading(false);
     }
   }, [user?.id]);
@@ -467,6 +474,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(null);
       setProfile(null);
       setIsProfileLoading(false);
+      setProfileBootstrapSettled(false);
       setIsLoading(false);
       setIsAuthInitialized(true);
     });
@@ -762,6 +770,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthInitialized,
     isLoading,
     isProfileLoading,
+    profileBootstrapSettled,
     appShell,
     error,
     refetchProfile,
