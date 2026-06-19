@@ -652,9 +652,35 @@ export default function Auth() {
             lineHeight: 1.5,
             color: APP_TEXT_MUTED,
             padding: "0 8px",
+            position: "relative",
+            zIndex: 3,
           }}
         >
-          {t("auth_terms_notice")}
+          {t("welcome_legal_part1")}
+          <Link
+            to="/cgu"
+            style={{
+              color: BRAND_BG,
+              fontWeight: 600,
+              textDecoration: "underline",
+              textUnderlineOffset: "3px",
+            }}
+          >
+            {t("welcome_legal_link_terms")}
+          </Link>
+          {t("welcome_legal_part2")}
+          <Link
+            to="/privacy"
+            style={{
+              color: BRAND_BG,
+              fontWeight: 600,
+              textDecoration: "underline",
+              textUnderlineOffset: "3px",
+            }}
+          >
+            {t("welcome_legal_link_privacy")}
+          </Link>
+          {t("welcome_legal_part3")}
         </p>
       </div>
     </AuthSportShell>
