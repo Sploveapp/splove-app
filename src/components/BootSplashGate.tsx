@@ -3,7 +3,8 @@ import { useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { BOOT_SPLASH_MIN_MS } from "../lib/bootSplashTiming";
 import { resolveBootRoute } from "../lib/bootRouteDecision";
-import { isOAuthUxOverlayActive } from "../lib/oauthUxOverlay";
+import { isOAuthCallbackRouteBlocking, isOAuthUxOverlayActive } from "../lib/oauthUxOverlay";
+import { isOAuthGoogleStartPath } from "../lib/oauthGoogleStartUrl";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
 import { SploveOAuthLoadingScreen } from "./SploveOAuthLoadingScreen";
 import { SplashScreen } from "./SplashScreen";
@@ -29,11 +30,11 @@ export function BootSplashGate({ children }: Props) {
 
   const hash = location.hash || "";
   const pathname = location.pathname || "/";
-  const isAuthCallbackRoute =
-    location.pathname === "/auth/callback" || hash.startsWith("#/auth/callback");
+  const isAuthCallbackRoute = isOAuthCallbackRouteBlocking(pathname, hash);
+  const isOAuthGoogleStartRoute = isOAuthGoogleStartPath(pathname);
   const oauthUxActive = isOAuthUxOverlayActive();
   const booting = isBooting(auth, oauthUxActive, isAuthCallbackRoute);
-  const showSplash = booting || !minElapsed;
+  const showSplash = isOAuthGoogleStartRoute ? false : booting || !minElapsed;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setMinElapsed(true), BOOT_SPLASH_MIN_MS);

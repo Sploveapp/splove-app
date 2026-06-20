@@ -102,10 +102,13 @@ export function passwordRecoveryRedirectUrl(): string {
 /** HashRouter: route lives in `location.hash` (`#/auth/callback?...`); or full path for direct loads. */
 export function isAuthCallbackPath(): boolean {
   if (typeof window === "undefined") return false;
-  if (window.location.pathname === "/auth/callback" || window.location.pathname.endsWith("/auth/callback")) {
-    return true;
-  }
-  return /^#\/auth\/callback([/?]|$)/.test(window.location.hash);
+  if (/^#\/auth\/callback([/?]|$)/.test(window.location.hash || "")) return true;
+  // Capacitor iOS : callback via deep link splove:// — pas de pathname /auth/callback bloquant.
+  if (isNativeCapacitorApp()) return false;
+  return (
+    window.location.pathname === "/auth/callback" ||
+    window.location.pathname.endsWith("/auth/callback")
+  );
 }
 
 /**

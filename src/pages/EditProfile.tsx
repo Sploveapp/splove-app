@@ -33,8 +33,15 @@ import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog"
 import { useIosCapacitorImageDisplay } from "../hooks/useIosCapacitorImageDisplay";
 import { coerceProfileHeightCm, parseHeightCmOptionalInput } from "../lib/profileHeightCm";
 import { uploadProfilePhoto } from "../lib/profilePhotoUpload";
+import { sportPictogramForSlug } from "../lib/onboardingSportsQuickPick";
+import {
+  SPORT_PRACTICE_LEVELS,
+  hasValidSportPracticeLevel,
+  normalizeSportPracticeLevel,
+  sportPracticeLevelI18nKey,
+} from "../lib/sportPracticeLevel";
 
-type SportOption = { id: string | number; name: string; category?: string | null };
+type SportOption = { id: string | number; name: string; slug?: string | null; category?: string | null };
 type LookingForValue =
   | "women"
   | "men"
@@ -228,6 +235,7 @@ export default function EditProfile() {
 
   const [sportsCatalog, setSportsCatalog] = useState<SportOption[]>([]);
   const [selectedSports, setSelectedSports] = useState<SportOption[]>([]);
+  const [sportLevelsById, setSportLevelsById] = useState<Record<string, string>>({});
   const [sportSearch, setSportSearch] = useState("");
 
   const [intent, setIntent] = useState<(typeof INTENT_OPTIONS)[number]["value"]>("dating_feeling");
@@ -415,13 +423,14 @@ export default function EditProfile() {
     async function loadCatalogAndSports() {
       const { data: sportsData } = await supabase
         .from("sports")
-        .select("id, label, category")
+        .select("id, label, category, slug")
         .eq("active", true)
         .order("label", { ascending: true });
       if (cancelled) return;
       const catalog: SportOption[] = (sportsData ?? []).map((r) => ({
         id: r.id,
         name: String(r.label ?? "").trim(),
+        slug: (r.slug as string | null) ?? null,
         category: (r.category as string | null) ?? null,
       }));
       setSportsCatalog(catalog);
@@ -429,14 +438,22 @@ export default function EditProfile() {
       if (!user?.id) return;
       const { data: links } = await supabase
         .from("profile_sports")
-        .select("sport_id")
+        .select("sport_id, level")
         .eq("profile_id", user.id);
       if (cancelled || !links) return;
+      const levels: Record<string, string> = {};
       const chosen = links
-        .map((l) => catalog.find((c) => String(c.id) === String(l.sport_id)))
+        .map((l) => {
+          const normalized = normalizeSportPracticeLevel(
+            typeof l.level === "string" ? l.level : null,
+          );
+          if (normalized) levels[String(l.sport_id)] = normalized;
+          return catalog.find((c) => String(c.id) === String(l.sport_id));
+        })
         .filter((x): x is SportOption => x != null)
         .slice(0, 3);
       setSelectedSports(chosen);
+      setSportLevelsById(levels);
     }
     void loadCatalogAndSports();
     return () => {
@@ -503,9 +520,18 @@ export default function EditProfile() {
   }, [user?.id, profile, meetingAgePrefsBounds.min, meetingAgePrefsBounds.max]);
 
   function toggleSport(sport: SportOption): void {
+    const sportKey = String(sport.id);
     setSelectedSports((prev) => {
-      const exists = prev.some((x) => String(x.id) === String(sport.id));
-      if (exists) return prev.filter((x) => String(x.id) !== String(sport.id));
+      const exists = prev.some((x) => String(x.id) === sportKey);
+      if (exists) {
+        setSportLevelsById((levels) => {
+          if (!(sportKey in levels)) return levels;
+          const next = { ...levels };
+          delete next[sportKey];
+          return next;
+        });
+        return prev.filter((x) => String(x.id) !== sportKey);
+      }
       if (prev.length >= 3) return prev;
       return [...prev, sport];
     });
@@ -616,6 +642,15 @@ export default function EditProfile() {
         )
       );
 
+      if (
+        selectedSportIds.length > 0 &&
+        !selectedSportIds.every((id) => hasValidSportPracticeLevel(sportLevelsById[id]))
+      ) {
+        setMessage(t("edit_profile_err_sport_level"));
+        setLoading(false);
+        return;
+      }
+
       const { error: delErr } = await supabase
         .from("profile_sports")
         .delete()
@@ -637,7 +672,7 @@ export default function EditProfile() {
         const rows = selectedSportIds.map((sportId) => ({
           profile_id: user.id,
           sport_id: sportId,
-          level: "regular",
+          level: normalizeSportPracticeLevel(sportLevelsById[sportId]),
           is_primary: false,
         }));
         if (rows.length > 0) {
@@ -760,6 +795,61 @@ export default function EditProfile() {
               </button>
             ))}
           </div>
+          {selectedSports.length > 0 ? (
+            <div style={{ display: "grid", gap: 12, marginBottom: 12 }}>
+              {selectedSports.map((s) => {
+                const sportKey = String(s.id);
+                const picto = sportPictogramForSlug(s.slug ?? null);
+                const currentLevel = normalizeSportPracticeLevel(sportLevelsById[sportKey]);
+                return (
+                  <div
+                    key={sportKey}
+                    style={{
+                      border: `1px solid ${APP_BORDER}`,
+                      borderRadius: 14,
+                      padding: 12,
+                      background: APP_BG,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                      <span style={{ fontSize: "1.15rem", lineHeight: 1 }} aria-hidden>
+                        {picto}
+                      </span>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: APP_TEXT }}>{s.name}</span>
+                    </div>
+                    <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: APP_TEXT_MUTED }}>
+                      {t("sport_practice_level_label")}
+                    </p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
+                      {SPORT_PRACTICE_LEVELS.map((level) => {
+                        const active = currentLevel === level;
+                        return (
+                          <button
+                            key={level}
+                            type="button"
+                            onClick={() => setSportLevelsById((prev) => ({ ...prev, [sportKey]: level }))}
+                            style={{
+                              border: `1px solid ${active ? BRAND_BG : APP_BORDER}`,
+                              background: active ? BRAND_BG : APP_CARD,
+                              color: active ? TEXT_ON_BRAND : APP_TEXT,
+                              borderRadius: 12,
+                              padding: "8px 10px",
+                              fontSize: 13,
+                              fontWeight: 600,
+                              textAlign: "left",
+                            }}
+                            aria-pressed={active}
+                          >
+                            {t(sportPracticeLevelI18nKey(level))}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
           <input value={sportSearch} onChange={(e) => setSportSearch(e.target.value)} placeholder={t("search_sport")} style={{ width: "100%", boxSizing: "border-box", marginBottom: 8, padding: "10px 12px", borderRadius: 12, border: `1px solid ${APP_BORDER}`, background: APP_BG, color: APP_TEXT }} />
           {searchMatches.length > 0 ? (
             <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>

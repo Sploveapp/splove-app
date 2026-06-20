@@ -5,8 +5,7 @@ import { signInWithGoogleOAuth, subscribeGoogleOAuthBrowserTimeout, SPLOVE_OAUTH
 import { consumeAuthOAuthUserMessage } from "../lib/authOAuthUserMessage";
 import { GOOGLE_OAUTH_USER_ERROR_MSG } from "../lib/googleOAuthFlow";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
-import { beginPostOAuthSplash } from "../lib/postOAuthSplash";
-import { isIosGoogleNativeEnabled } from "../lib/googleNativeSignIn";
+import { showGoogleSignInOverlay, hideGoogleSignInOverlay, awaitGoogleSignInOverlayPaint } from "../lib/googleSignInOverlay";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
 import { useAuth } from "../contexts/AuthContext";
 import { APP_BG, APP_TEXT_MUTED, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
@@ -196,6 +195,7 @@ export default function Auth() {
 
   useEffect(() => {
     return subscribeGoogleOAuthBrowserTimeout(() => {
+      hideGoogleSignInOverlay("browser_timeout");
       setMessage({ type: "error", text: GOOGLE_OAUTH_USER_ERROR_MSG });
       setOauthLoading(null);
     });
@@ -312,16 +312,17 @@ export default function Auth() {
   async function signInWithGoogle() {
     setMessage(null);
     setOauthLoading("google");
-    if (!isIosGoogleNativeEnabled()) {
-      beginPostOAuthSplash();
-    }
+    showGoogleSignInOverlay();
+    await awaitGoogleSignInOverlayPaint();
     try {
       const { error } = await signInWithGoogleOAuth();
       if (error) {
+        hideGoogleSignInOverlay("sign_in_error");
         setMessage({ type: "error", text: GOOGLE_OAUTH_USER_ERROR_MSG });
         setOauthLoading(null);
       }
     } catch (err: unknown) {
+      hideGoogleSignInOverlay("sign_in_exception");
       setMessage({ type: "error", text: GOOGLE_OAUTH_USER_ERROR_MSG });
       setOauthLoading(null);
     }

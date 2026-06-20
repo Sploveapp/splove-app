@@ -38,14 +38,14 @@ import { useTranslation } from "../i18n/useTranslation";
 import { buildAuthReferralLink, fetchGrowthProfileFields, type GrowthProfileRow } from "../services/referral.service";
 import { ProfileScreenSkeleton } from "../components/skeletons/ProfileScreenSkeleton";
 import { useIosCapacitorImageDisplay } from "../hooks/useIosCapacitorImageDisplay";
-import { useUserMainPhotoDisplay } from "../hooks/useUserMainPhotoDisplay";
+import { useProfilePhotoDisplaySrc } from "../hooks/useProfilePhotoDisplaySrc";
 import { useBrokenProfilePhotoReuploadHint } from "../hooks/useBrokenProfilePhotoReuploadHint";
 import { SPLOVE_PROFILE_PHOTO_FALLBACK_SRC } from "../lib/userMainPhoto";
 import { snapshotProfilePhotoFields } from "../lib/profilePhotoPipelineLog";
 import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
 import {
-  directMainPhotoUrlFromProfile,
   logProfilePhotoUiDecision,
+  resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
 import LanguageSwitcher from "../components/LanguageSwitcher";
@@ -56,9 +56,63 @@ import {
 import { MeetingAgeRangePreferencesPanel } from "../components/MeetingAgeRangePreferencesPanel";
 import { normalizeDiscoveryRadiusKm } from "../constants/discoverGeo";
 import { normalizePreferredAgeRange } from "../lib/profileAge";
-import { profileMeetingIntentBadgeLabel } from "../lib/profileMeetingIntentDisplay";
+import { sportPictogramForSlug } from "../lib/onboardingSportsQuickPick";
+import { normalizeSportPracticeLevel, sportPracticeLevelDots, type SportPracticeLevel } from "../lib/sportPracticeLevel";
 
 const PROFILE_AVATAR_SIZE_PX = 96;
+
+type ProfileBootPhotoFields = {
+  portrait_url: string | null;
+  main_photo_url: string | null;
+  avatar_url: string | null;
+  fullbody_url: string | null;
+};
+
+type ProfileAvatarPhotoFields = {
+  portrait_url?: string | null;
+  main_photo_url?: string | null;
+  avatar_url?: string | null;
+  fullbody_url?: string | null;
+};
+
+function trimProfilePhotoRef(value: unknown): string | null {
+  const t = typeof value === "string" ? value.trim() : "";
+  return t || null;
+}
+
+function extractBootPhotoFields(row: Record<string, unknown>): ProfileBootPhotoFields {
+  return {
+    portrait_url: trimProfilePhotoRef(row.portrait_url),
+    main_photo_url: trimProfilePhotoRef(row.main_photo_url),
+    avatar_url: trimProfilePhotoRef(row.avatar_url),
+    fullbody_url: trimProfilePhotoRef(row.fullbody_url),
+  };
+}
+
+/** Bulle Profil : portrait → main → avatar → fullbody (repli stable au boot iOS). */
+function buildProfileAvatarRefCandidates(
+  fields: ProfileAvatarPhotoFields | null | undefined,
+): { refs: string[]; fieldByRef: Record<string, string> } {
+  const fieldOrder = ["portrait_url", "main_photo_url", "avatar_url", "fullbody_url"] as const;
+  const refs: string[] = [];
+  const fieldByRef: Record<string, string> = {};
+  const seen = new Set<string>();
+  for (const key of fieldOrder) {
+    const t = trimProfilePhotoRef(fields?.[key]);
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    refs.push(t);
+    fieldByRef[t] = key;
+  }
+  return { refs, fieldByRef };
+}
+
+type ProfileSportDisplay = {
+  id: string | number;
+  name: string;
+  slug: string | null;
+  level: SportPracticeLevel | null;
+};
 
 export default function Profile() {
   const { t, language } = useTranslation();
@@ -66,28 +120,60 @@ export default function Profile() {
   const { user, profile, refetchProfile, commitProfileRow, signOut, isSigningOut } = useAuth();
   const brokenPhotoHint = useBrokenProfilePhotoReuploadHint(user?.id ?? null);
   const [screenReady, setScreenReady] = useState(false);
-  const directMainPhotoUrl = useMemo(
-    () => directMainPhotoUrlFromProfile(profile),
-    [profile?.main_photo_url],
+  const [bootPhotoFields, setBootPhotoFields] = useState<ProfileBootPhotoFields | null>(null);
+  const profileRef = useRef(profile);
+  profileRef.current = profile;
+
+  const avatarPhotoFields = useMemo((): ProfileAvatarPhotoFields => {
+    const boot = bootPhotoFields;
+    return {
+      portrait_url: boot?.portrait_url ?? trimProfilePhotoRef(profile?.portrait_url),
+      main_photo_url: boot?.main_photo_url ?? trimProfilePhotoRef(profile?.main_photo_url),
+      avatar_url: boot?.avatar_url ?? trimProfilePhotoRef(profile?.avatar_url),
+      fullbody_url: boot?.fullbody_url ?? trimProfilePhotoRef(profile?.fullbody_url),
+    };
+  }, [
+    bootPhotoFields,
+    profile?.portrait_url,
+    profile?.main_photo_url,
+    profile?.avatar_url,
+    profile?.fullbody_url,
+  ]);
+
+  const avatarRefCandidates = useMemo(
+    () => buildProfileAvatarRefCandidates(avatarPhotoFields),
+    [avatarPhotoFields],
   );
-  const primaryPhoto = useUserMainPhotoDisplay(profile, {
-    userId: user?.id ?? null,
-    context: "profile.screen",
+
+  const avatarPhotoLogContext = useMemo(
+    () => ({
+      userId: user?.id ?? null,
+      profileId: profile?.id ?? user?.id ?? null,
+      source: "profile.screen.avatar",
+      fieldByRef: avatarRefCandidates.fieldByRef,
+    }),
+    [user?.id, profile?.id, avatarRefCandidates.fieldByRef],
+  );
+
+  const avatarPhoto = useProfilePhotoDisplaySrc(avatarRefCandidates.refs, {
+    logContext: avatarPhotoLogContext,
   });
-  const primaryImgSrcBase = primaryPhoto.displaySrc;
-  const iosAvatarPhoto = useIosCapacitorImageDisplay(primaryImgSrcBase);
+
+  const avatarResolvedSrc = resolveProfilePhotoUiSrc(avatarPhoto.activeRef, avatarPhoto.src);
+  const avatarRemoteBase =
+    avatarPhoto.isFailed && !avatarPhoto.src ? null : avatarResolvedSrc;
+  const iosAvatarPhoto = useIosCapacitorImageDisplay(avatarRemoteBase);
   const primaryImgSrc = iosAvatarPhoto.displaySrc;
+  const primaryStoredRef = avatarPhoto.activeRef ?? avatarRefCandidates.refs[0] ?? null;
   const showAvatarImg =
     Boolean(primaryImgSrc) &&
     !(iosAvatarPhoto.resolutionFailed && !iosAvatarPhoto.usingDataUrl);
-  const primaryStoredRef = directMainPhotoUrl ?? primaryPhoto.storedRef;
-  const profileRef = useRef(profile);
-  profileRef.current = profile;
 
   const syncProfileForScreen = useCallback(async () => {
     if (!user?.id) return;
     const row = await fetchProfileScreenFields(user.id);
     if (!row) return;
+    setBootPhotoFields(extractBootPhotoFields(row));
     const base = profileRef.current;
     if (base?.id) {
       commitProfileRow(mergeProfileScreenRowPreservingPhotos(base as Record<string, unknown>, row));
@@ -110,42 +196,54 @@ export default function Profile() {
 
   useEffect(() => {
     if (!user?.id) return;
+    console.log("[ProfileAvatar] boot_resolve", {
+      userId: user.id,
+      portrait_url: avatarPhotoFields.portrait_url,
+      main_photo_url: avatarPhotoFields.main_photo_url,
+      avatar_url: avatarPhotoFields.avatar_url,
+      fullbody_url: avatarPhotoFields.fullbody_url,
+      finalSrc: primaryImgSrc ? primaryImgSrc.slice(0, 120) : null,
+    });
+  }, [user?.id, avatarPhotoFields, primaryImgSrc]);
+
+  useEffect(() => {
+    if (!user?.id) return;
     logProfilePhotoUiDecision("profile.screen", profile, primaryImgSrc, "primary");
     PhotoRenderLog.displaySrc({
       screen: "Profile",
       displaySrc: primaryImgSrc,
-      resolvedUrl: directMainPhotoUrl ?? primaryPhoto.src,
+      resolvedUrl: avatarPhoto.src,
       profile,
       extra: {
         profileId: profile?.id ?? user.id,
         slot: "primary",
-        directMainPhoto: Boolean(directMainPhotoUrl),
+        view: "avatar",
         iosCapacitorDataUrl: iosAvatarPhoto.usingDataUrl,
       },
     });
     PhotoRenderLog.resolvedUrl({
       screen: "Profile",
       displaySrc: primaryImgSrc,
-      resolvedUrl: directMainPhotoUrl ?? primaryPhoto.src,
+      resolvedUrl: avatarPhoto.src,
       profile,
       extra: {
         profileId: profile?.id ?? user.id,
         slot: "primary",
-        urlIndex: primaryPhoto.urlIndex,
-        directMainPhoto: Boolean(directMainPhotoUrl),
+        view: "avatar",
+        urlIndex: avatarPhoto.urlIndex,
         iosCapacitorDataUrl: iosAvatarPhoto.usingDataUrl,
       },
     });
     console.log("[SPLovePhoto][connected-profile] profile_snapshot", {
       userId: user.id,
       profileId: profile?.id ?? user.id,
-      source: "profile.screen",
+      source: "profile.screen.avatar",
       photos: snapshotProfilePhotoFields(profile as Record<string, unknown> | null | undefined),
-      directMainPhotoUrl: directMainPhotoUrl ? directMainPhotoUrl.slice(0, 96) : null,
-      activeField: directMainPhotoUrl ? "main_photo_url" : primaryPhoto.activeField,
+      bootPhotos: bootPhotoFields,
+      activeField: avatarPhoto.activeField,
       hasDisplaySrc: Boolean(primaryImgSrc),
-      isLoading: directMainPhotoUrl ? false : primaryPhoto.isLoading,
-      isFailed: directMainPhotoUrl ? false : primaryPhoto.isFailed,
+      isLoading: avatarPhoto.isLoading,
+      isFailed: avatarPhoto.isFailed,
     });
   }, [
     user?.id,
@@ -154,15 +252,15 @@ export default function Profile() {
     profile?.portrait_url,
     profile?.fullbody_url,
     profile?.avatar_url,
-    directMainPhotoUrl,
+    bootPhotoFields,
     iosAvatarPhoto.usingDataUrl,
     iosAvatarPhoto.resolutionFailed,
-    primaryPhoto.activeField,
+    avatarPhoto.activeField,
     primaryImgSrc,
-    primaryPhoto.src,
-    primaryPhoto.urlIndex,
-    primaryPhoto.isLoading,
-    primaryPhoto.isFailed,
+    avatarPhoto.src,
+    avatarPhoto.urlIndex,
+    avatarPhoto.isLoading,
+    avatarPhoto.isFailed,
     profile,
   ]);
 
@@ -170,21 +268,20 @@ export default function Profile() {
     {
       screen: "Profile",
       displaySrc: primaryImgSrc,
-      resolvedUrl: directMainPhotoUrl ?? primaryPhoto.src,
+      resolvedUrl: avatarPhoto.src,
       profile,
       extra: {
         profileId: profile?.id ?? user?.id ?? null,
         slot: "primary",
         view: "avatar",
-        directMainPhoto: Boolean(directMainPhotoUrl),
         iosCapacitorDataUrl: iosAvatarPhoto.usingDataUrl,
       },
     },
     {
-      onLoad: directMainPhotoUrl ? undefined : primaryPhoto.onImageLoad,
+      onLoad: avatarPhoto.onImageLoad,
       onError: () => {
         iosAvatarPhoto.onImageError();
-        primaryPhoto.onImageError();
+        avatarPhoto.onImageError();
       },
     },
   );
@@ -203,6 +300,7 @@ export default function Profile() {
   const [phraseDraft, setPhraseDraft] = useState("");
   const [phraseSaving, setPhraseSaving] = useState(false);
   const [phraseMessage, setPhraseMessage] = useState<string | null>(null);
+  const [profileSports, setProfileSports] = useState<ProfileSportDisplay[]>([]);
   const [activityPendingCount, setActivityPendingCount] = useState(0);
   const locCityInputRef = useRef<HTMLInputElement>(null);
   const locRadiusSelectRef = useRef<HTMLSelectElement>(null);
@@ -217,6 +315,40 @@ export default function Profile() {
   useEffect(() => {
     syncAccessibilityFromProfile();
   }, [syncAccessibilityFromProfile]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadProfileSports(): Promise<void> {
+      if (!user?.id) {
+        setProfileSports([]);
+        return;
+      }
+      const { data, error } = await supabase
+        .from("profile_sports")
+        .select("sport_id, level, sports(id, label, slug)")
+        .eq("profile_id", user.id);
+      if (cancelled || error) return;
+      const rows = (data ?? [])
+        .map((row) => {
+          const sportsJoin = row.sports as { id?: string | number; label?: string | null; slug?: string | null } | null;
+          const name = String(sportsJoin?.label ?? "").trim();
+          if (!name) return null;
+          const item: ProfileSportDisplay = {
+            id: sportsJoin?.id ?? row.sport_id,
+            name,
+            slug: typeof sportsJoin?.slug === "string" ? sportsJoin.slug : null,
+            level: normalizeSportPracticeLevel(typeof row.level === "string" ? row.level : null),
+          };
+          return item;
+        })
+        .filter((x): x is ProfileSportDisplay => x != null);
+      setProfileSports(rows);
+    }
+    void loadProfileSports();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   const loadActivityPendingCount = useCallback(async () => {
     if (!user?.id) {
@@ -429,8 +561,6 @@ export default function Profile() {
     }
   }
 
-  const meetingIntentBadge = profileMeetingIntentBadgeLabel(profile?.intent, t);
-
   if (!screenReady) {
     return <ProfileScreenSkeleton />;
   }
@@ -527,7 +657,7 @@ export default function Profile() {
                 key={
                   iosAvatarPhoto.usingDataUrl
                     ? `ios-data-${primaryStoredRef ?? "none"}`
-                    : directMainPhotoUrl ?? `${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}`
+                    : `${primaryStoredRef ?? "none"}-${avatarPhoto.urlIndex}`
                 }
                 src={primaryImgSrc!}
                 alt=""
@@ -540,7 +670,7 @@ export default function Profile() {
                   display: "block",
                 }}
               />
-            ) : primaryPhoto.isLoading || iosAvatarPhoto.isResolving ? (
+            ) : avatarPhoto.isLoading || iosAvatarPhoto.isResolving ? (
               <img
                 src={SPLOVE_PROFILE_PHOTO_FALLBACK_SRC}
                 alt=""
@@ -552,27 +682,6 @@ export default function Profile() {
             )}
           </div>
         </div>
-
-        {meetingIntentBadge ? (
-          <div style={{ display: "flex", justifyContent: "center", margin: "-8px 0 20px" }}>
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                borderRadius: 9999,
-                padding: "6px 12px",
-                fontSize: 13,
-                fontWeight: 500,
-                lineHeight: 1.25,
-                color: APP_TEXT,
-                background: APP_CARD,
-                border: `1px solid ${APP_BORDER}`,
-              }}
-            >
-              {meetingIntentBadge}
-            </span>
-          </div>
-        ) : null}
 
         <button
           type="button"
@@ -781,6 +890,73 @@ export default function Profile() {
               )}
             </div>
           </div>
+
+          {profileSports.length > 0 ? (
+            <div
+              style={{
+                background: APP_CARD,
+                borderRadius: "20px",
+                padding: "24px",
+                boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
+                marginBottom: "20px",
+              }}
+            >
+              <h2
+                style={{
+                  margin: "0 0 14px 0",
+                  fontSize: "16px",
+                  fontWeight: 600,
+                  color: APP_TEXT,
+                }}
+              >
+                {t("profile_sports_levels_title")}
+              </h2>
+              <div style={{ display: "grid", gap: 10 }}>
+                {profileSports.map((sport) => (
+                  <div
+                    key={String(sport.id)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        minWidth: 0,
+                        fontSize: "15px",
+                        fontWeight: 600,
+                        color: APP_TEXT,
+                      }}
+                    >
+                      <span style={{ fontSize: "1.15rem", lineHeight: 1, flexShrink: 0 }} aria-hidden>
+                        {sportPictogramForSlug(sport.slug)}
+                      </span>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {sport.name}
+                      </span>
+                    </span>
+                    <span
+                      aria-hidden
+                      style={{
+                        flexShrink: 0,
+                        fontSize: "14px",
+                        letterSpacing: "0.06em",
+                        color: APP_TEXT,
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {sportPracticeLevelDots(sport.level)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div
             style={{

@@ -74,6 +74,10 @@ export type DiscoverProfileCardProps = {
   viewerCity: string | null;
   mySportMatchKeys: Set<string>;
   photoUrl: string;
+  /** Résolution photo en cours — évite le placeholder « sans photo » prématuré. */
+  photoPending?: boolean;
+  /** Badge intention (ex. « Aller plus loin ») — uniquement sur profils tiers. */
+  showMeetingIntentBadge?: boolean;
   discoverMenuProfileId: string | null;
   setDiscoverMenuProfileId: Dispatch<SetStateAction<string | null>>;
   restoredProfileId: string | null;
@@ -102,6 +106,8 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   viewerCity,
   mySportMatchKeys,
   photoUrl,
+  photoPending = false,
+  showMeetingIntentBadge = true,
   discoverMenuProfileId,
   setDiscoverMenuProfileId,
   restoredProfileId,
@@ -202,7 +208,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
             onLoad={onPhotoLoad}
             onError={onPhotoError}
           />
-        ) : (
+        ) : photoPending ? null : (
           <button
             type="button"
             className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-zinc-900"
@@ -352,8 +358,8 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
         <div
           className={
             immersive && nativeBottomNav
-              ? "pointer-events-none absolute inset-x-0 bottom-0 z-[10] pt-[max(5.5rem,20vh)]"
-              : "pointer-events-none absolute inset-x-0 bottom-0 z-[10] pb-[max(0.65rem,env(safe-area-inset-bottom))] pt-[max(8.5rem,28vh)]"
+              ? "pointer-events-none absolute inset-x-0 bottom-0 z-[10] pt-[max(6.25rem,22vh)]"
+              : "pointer-events-none absolute inset-x-0 bottom-0 z-[10] pb-[max(0.65rem,env(safe-area-inset-bottom))] pt-[max(9.25rem,30vh)]"
           }
           style={
             immersive && nativeBottomNav
@@ -435,7 +441,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
                   </span>
                 ) : null}
               </h2>
-              {intentShort ? (
+              {showMeetingIntentBadge && intentShort ? (
                 <span className="mb-0.5 rounded-full bg-white/12 px-2.5 py-1 text-[11px] font-medium leading-tight text-white/92 ring-1 ring-white/22">
                   {intentShort}
                 </span>

@@ -1,5 +1,7 @@
 import { supabase } from "./supabase";
+import { isNativeOAuthCallbackUrl } from "./authRedirect";
 import { formatExchangeCodeLog, formatSetSessionLog } from "./oauthLogSanitize";
+import { logPkceStorageKeys } from "./oauthPkceDiagnostics";
 
 /** OAuth params extracted from callback URL (PKCE code or implicit tokens). */
 export type OAuthCallbackParams = {
@@ -168,7 +170,10 @@ export async function establishSupabaseSessionFromOAuthCallbackUrl(callbackUrl: 
   error: string | null;
 }> {
   const windowHref = typeof window !== "undefined" ? window.location.href : "";
-  const params = mergeOAuthCallbackParams(callbackUrl, windowHref);
+  // Deep link natif : ne pas fusionner location.href (évite double parse / mauvais code).
+  const params = isNativeOAuthCallbackUrl(callbackUrl)
+    ? parseOAuthCallbackParams(callbackUrl)
+    : mergeOAuthCallbackParams(callbackUrl, windowHref);
 
   console.log("[AuthCallback] parsed", {
     hasCode: params.hasCode,
@@ -190,33 +195,25 @@ export async function establishSupabaseSessionFromOAuthCallbackUrl(callbackUrl: 
     return { ok, method: "setSession", error: ok ? null : "setSession returned no user" };
   }
 
-  if (params.hasCode) {
-    const full = await supabase.auth.exchangeCodeForSession(callbackUrl);
-    if (!full.error && full.data.session?.user?.id) {
-      console.log("[AuthCallback] exchangeCodeForSession", formatExchangeCodeLog(full));
-      return { ok: true, method: "exchangeCodeForSession(url)", error: null };
-    }
-    if (full.error) {
-      console.log("[AuthCallback] exchangeCodeForSession", formatExchangeCodeLog(full));
+  if (params.hasCode && params.code) {
+    // Une seule tentative : auth_code = code OAuth uniquement.
+    // Passer splove://… en entier échoue et supprime splove-auth-code-verifier (GoTrueClient).
+    await logPkceStorageKeys("PKCE_KEYS_BEFORE_EXCHANGE");
+    console.log("EXCHANGE_START");
+
+    const exchanged = await supabase.auth.exchangeCodeForSession(params.code);
+    if (!exchanged.error && exchanged.data.session?.user?.id) {
+      console.log("EXCHANGE_SUCCESS");
+      console.log("[AuthCallback] exchangeCodeForSession", formatExchangeCodeLog(exchanged));
+      await logPkceStorageKeys("PKCE_KEYS_AFTER_EXCHANGE");
+      return { ok: true, method: "exchangeCodeForSession(code)", error: null };
     }
 
-    if (params.code) {
-      const byCode = await supabase.auth.exchangeCodeForSession(params.code);
-      if (!byCode.error && byCode.data.session?.user?.id) {
-        console.log("[AuthCallback] exchangeCodeForSession", formatExchangeCodeLog(byCode));
-        return { ok: true, method: "exchangeCodeForSession(code)", error: null };
-      }
-      if (byCode.error) {
-        console.log("[AuthCallback] exchangeCodeForSession", formatExchangeCodeLog(byCode));
-        return { ok: false, method: "exchangeCodeForSession", error: byCode.error.message };
-      }
-    }
-
-    return {
-      ok: false,
-      method: "exchangeCodeForSession",
-      error: full.error?.message ?? "exchange returned no session",
-    };
+    const failMessage = exchanged.error?.message ?? "exchange returned no session";
+    console.log("EXCHANGE_FAIL", { message: failMessage });
+    console.log("[AuthCallback] exchangeCodeForSession", formatExchangeCodeLog(exchanged));
+    await logPkceStorageKeys("PKCE_KEYS_AFTER_EXCHANGE");
+    return { ok: false, method: "exchangeCodeForSession", error: failMessage };
   }
 
   return { ok: false, method: "none", error: "no code or access_token in callback URL" };

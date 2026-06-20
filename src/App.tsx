@@ -31,9 +31,11 @@ import { BootSplashGate } from "./components/BootSplashGate";
 import { PostOAuthSplashGate } from "./components/PostOAuthSplashGate";
 import { isOauthProcessingLocked } from "./lib/oauthCallbackLock";
 import { isNativeCapacitorApp } from "./lib/authRedirect";
-import { SplashScreen } from "./components/SplashScreen";
+import OAuthGoogleStart from "./pages/OAuthGoogleStart";
+import { OAUTH_GOOGLE_START_PATH } from "./lib/oauthGoogleStartUrl";
 import { PushNotificationsBridge } from "./components/PushNotificationsBridge";
 import { NativeShellVisibilityBridge } from "./components/NativeShellVisibilityBridge";
+import { SplashScreen } from "./components/SplashScreen";
 
 function AppRouteRedirectFallback() {
   return <SplashScreen overlay />;
@@ -63,6 +65,15 @@ function App() {
       window.location.hash = callbackHash;
     } else {
       window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}${callbackHash}`);
+    }
+    return <AppRouteRedirectFallback />;
+  }
+  if (window.location.pathname === OAUTH_GOOGLE_START_PATH && !window.location.hash) {
+    const startHash = `#${OAUTH_GOOGLE_START_PATH}${window.location.search}`;
+    if (native) {
+      window.location.hash = startHash;
+    } else {
+      window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}${startHash}`);
     }
     return <AppRouteRedirectFallback />;
   }
@@ -96,6 +107,7 @@ function App() {
           <Route path="/auth" element={<Auth />} />
           {/* OAuth return: outside ProtectedRoute; AuthContext must not force /auth on this path */}
           <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path={OAUTH_GOOGLE_START_PATH} element={<OAuthGoogleStart />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/bienvenue" element={<Navigate to="/" replace />} />

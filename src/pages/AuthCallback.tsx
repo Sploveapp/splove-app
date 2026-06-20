@@ -29,7 +29,7 @@ import { resolvePostOAuthPath } from "../lib/profileSelect";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { hideCapacitorSplashWhenReady } from "../lib/capacitorNativeSplash";
 import { OAuthConnectingSplash } from "../components/OAuthConnectingSplash";
-import { completeNativeOAuthReturn } from "../lib/completeNativeOAuthReturn";
+import { completeNativeOAuthReturn, isNativeOAuthReturnInFlight } from "../lib/completeNativeOAuthReturn";
 import { scrubOAuthTokensFromNativeWindow } from "../lib/scrubOAuthUrlFromWindow";
 
 const GOOGLE_SET_SESSION_MS = 8000;
@@ -111,6 +111,10 @@ function NativeOAuthCallbackGuard() {
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+    if (isNativeOAuthReturnInFlight()) {
+      console.log("NATIVE_OAUTH_CALLBACK_GUARD_SKIP", "in_flight");
+      return;
+    }
     scrubOAuthTokensFromNativeWindow("#/auth");
     const stashed = peekOAuthCallbackUrl();
     if (stashed) {

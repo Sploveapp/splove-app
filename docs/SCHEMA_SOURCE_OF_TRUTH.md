@@ -1,7 +1,7 @@
 # Schéma Supabase — source de vérité
 
 > Généré par `npm run schema:check` — ne pas éditer les sections « Inventaire » à la main.
-> Dernière vérification : 2026-06-11
+> Dernière vérification : 2026-06-20
 
 ## Rôle
 
@@ -130,6 +130,7 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 - `113_push_notifications.sql`
 - `114_profiles_rls_conversation_windows_security.sql`
 - `117_push_environment_security.sql`
+- `118_schema_drift_missing_columns.sql`
 
 ## Tables officielles (47)
 

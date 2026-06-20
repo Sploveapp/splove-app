@@ -4,8 +4,6 @@ import { establishSupabaseSessionFromOAuthCallbackUrl } from "./oauthCallbackPar
 import {
   setOauthProcessingLock,
 } from "./oauthCallbackLock";
-import { beginPostOAuthSplash } from "./postOAuthSplash";
-import { closeCapacitorOAuthBrowser } from "./capacitorOAuth";
 import { clearOAuthCallbackUrl } from "./oauthCallbackUrlStash";
 import { scrubOAuthTokensFromNativeWindow } from "./scrubOAuthUrlFromWindow";
 import { isNativeCapacitorApp } from "./authRedirect";
@@ -13,20 +11,24 @@ import { abortGoogleSignInFlow, completePostGoogleAuth } from "./postGoogleAuthC
 
 let nativeOAuthReturnInFlight = false;
 
+export function isNativeOAuthReturnInFlight(): boolean {
+  return nativeOAuthReturnInFlight;
+}
+
 /**
  * Traite le retour OAuth natif (splove://…) sans exposer #/auth/callback ni tokens dans le WebView.
  */
 export async function completeNativeOAuthReturn(deepLinkUrl: string): Promise<boolean> {
   if (!isNativeCapacitorApp()) return false;
-  if (nativeOAuthReturnInFlight) return false;
+  if (nativeOAuthReturnInFlight) {
+    console.log("NATIVE_OAUTH_RETURN_SKIP", "in_flight");
+    return false;
+  }
   nativeOAuthReturnInFlight = true;
 
   setOauthProcessingLock();
-  beginPostOAuthSplash();
-  scrubOAuthTokensFromNativeWindow("#/auth");
 
   try {
-    await closeCapacitorOAuthBrowser();
     if (import.meta.env.DEV) {
       console.log("NATIVE_OAUTH_RETURN_START");
     }
@@ -40,6 +42,8 @@ export async function completeNativeOAuthReturn(deepLinkUrl: string): Promise<bo
       abortGoogleSignInFlow();
       return false;
     }
+    console.log("SESSION_SET_OR_EXCHANGE_OK", { method: sessionOutcome.method });
+    scrubOAuthTokensFromNativeWindow("#/auth");
 
     const synced = await requestAuthSessionSync();
     if (!synced) {

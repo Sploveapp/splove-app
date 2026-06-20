@@ -2,7 +2,6 @@ import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
 import { Capacitor } from "@capacitor/core";
 import { supabase } from "./supabase";
-import { authCallbackHashRouteFromOAuthUrl } from "./oauthCallbackParams";
 import {
   isForbiddenOAuthRedirectTarget,
   isGoogleOAuthNativePlatform,
@@ -13,7 +12,23 @@ import {
 } from "./authRedirect";
 import { isOauthProcessingLocked, setOauthProcessingLock } from "./oauthCallbackLock";
 import { GOOGLE_OAUTH_USER_ERROR_MSG } from "./googleOAuthFlow";
-import { dismissPostOAuthSplash } from "./postOAuthSplash";
+import { completeNativeOAuthReturn } from "./completeNativeOAuthReturn";
+import { stashAuthOAuthUserMessage } from "./authOAuthUserMessage";
+import {
+  awaitGoogleSignInOverlayPaint,
+  dismissGoogleSignInOverlayIfIdle,
+  hideGoogleSignInOverlay,
+  logGoogleSignInBrowserOpen,
+  logGoogleSignInCallbackReceived,
+  showGoogleSignInOverlay,
+} from "./googleSignInOverlay";
+import { forceReleaseOAuthUx } from "./oauthUxRelease";
+import { logPkceStorageKeys } from "./oauthPkceDiagnostics";
+import { buildOAuthGoogleStartBrowserUrl } from "./oauthGoogleStartUrl";
+import { resolveGoogleOAuthBrowserUrl } from "./oauthGoogleBrowserUrl";
+
+const OAUTH_CALLBACK_STALL_MS = 8_000;
+let oauthDeepLinkInFlight = false;
 
 const OAUTH_CALLBACK_STORAGE_KEY = "splove_oauth_callback_url";
 export const SPLOVE_OAUTH_BROWSER_CLOSED_EVENT = "splove-oauth-browser-closed";
@@ -71,8 +86,13 @@ export function releaseGoogleOAuthFlowLock(): void {
 async function closeOAuthBrowser(): Promise<void> {
   try {
     await Browser.close();
-  } catch {
-    /* ignore */
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/no active window to close/i.test(msg)) {
+      console.log("BROWSER_CLOSE_SKIP", "no_active_window");
+      return;
+    }
+    console.warn("BROWSER_CLOSE_FAIL", msg);
   }
 }
 
@@ -142,15 +162,44 @@ async function routeOAuthDeepLink(url: string): Promise<void> {
     return;
   }
 
+  if (oauthDeepLinkInFlight) {
+    console.log("OAUTH_RETURN_SKIP", "already_in_flight");
+    return;
+  }
+  oauthDeepLinkInFlight = true;
+
   logUrlForXcode("OAUTH_RETURN", trimmed);
 
+  logGoogleSignInCallbackReceived();
   await closeOAuthBrowser();
   stashOAuthCallbackUrl(trimmed);
   setOauthProcessingLock();
 
-  const hashRoute = authCallbackHashRouteFromOAuthUrl(trimmed);
-  const hash = hashRoute.startsWith("#") ? hashRoute : `#${hashRoute}`;
-  window.location.hash = hash;
+  console.log("CALLBACK_PROCESS_START");
+
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+  stallTimer = setTimeout(() => {
+    if (!isOauthProcessingLocked()) return;
+    console.warn("CALLBACK_PROCESS_STALL", { afterMs: OAUTH_CALLBACK_STALL_MS });
+    forceReleaseOAuthUx("callback_stall_timeout");
+    stashAuthOAuthUserMessage(GOOGLE_OAUTH_USER_ERROR_MSG);
+    window.location.hash = "#/auth";
+  }, OAUTH_CALLBACK_STALL_MS);
+
+  try {
+    const ok = await completeNativeOAuthReturn(trimmed);
+    if (!ok) {
+      forceReleaseOAuthUx("callback_process_failed");
+    }
+  } catch (e) {
+    console.warn("CALLBACK_PROCESS_ERROR", e instanceof Error ? e.message : e);
+    forceReleaseOAuthUx("callback_process_exception");
+    stashAuthOAuthUserMessage(GOOGLE_OAUTH_USER_ERROR_MSG);
+    window.location.hash = "#/auth";
+  } finally {
+    oauthDeepLinkInFlight = false;
+    if (stallTimer != null) clearTimeout(stallTimer);
+  }
 }
 
 let capacitorAuthBridgeReady = false;
@@ -169,7 +218,7 @@ export function initCapacitorAuthBridge(): void {
   void Browser.addListener("browserFinished", () => {
     console.log("OAUTH_BROWSER_FINISHED");
     if (isOauthProcessingLocked()) return;
-    dismissPostOAuthSplash();
+    dismissGoogleSignInOverlayIfIdle();
     window.dispatchEvent(new CustomEvent(SPLOVE_OAUTH_BROWSER_CLOSED_EVENT));
   });
 }
@@ -192,22 +241,26 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
 
     if (error) {
       console.log("GOOGLE_AUTH_URL", error.message);
+      hideGoogleSignInOverlay("oauth_url_error");
       return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
     }
 
     const url = typeof data?.url === "string" ? data.url.trim() : "";
     logGoogleAuthUrlDiagnostics(url, "GOOGLE_AUTH_URL");
     if (!url) {
+      hideGoogleSignInOverlay("missing_oauth_url");
       return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
     }
 
     if (isForbiddenOAuthRedirectTarget(url)) {
       console.error("GOOGLE_AUTH_URL_FORBIDDEN_REDIRECT", "redirect_to points to localhost");
+      hideGoogleSignInOverlay("forbidden_redirect");
       return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
     }
 
     console.log("OAUTH_OPEN_MODE", openMode);
     logGoogleAuthUrlDiagnostics(url, "BROWSER_OPEN");
+    await logPkceStorageKeys("PKCE_KEYS_AFTER_SIGNIN");
     console.log("BROWSER_OPEN_START");
 
     if (useSupabaseRedirect) {
@@ -217,9 +270,33 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
     }
 
     if (openMode === "window-location") {
+      showGoogleSignInOverlay();
+      await awaitGoogleSignInOverlayPaint();
       window.location.href = url;
     } else {
-      await Browser.open({ url, presentationStyle: "fullscreen" });
+      showGoogleSignInOverlay();
+      await awaitGoogleSignInOverlayPaint();
+      logGoogleSignInBrowserOpen();
+
+      let browserTargetUrl = url;
+      if (isIos) {
+        const googleDirectUrl = await resolveGoogleOAuthBrowserUrl(url);
+        if (googleDirectUrl) {
+          browserTargetUrl = googleDirectUrl;
+          if (import.meta.env.DEV) {
+            console.log("OAUTH_BROWSER_OPEN_GOOGLE_DIRECT");
+          }
+        } else {
+          browserTargetUrl = buildOAuthGoogleStartBrowserUrl(url);
+          if (import.meta.env.DEV) {
+            console.log("OAUTH_RESOLVE_FALLBACK_START_PAGE");
+          }
+        }
+      } else {
+        browserTargetUrl = buildOAuthGoogleStartBrowserUrl(url);
+      }
+
+      await Browser.open({ url: browserTargetUrl, presentationStyle: "fullscreen" });
     }
 
     console.log("BROWSER_OPEN_DONE");

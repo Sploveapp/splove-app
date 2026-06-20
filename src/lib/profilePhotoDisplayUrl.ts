@@ -37,6 +37,46 @@ export type ProfilePhotoUrlFields = {
   photo_moderation_overall?: string | null;
 };
 
+/** Ordre affichage Profil / Move : portrait → main → avatar → fullbody. */
+export const PORTRAIT_FIRST_PROFILE_PHOTO_FIELD_ORDER = [
+  "portrait_url",
+  "main_photo_url",
+  "avatar_url",
+  "fullbody_url",
+] as const;
+
+export type PortraitFirstProfilePhotoField =
+  (typeof PORTRAIT_FIRST_PROFILE_PHOTO_FIELD_ORDER)[number];
+
+function trimProfilePhotoStoredRef(value: unknown): string | null {
+  const t = typeof value === "string" ? value.trim() : "";
+  return t || null;
+}
+
+/** Candidates uniques portrait → main → avatar → fullbody (même chaîne que Profil / EditProfile). */
+export function buildPortraitFirstProfilePhotoRefCandidates(
+  profile: ProfilePhotoUrlFields | null | undefined,
+): { refs: string[]; fieldByRef: Record<string, PortraitFirstProfilePhotoField> } {
+  const refs: string[] = [];
+  const fieldByRef: Record<string, PortraitFirstProfilePhotoField> = {};
+  const seen = new Set<string>();
+  for (const key of PORTRAIT_FIRST_PROFILE_PHOTO_FIELD_ORDER) {
+    const ref = trimProfilePhotoStoredRef(profile?.[key]);
+    if (!ref || seen.has(ref)) continue;
+    seen.add(ref);
+    refs.push(ref);
+    fieldByRef[ref] = key;
+  }
+  return { refs, fieldByRef };
+}
+
+/** Première référence portrait → main → avatar → fullbody. */
+export function pickPortraitFirstProfilePhotoStoredRef(
+  profile: ProfilePhotoUrlFields | null | undefined,
+): string | null {
+  return buildPortraitFirstProfilePhotoRefCandidates(profile).refs[0] ?? null;
+}
+
 /** Photo principale : main → portrait → avatar (sans fullbody). */
 export function pickPrimaryProfilePhotoStoredRef(
   profile: ProfilePhotoUrlFields | null | undefined,

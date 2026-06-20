@@ -64,13 +64,15 @@ import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
 import { usePremium } from "../hooks/usePremium";
 import { useSplovePlus } from "../hooks/useSplovePlus";
 import { useTranslation } from "../i18n/useTranslation";
-import { useProfilePhotoResolvedDisplay, resolveProfilePhotoFieldFromStoredRef } from "../hooks/useProfilePhotoSignedUrl";
+import { useProfilePhotoDisplaySrc } from "../hooks/useProfilePhotoDisplaySrc";
+import { useIosCapacitorImageDisplay } from "../hooks/useIosCapacitorImageDisplay";
 import {
+  buildPortraitFirstProfilePhotoRefCandidates,
   logProfilePhotoUiDecision,
-  pickSecondaryProfilePhotoStoredRef,
+  pickPortraitFirstProfilePhotoStoredRef,
   resolveProfilePhotoUiSrc,
+  type ProfilePhotoUrlFields,
 } from "../lib/profilePhotoDisplayUrl";
-import { getUserMainPhotoUrl } from "../lib/userMainPhoto";
 import { logPhotoPublicProfileResolve } from "../lib/profilePhotoMainLog";
 import { DiscoverProfileCard } from "../components/discover/DiscoverProfileCard";
 import { MoveProfileSkeleton } from "../components/discover/MoveProfileSkeleton";
@@ -232,15 +234,120 @@ type Profile = {
 
 /** Resolve photo URL from whatever columns the feed view row actually includes. */
 function getProfileDisplayPhotoUrl(p: Profile): string | null {
-  return getUserMainPhotoUrl(p);
+  return pickPortraitFirstProfilePhotoStoredRef(p);
 }
 
-/** Deuxième visuel pour l’aperçu (évite le doublon de la photo principale). */
-function getSecondaryPhotoUrl(p: Profile): string | null {
-  const main = getProfileDisplayPhotoUrl(p);
-  const secondary = pickSecondaryProfilePhotoStoredRef(p);
-  if (secondary && secondary !== main) return secondary;
-  return null;
+function useMoveProfilePhotoFromRefs(
+  refs: string[],
+  fieldByRef: Record<string, string>,
+  profileId: string | null | undefined,
+  logSource: string,
+  stableKey: string,
+) {
+  const logContext = useMemo(
+    () => ({
+      profileId: profileId ?? null,
+      source: logSource,
+      fieldByRef,
+    }),
+    [profileId, logSource, stableKey],
+  );
+
+  const photoDisplay = useProfilePhotoDisplaySrc(refs, { logContext });
+  const resolvedSrc = resolveProfilePhotoUiSrc(photoDisplay.activeRef, photoDisplay.src);
+  const iosPhoto = useIosCapacitorImageDisplay(
+    photoDisplay.isFailed && !photoDisplay.src ? null : resolvedSrc,
+  );
+  const displaySrc = iosPhoto.displaySrc ?? resolvedSrc;
+  const hasStoredRef = refs.length > 0;
+  const showImg =
+    Boolean(displaySrc) &&
+    !photoDisplay.isFailed &&
+    !(iosPhoto.resolutionFailed && !iosPhoto.usingDataUrl);
+  const isPending =
+    hasStoredRef &&
+    !showImg &&
+    (photoDisplay.isLoading || iosPhoto.isResolving);
+
+  const onImageError = useCallback(() => {
+    photoDisplay.onImageError();
+    iosPhoto.onImageError();
+  }, [photoDisplay.onImageError, iosPhoto.onImageError]);
+
+  return {
+    photoRaw: photoDisplay.activeRef ?? refs[0] ?? null,
+    photoField: photoDisplay.activeField,
+    displaySrc: showImg ? displaySrc : null,
+    isPending,
+    hasStoredRef,
+    onImageLoad: photoDisplay.onImageLoad,
+    onImageError,
+  };
+}
+
+function useMoveProfilePrimaryPhoto(
+  profile: ProfilePhotoUrlFields & { id?: string | null },
+  logSource: string,
+) {
+  const candidates = useMemo(
+    () => buildPortraitFirstProfilePhotoRefCandidates(profile),
+    [
+      profile.id,
+      profile.portrait_url,
+      profile.main_photo_url,
+      profile.avatar_url,
+      profile.fullbody_url,
+    ],
+  );
+  const refsKey = candidates.refs.join("\0");
+
+  return useMoveProfilePhotoFromRefs(
+    candidates.refs,
+    candidates.fieldByRef,
+    profile.id,
+    logSource,
+    refsKey,
+  );
+}
+
+function useDiscoverPreviewPhotoSlots(
+  profile: ProfilePhotoUrlFields & { id?: string | null },
+) {
+  const slots = useMemo(() => {
+    const { refs, fieldByRef } = buildPortraitFirstProfilePhotoRefCandidates(profile);
+    const refsKey = refs.join("\0");
+    return {
+      refsKey,
+      fieldByRef,
+      /** Slot 1 : première ref de la chaîne (portrait → main → avatar → fullbody). */
+      primaryRefs: refs.length > 0 ? [refs[0]!] : [],
+      /** Slot 2 : refs distinctes suivantes — pas de repli sur le slot 1. */
+      secondaryRefs: refs.length > 1 ? refs.slice(1) : [],
+    };
+  }, [
+    profile.id,
+    profile.portrait_url,
+    profile.main_photo_url,
+    profile.avatar_url,
+    profile.fullbody_url,
+  ]);
+
+  const primary = useMoveProfilePhotoFromRefs(
+    slots.primaryRefs,
+    slots.fieldByRef,
+    profile.id,
+    "discover.preview.primary",
+    `${slots.refsKey}:primary`,
+  );
+  const secondary = useMoveProfilePhotoFromRefs(
+    slots.secondaryRefs,
+    slots.fieldByRef,
+    profile.id,
+    "discover.preview.secondary",
+    `${slots.refsKey}:secondary`,
+  );
+
+  return { primary, secondary };
 }
 
 type ProfileWithAffinity = Profile & {
@@ -270,6 +377,7 @@ type DiscoverSwipeHistoryEntry = { profile: ProfileWithAffinity; action: "like" 
 
 type DiscoverProfileDetailPreviewProps = {
   profile: ProfileWithAffinity;
+  viewerId: string | null;
   mySportMatchKeys: Set<string>;
   myCity: string | null;
   discoverMenuProfileId: string | null;
@@ -285,6 +393,7 @@ type DiscoverProfileDetailPreviewProps = {
 
 function DiscoverProfileDetailPreview({
   profile,
+  viewerId,
   mySportMatchKeys,
   myCity,
   discoverMenuProfileId,
@@ -297,38 +406,27 @@ function DiscoverProfileDetailPreview({
   onClose,
   t,
 }: DiscoverProfileDetailPreviewProps) {
-  const photoMainRaw = getProfileDisplayPhotoUrl(profile);
-  const photoSecondRaw = getSecondaryPhotoUrl(profile);
-  const photoMainDisplay = useProfilePhotoResolvedDisplay(photoMainRaw, {
-    deferMs: DISCOVER_PHOTO_SIGN_DEFER_MS,
-    discoverContext: {
-      profileId: profile.id,
-      photoField: resolveProfilePhotoFieldFromStoredRef(profile, photoMainRaw),
-    },
-  });
-  const photoSecondDisplay = useProfilePhotoResolvedDisplay(photoSecondRaw, {
-    deferMs: DISCOVER_PHOTO_SIGN_DEFER_MS,
-    discoverContext: {
-      profileId: profile.id,
-      photoField: resolveProfilePhotoFieldFromStoredRef(profile, photoSecondRaw),
-    },
-  });
-  const photoMain = resolveProfilePhotoUiSrc(photoMainRaw, photoMainDisplay.src) ?? "";
-  const photoSecond = resolveProfilePhotoUiSrc(photoSecondRaw, photoSecondDisplay.src) ?? "";
+  const { primary: photoMainState, secondary: photoSecondState } =
+    useDiscoverPreviewPhotoSlots(profile);
+  const photoMainRaw = photoMainState.photoRaw;
+  const photoSecondRaw = photoSecondState.photoRaw;
+  const photoMain = photoMainState.displaySrc ?? "";
+  const photoSecond = photoSecondState.displaySrc ?? "";
+  const showMeetingIntentBadge = Boolean(viewerId && profile.id !== viewerId);
 
   useEffect(() => {
     logPhotoPublicProfileResolve("discover.preview", {
       profileId: profile.id,
       storedRef: photoMainRaw,
       displaySrc: photoMain || null,
-      isLoading: photoMainDisplay.isLoading,
-      isFailed: Boolean(photoMainRaw && !photoMain && !photoMainDisplay.isLoading),
+      isLoading: photoMainState.isPending,
+      isFailed: Boolean(photoMainRaw && !photoMain && !photoMainState.isPending),
     });
   }, [
     profile.id,
     photoMainRaw,
     photoMain,
-    photoMainDisplay.isLoading,
+    photoMainState.isPending,
   ]);
   const galleryRawRefs = useMemo(
     () => uniqueProfilePhotoRefsOrdered(profile),
@@ -375,13 +473,13 @@ function DiscoverProfileDetailPreview({
                 src={photoMain}
                 alt={profile.first_name ? `Photo de ${profile.first_name}` : "Photo du profil"}
                 className="absolute inset-0 h-full w-full cursor-pointer object-cover"
-                onError={photoMainDisplay.onImageError}
+                onError={photoMainState.onImageError}
                 onClick={(e) => {
                   e.stopPropagation();
                   openPhotoViewerFromRaw(photoMainRaw);
                 }}
               />
-            ) : photoMainRaw && photoMainDisplay.isLoading ? (
+            ) : photoMainRaw && photoMainState.isPending ? (
               <div
                 className="absolute inset-0 bg-zinc-900"
                 style={{ background: "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)" }}
@@ -446,11 +544,17 @@ function DiscoverProfileDetailPreview({
                 src={photoSecond}
                 alt=""
                 className="absolute inset-0 h-full w-full cursor-pointer object-cover"
-                onError={photoSecondDisplay.onImageError}
+                onError={photoSecondState.onImageError}
                 onClick={(e) => {
                   e.stopPropagation();
                   openPhotoViewerFromRaw(photoSecondRaw);
                 }}
+              />
+            ) : photoSecondState.hasStoredRef && photoSecondState.isPending ? (
+              <div
+                className="absolute inset-0 bg-zinc-900"
+                style={{ background: "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)" }}
+                aria-busy
               />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center bg-app-border/90">
@@ -469,7 +573,7 @@ function DiscoverProfileDetailPreview({
                 <span className="ml-1 text-sm font-medium text-app-muted">· {heightPreview}</span>
               ) : null}
             </h2>
-            {intentPreview ? (
+            {showMeetingIntentBadge && intentPreview ? (
               <span className="rounded-full bg-app-border/90 px-2.5 py-1 text-[11px] font-medium leading-tight text-app-text ring-1 ring-app-border">
                 {intentPreview}
               </span>
@@ -915,8 +1019,6 @@ function discoverLogStageCount(stage: string, count: number, extra?: Record<stri
 }
 
 const DISCOVER_DISPLAY_LIMIT = 10;
-/** Signatures storage Discover : après le premier paint (skeleton / carte sans photo bloquante). */
-const DISCOVER_PHOTO_SIGN_DEFER_MS = 400;
 /** Sonde navigation externe (profil hors pile) — pas le flux principal Discover. */
 const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
 
@@ -934,15 +1036,8 @@ const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
   profile: ProfileWithAffinity;
   layer: "mid" | "back";
 }) {
-  const photoRaw = getProfileDisplayPhotoUrl(profile);
-  const photoDisplay = useProfilePhotoResolvedDisplay(photoRaw, {
-    deferMs: DISCOVER_PHOTO_SIGN_DEFER_MS,
-    discoverContext: {
-      profileId: profile.id,
-      photoField: resolveProfilePhotoFieldFromStoredRef(profile, photoRaw),
-    },
-  });
-  const photoUrl = resolveProfilePhotoUiSrc(photoRaw, photoDisplay.src) ?? "";
+  const photoState = useMoveProfilePrimaryPhoto(profile, "discover.stack_silhouette");
+  const photoUrl = photoState.displaySrc ?? "";
   const isBack = layer === "back";
   if (!hasFiniteDiscoverCoordinates(profile)) {
     if (import.meta.env.DEV) {
@@ -971,7 +1066,9 @@ const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
       <div className="flex h-full flex-col overflow-hidden rounded-[26px] bg-zinc-950 shadow-[0_24px_55px_rgba(0,0,0,0.5)] ring-1 ring-white/[0.06]">
         <div className="relative min-h-0 flex-1 overflow-hidden">
           {photoUrl ? (
-            <img src={photoUrl} alt="" className="h-full w-full object-cover" onError={photoDisplay.onImageError} />
+            <img src={photoUrl} alt="" className="h-full w-full object-cover" onError={photoState.onImageError} />
+          ) : photoState.isPending ? (
+            <div className="h-full min-h-[240px] bg-zinc-900" aria-busy />
           ) : (
             <div className="flex h-full min-h-[240px] items-center justify-center bg-zinc-900">
               <IconProfileAvatarPlaceholder className="text-app-muted/45" size={56} />
@@ -1136,6 +1233,7 @@ function isFeedQueryColumnError(err: { message?: string; details?: string; code?
 
 type DiscoverSwipeCardProps = {
   profile: ProfileWithAffinity;
+  viewerId: string | null;
   /** Ville du viewer (indication floue uniquement). */
   viewerCity: string | null;
   /** Clés de matching (groupes + sports uniques), pas les libellés bruts. */
@@ -1155,6 +1253,7 @@ type DiscoverSwipeCardProps = {
 
 const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   profile,
+  viewerId,
   viewerCity,
   mySportMatchKeys,
   discoverMenuProfileId,
@@ -1168,13 +1267,11 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   restoredProfileId,
   immersive = false,
 }: DiscoverSwipeCardProps) {
-  const photoRaw = getProfileDisplayPhotoUrl(profile);
-  const photoField = resolveProfilePhotoFieldFromStoredRef(profile, photoRaw);
-  const photoDisplay = useProfilePhotoResolvedDisplay(photoRaw, {
-    deferMs: DISCOVER_PHOTO_SIGN_DEFER_MS,
-    discoverContext: { profileId: profile.id, photoField },
-  });
-  const photo = resolveProfilePhotoUiSrc(photoRaw, photoDisplay.src) ?? "";
+  const photoState = useMoveProfilePrimaryPhoto(profile, "discover.swipe_card");
+  const photoRaw = photoState.photoRaw;
+  const photoField = photoState.photoField;
+  const photo = photoState.displaySrc ?? "";
+  const showMeetingIntentBadge = Boolean(viewerId && profile.id !== viewerId);
   const strongAffinity = profile.commonSportsCount >= 2;
   const nativeBottomNav = usesNativeBottomNavigation();
 
@@ -1184,28 +1281,28 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
     PhotoRenderLog.displaySrc({
       screen: "Move",
       displaySrc: photo,
-      resolvedUrl: photoDisplay.src,
+      resolvedUrl: photo,
       profile,
       extra: { profileId: profile.id, slot: "primary" },
     });
     PhotoRenderLog.resolvedUrl({
       screen: "Move",
       displaySrc: photo,
-      resolvedUrl: photoDisplay.src,
+      resolvedUrl: photo,
       profile,
       extra: { profileId: profile.id, slot: "primary", photoField, photoRaw },
     });
-  }, [profile, photoRaw, photo, photoDisplay.src, photoField]);
+  }, [profile, photoRaw, photo, photoField]);
 
   const movePhotoImgHandlers = chainPhotoRenderHandlers(
     {
       screen: "Move",
       displaySrc: photo,
-      resolvedUrl: photoDisplay.src,
+      resolvedUrl: photo,
       profile,
       extra: { profileId: profile.id, slot: "primary", photoField, photoRaw },
     },
-    { onError: photoDisplay.onImageError },
+    { onError: photoState.onImageError, onLoad: photoState.onImageLoad },
   );
 
   const [dx, setDx] = useState(0);
@@ -1337,6 +1434,8 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
         viewerCity={viewerCity}
         mySportMatchKeys={mySportMatchKeys}
         photoUrl={photo}
+        photoPending={photoState.isPending}
+        showMeetingIntentBadge={showMeetingIntentBadge}
         discoverMenuProfileId={discoverMenuProfileId}
         setDiscoverMenuProfileId={setDiscoverMenuProfileId}
         restoredProfileId={restoredProfileId}
@@ -4097,6 +4196,7 @@ export default function Discover() {
                   >
                     <DiscoverSwipeCard
                       profile={profilesCardStack[0]}
+                      viewerId={currentUserId || null}
                       viewerCity={myCity}
                       mySportMatchKeys={mySportMatchKeys}
                       discoverMenuProfileId={discoverMenuProfileId}
@@ -4189,6 +4289,7 @@ export default function Discover() {
       {!showMoveSkeleton && previewProfile ? (
         <DiscoverProfileDetailPreview
           profile={previewProfile}
+          viewerId={currentUserId || null}
           mySportMatchKeys={mySportMatchKeys}
           myCity={myCity}
           discoverMenuProfileId={discoverMenuProfileId}

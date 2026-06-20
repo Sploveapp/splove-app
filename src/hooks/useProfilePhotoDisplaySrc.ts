@@ -59,12 +59,19 @@ function logError(source: string): void {
   if (import.meta.env.DEV) console.log(LOG, "load error", source.slice(0, 96));
 }
 
+const connectedPhotoLogDedup = new Set<string>();
+
 function emitConnectedPhotoLog(
   ctx: ConnectedProfilePhotoLogContext | undefined,
   event: string,
   payload: Record<string, unknown>,
 ): void {
-  if (!ctx) return;
+  if (!import.meta.env.DEV || !ctx) return;
+  const storedRef =
+    typeof payload.storedRef === "string" ? payload.storedRef : String(payload.storedRef ?? "");
+  const dedupKey = `${ctx.source ?? "profile.screen"}|${event}|${storedRef}`;
+  if (connectedPhotoLogDedup.has(dedupKey)) return;
+  connectedPhotoLogDedup.add(dedupKey);
   console.log(`[SPLovePhoto][connected-profile] ${event}`, {
     userId: ctx.userId ?? null,
     profileId: ctx.profileId ?? null,
@@ -189,8 +196,13 @@ export function useProfilePhotoDisplaySrc(
   const logContextRef = useRef(logContext);
   logContextRef.current = logContext;
 
-  const refs = useMemo(() => normalizeRefs(refsInput), [refsInput]);
-  const refsKey = refs.join("\0");
+  const refsKey = useMemo(() => normalizeRefs(refsInput).join("\0"), [
+    Array.isArray(refsInput) ? refsInput.join("\0") : refsInput ?? "",
+  ]);
+  const refs = useMemo(
+    () => (refsKey ? refsKey.split("\0") : []),
+    [refsKey],
+  );
 
   const [refIndex, setRefIndex] = useState(0);
   const [urlCandidates, setUrlCandidates] = useState<string[]>([]);
@@ -330,7 +342,7 @@ export function useProfilePhotoDisplaySrc(
         candidateCount: refs.length,
       });
     })();
-  }, [refsKey, refs, applyRef]);
+  }, [refsKey, applyRef]);
 
   const activeRef = refs[refIndex] ?? refs[0] ?? null;
   const syncFallback = syncFallbackForRef(activeRef);

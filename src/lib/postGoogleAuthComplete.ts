@@ -1,12 +1,8 @@
 import { supabase } from "./supabase";
 import { ensureProfileRowForAuthUserId } from "./authProfileSync";
 import { resolvePostOAuthPath } from "./profileSelect";
+import { isNativeCapacitorApp } from "./authRedirect";
 import {
-  clearAllOAuthSessionLocks,
-  clearOauthProcessingLock,
-} from "./oauthCallbackLock";
-import {
-  forceClearPostOAuthSplash,
   POST_OAUTH_ROUTING_SAFETY_MS,
 } from "./postOAuthSplash";
 import { stashAuthOAuthUserMessage } from "./authOAuthUserMessage";
@@ -15,18 +11,32 @@ import { clearOAuthCallbackUrl } from "./oauthCallbackUrlStash";
 import { logOAuthRedirect, markOAuthSessionAt } from "./postLoginPerf";
 import { redactUserId } from "./oauthLogSanitize";
 import { scrubOAuthTokensFromNativeWindow } from "./scrubOAuthUrlFromWindow";
+import { forceReleaseOAuthUx } from "./oauthUxRelease";
 
-function releasePostOAuthOverlayAndLocks(): void {
-  clearOauthProcessingLock();
-  clearAllOAuthSessionLocks();
-  forceClearPostOAuthSplash();
+function navigateAfterOAuth(path: string): void {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  const hashTarget = `#${normalized}`;
+  scrubOAuthTokensFromNativeWindow();
+
+  if (isNativeCapacitorApp()) {
+    const origin = window.location.origin || "https://localhost";
+    try {
+      window.history.replaceState(null, "", `${origin}/${hashTarget}`);
+    } catch {
+      /* WKWebView — fallback hash */
+    }
+  }
+
+  if (window.location.hash !== hashTarget) {
+    window.location.hash = hashTarget;
+  }
 }
 
 function applyHashRoute(path: string, reason: string): void {
   const normalized = path.startsWith("/") ? path : `/${path}`;
-  scrubOAuthTokensFromNativeWindow();
-  releasePostOAuthOverlayAndLocks();
-  window.location.hash = `#${normalized}`;
+  console.log("ROUTE_AFTER_AUTH", { path: normalized, reason });
+  forceReleaseOAuthUx("route_after_auth");
+  navigateAfterOAuth(normalized);
   logOAuthRedirect();
   console.log("AUTH_REDIRECT_ONBOARDING", normalized === "/onboarding" ? { reason, native: true } : undefined);
   if (normalized === "/move") {
@@ -55,7 +65,7 @@ export async function completePostGoogleAuth(sessionUserId: string, reason: stri
     return true;
   }
 
-  let routePath: "/move" | "/onboarding" | "/" = "/";
+  let routePath: "/move" | "/onboarding" | "/" = "/onboarding";
   let routed = false;
 
   const applyPostOAuthRoute = (path: string) => {
@@ -72,19 +82,26 @@ export async function completePostGoogleAuth(sessionUserId: string, reason: stri
   }, POST_OAUTH_ROUTING_SAFETY_MS);
 
   try {
-    await ensureProfileRowForAuthUserId(sessionUserId);
-    routePath = await resolvePostOAuthPath(supabase, sessionUserId);
-    console.log("[BOOT] route decision", { status: "ready", route: routePath, reason });
+    try {
+      await ensureProfileRowForAuthUserId(sessionUserId);
+      routePath = await resolvePostOAuthPath(supabase, sessionUserId);
+    } catch (e) {
+      console.warn("[PostOAuth] profile/route resolution failed — fallback onboarding", e);
+      routePath = "/onboarding";
+    }
 
+    console.log("[BOOT] route decision", { status: "ready", route: routePath, reason });
     applyPostOAuthRoute(routePath);
 
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     });
-
-    releasePostOAuthOverlayAndLocks();
   } finally {
     window.clearTimeout(safetyTimer);
+    if (!routed) {
+      applyPostOAuthRoute(routePath);
+    }
+    forceReleaseOAuthUx("post_oauth_finally");
   }
 
   return true;
@@ -94,6 +111,6 @@ export function abortGoogleSignInFlow(): void {
   clearOAuthCallbackUrl();
   scrubOAuthTokensFromNativeWindow("#/auth");
   stashAuthOAuthUserMessage(GOOGLE_OAUTH_USER_ERROR_MSG);
+  forceReleaseOAuthUx("flow_aborted");
   window.location.hash = "#/auth";
-  releasePostOAuthOverlayAndLocks();
 }

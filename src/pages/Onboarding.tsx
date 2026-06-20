@@ -98,6 +98,12 @@ import {
   sportMatchesFirstThreeLetters,
   sportPictogramForSlug,
 } from "../lib/onboardingSportsQuickPick";
+import {
+  SPORT_PRACTICE_LEVELS,
+  hasValidSportPracticeLevel,
+  normalizeSportPracticeLevel,
+  sportPracticeLevelI18nKey,
+} from "../lib/sportPracticeLevel";
 
 function isSafePhotoPreviewSrc(src: string | null | undefined): boolean {
   const value = typeof src === "string" ? src.trim() : "";
@@ -1011,7 +1017,9 @@ export default function Onboarding() {
       if (currentStep >= 10) payload.practice_preferences = practicePreferences;
       if (currentStep >= 5) payload.sport_match_preference = sportMatchPreference;
       payload.onboarding_sports_count = selectedSportIds.length;
-      payload.onboarding_sports_with_level_count = selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length;
+      payload.onboarding_sports_with_level_count = selectedSportIds.filter((id) =>
+        hasValidSportPracticeLevel(sportLevelsById[String(id)]),
+      ).length;
       if (import.meta.env.DEV) {
         console.log("PROFILE_UPDATE_PAYLOAD", payload);
       }
@@ -1055,7 +1063,7 @@ export default function Onboarding() {
               validSportIds.map((sportId) => ({
                 profile_id: userId,
                 sport_id: sportId,
-                level: sportLevelsById[String(sportId)] ?? null,
+                level: normalizeSportPracticeLevel(sportLevelsById[String(sportId)]),
               }))
             )
             .select("sport_id");
@@ -1329,7 +1337,8 @@ export default function Onboarding() {
           const levels: Record<string, string> = {};
           for (const rowSport of rows) {
             const lv = (rowSport.level ?? "").trim();
-            if (lv) levels[String(rowSport.sport_id)] = lv;
+            const normalized = normalizeSportPracticeLevel(lv);
+            if (normalized) levels[String(rowSport.sport_id)] = normalized;
           }
           setSportLevelsById(levels);
         }
@@ -1555,18 +1564,11 @@ export default function Onboarding() {
     setStepHint(null);
   }, [step, confirm18, acceptTerms]);
 
-  /** Doit rester avant tout `return` — sinon hooks en moins si Splash. */
+  /** Purge les niveaux des sports désélectionnés (choix obligatoire par l'utilisateur). */
   useEffect(() => {
     setSportLevelsById((prev) => {
       const next = { ...prev };
       let changed = false;
-      for (const id of selectedSportIds) {
-        const k = String(id);
-        if (!next[k]) {
-          next[k] = "regular";
-          changed = true;
-        }
-      }
       for (const k of Object.keys(next)) {
         if (!selectedSportIds.some((id) => String(id) === k)) {
           delete next[k];
@@ -1664,7 +1666,7 @@ export default function Onboarding() {
     locationReady &&
     selectedSportIds.length >= 1 &&
     selectedSportIds.length <= 3 &&
-    selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)])) &&
+    selectedSportIds.every((id) => hasValidSportPracticeLevel(sportLevelsById[String(id)])) &&
     openToAdaptedPractice !== "" &&
     (portraitSavedUrl.trim() !== "" || portraitFile != null) &&
     (bodySavedUrl.trim() !== "" || bodyFile != null) &&
@@ -1687,7 +1689,7 @@ export default function Onboarding() {
     }
     if (selectedSportIds.length < 1) return t("onboarding_err_sport_min");
     if (selectedSportIds.length > 3) return t("onboarding_err_sport_max");
-    if (!selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)]))) {
+    if (!selectedSportIds.every((id) => hasValidSportPracticeLevel(sportLevelsById[String(id)]))) {
       return t("onboarding_err_sport_level");
     }
     if (openToAdaptedPractice === "") {
@@ -2091,7 +2093,7 @@ export default function Onboarding() {
         setStepHint(t("onboarding_err_sport_max"));
         return false;
       }
-      if (!selectedSportIds.every((id) => Boolean(sportLevelsById[String(id)]))) {
+      if (!selectedSportIds.every((id) => hasValidSportPracticeLevel(sportLevelsById[String(id)]))) {
         setStepHint(t("onboarding_err_sport_reselect"));
         return false;
       }
@@ -2565,7 +2567,9 @@ export default function Onboarding() {
         sport_phrase: sportPhraseOptional.trim() ? sportPhraseOptional.trim().slice(0, 500) : null,
         practice_preferences: practicePreferences,
         onboarding_sports_count: selectedSportIds.length,
-        onboarding_sports_with_level_count: selectedSportIds.filter((id) => Boolean(sportLevelsById[String(id)])).length,
+        onboarding_sports_with_level_count: selectedSportIds.filter((id) =>
+          hasValidSportPracticeLevel(sportLevelsById[String(id)]),
+        ).length,
         sport_match_preference: sportMatchPreference,
         needs_adapted_activities: needsAdaptedActivitiesForDb(adaptedAmenagements),
         open_to_adapted_activities: openToAdaptedPractice || null,
@@ -2904,7 +2908,7 @@ export default function Onboarding() {
         const rows = validSportIds.map((sportId) => ({
           profile_id: authUserId,
           sport_id: sportId,
-          level: sportLevelsById[String(sportId)] ?? null,
+          level: normalizeSportPracticeLevel(sportLevelsById[String(sportId)]),
         }));
         console.log("[Onboarding submit] sending data:", {
           table: "profile_sports",
@@ -3785,6 +3789,56 @@ export default function Onboarding() {
                       ))}
                     </div>
                   )}
+                  {selectedSports.length > 0 && (
+                    <div className="space-y-4">
+                      {selectedSports.map((s) => {
+                        const sportKey = String(s.id);
+                        const picto = sportPictogramForSlug(s.slug ?? null);
+                        const currentLevel = normalizeSportPracticeLevel(sportLevelsById[sportKey]);
+                        return (
+                          <div
+                            key={sportKey}
+                            className="rounded-2xl border border-app-border bg-app-card p-4 shadow-sm ring-1 ring-white/[0.04]"
+                          >
+                            <div className="mb-3 flex items-center gap-2.5">
+                              <span className="text-[1.15rem] leading-none" aria-hidden>
+                                {picto}
+                              </span>
+                              <span className="text-[14px] font-semibold text-app-text">{s.name}</span>
+                            </div>
+                            <span className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.12em] text-app-muted">
+                              {t("sport_practice_level_label")}
+                            </span>
+                            <div className="grid grid-cols-2 gap-2">
+                              {SPORT_PRACTICE_LEVELS.map((level) => {
+                                const active = currentLevel === level;
+                                return (
+                                  <motion.button
+                                    key={level}
+                                    type="button"
+                                    whileTap={{ scale: 0.97 }}
+                                    onClick={() =>
+                                      setSportLevelsById((prev) => ({ ...prev, [sportKey]: level }))
+                                    }
+                                    className="rounded-xl border-2 px-3 py-2.5 text-left text-[13px] font-semibold transition-shadow"
+                                    style={{
+                                      borderColor: active ? BRAND_BG : APP_BORDER,
+                                      background: active ? BRAND_BG : APP_CARD,
+                                      color: active ? TEXT_ON_BRAND : APP_TEXT_MUTED,
+                                    }}
+                                    aria-pressed={active}
+                                  >
+                                    {t(sportPracticeLevelI18nKey(level))}
+                                  </motion.button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {quickPickSportsOrdered.length > 0 ? (
                     <div className="space-y-3">
                       <span className="block text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-app-muted">
