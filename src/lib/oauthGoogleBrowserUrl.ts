@@ -5,12 +5,40 @@ import { isSupabaseGoogleAuthorizeUrl } from "./oauthGoogleStartUrl";
 const GOOGLE_ACCOUNTS_HOST = "accounts.google.com";
 const RESOLVE_TIMEOUT_MS = 15_000;
 
+/** Paramètres OAuth minimum requis pour ouvrir accounts.google.com directement. */
+export const REQUIRED_GOOGLE_OAUTH_PARAMS = [
+  "client_id",
+  "redirect_uri",
+  "response_type",
+  "scope",
+  "state",
+] as const;
+
 export function isGoogleAccountsOAuthUrl(url: string): boolean {
   try {
     return new URL(url).hostname === GOOGLE_ACCOUNTS_HOST;
   } catch {
     return /^https:\/\/accounts\.google\.com\//i.test(url);
   }
+}
+
+/** True si l’URL Google contient tous les paramètres OAuth requis pour un authorize complet. */
+export function hasRequiredGoogleOAuthParams(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== GOOGLE_ACCOUNTS_HOST) return false;
+    return REQUIRED_GOOGLE_OAUTH_PARAMS.every((key) => {
+      const value = parsed.searchParams.get(key);
+      return typeof value === "string" && value.trim().length > 0;
+    });
+  } catch {
+    return false;
+  }
+}
+
+/** Host Google + paramètres OAuth complets — seule URL safe pour Browser.open direct. */
+export function isCompleteGoogleOAuthAuthorizeUrl(url: string): boolean {
+  return isGoogleAccountsOAuthUrl(url) && hasRequiredGoogleOAuthParams(url);
 }
 
 function readLocationHeader(headers: Record<string, unknown> | undefined): string | null {
@@ -27,10 +55,21 @@ function resolveLocation(location: string, baseUrl: string): string {
   }
 }
 
+function acceptResolvedGoogleOAuthUrl(candidate: string): string | null {
+  if (isCompleteGoogleOAuthAuthorizeUrl(candidate)) {
+    return candidate;
+  }
+  if (import.meta.env.DEV && isGoogleAccountsOAuthUrl(candidate)) {
+    console.warn("OAUTH_RESOLVE_GOOGLE_URL_INCOMPLETE");
+  }
+  return null;
+}
+
 /**
  * Résout l’URL Google OAuth via GET natif sur /authorize (hors navigateur visible).
  * PKCE : signInWithOAuth a déjà stocké code_verifier ; l’URL contient code_challenge.
  * Ne rappelle jamais signInWithOAuth.
+ * Retourne null si l’URL Google est absente ou incomplète (→ flux Supabase /authorize).
  */
 export async function resolveGoogleOAuthBrowserUrl(
   supabaseAuthorizeUrl: string,
@@ -63,19 +102,23 @@ export async function resolveGoogleOAuthBrowserUrl(
 
     if (location) {
       const resolved = resolveLocation(location, supabaseAuthorizeUrl);
-      if (isGoogleAccountsOAuthUrl(resolved)) {
+      const accepted = acceptResolvedGoogleOAuthUrl(resolved);
+      if (accepted) {
         if (import.meta.env.DEV) {
           console.log("OAUTH_RESOLVE_GOOGLE_URL_OK", { via: "location_header" });
         }
-        return resolved;
+        return accepted;
       }
     }
 
-    if (responseUrl && isGoogleAccountsOAuthUrl(responseUrl)) {
-      if (import.meta.env.DEV) {
-        console.log("OAUTH_RESOLVE_GOOGLE_URL_OK", { via: "response_url", status });
+    if (responseUrl) {
+      const accepted = acceptResolvedGoogleOAuthUrl(responseUrl);
+      if (accepted) {
+        if (import.meta.env.DEV) {
+          console.log("OAUTH_RESOLVE_GOOGLE_URL_OK", { via: "response_url", status });
+        }
+        return accepted;
       }
-      return responseUrl;
     }
 
     if (import.meta.env.DEV) {

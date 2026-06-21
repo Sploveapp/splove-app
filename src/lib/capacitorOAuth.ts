@@ -286,11 +286,8 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
           if (import.meta.env.DEV) {
             console.log("OAUTH_BROWSER_OPEN_GOOGLE_DIRECT");
           }
-        } else {
-          browserTargetUrl = buildOAuthGoogleStartBrowserUrl(url);
-          if (import.meta.env.DEV) {
-            console.log("OAUTH_RESOLVE_FALLBACK_START_PAGE");
-          }
+        } else if (import.meta.env.DEV) {
+          console.log("OAUTH_BROWSER_OPEN_SUPABASE_AUTHORIZE");
         }
       } else {
         browserTargetUrl = buildOAuthGoogleStartBrowserUrl(url);
