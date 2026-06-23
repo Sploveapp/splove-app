@@ -24,8 +24,9 @@ import {
 } from "./googleSignInOverlay";
 import { forceReleaseOAuthUx } from "./oauthUxRelease";
 import { logPkceStorageKeys } from "./oauthPkceDiagnostics";
-import { buildOAuthGoogleStartBrowserUrl } from "./oauthGoogleStartUrl";
-import { resolveGoogleOAuthBrowserUrl } from "./oauthGoogleBrowserUrl";
+import { isSupabaseGoogleAuthorizeUrl } from "./oauthGoogleStartUrl";
+import { isGoogleAccountsOAuthUrl } from "./oauthGoogleBrowserUrl";
+import { googleOAuthNativeBrowserTargetUrl } from "./googleOAuthNativeBrowserUrl";
 
 const OAUTH_CALLBACK_STALL_MS = 8_000;
 let oauthDeepLinkInFlight = false;
@@ -290,22 +291,27 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
       await awaitGoogleSignInOverlayPaint();
       logGoogleSignInBrowserOpen();
 
-      let browserTargetUrl = url;
-      if (isIos) {
-        const googleDirectUrl = await resolveGoogleOAuthBrowserUrl(url);
-        if (googleDirectUrl) {
-          browserTargetUrl = googleDirectUrl;
-          if (import.meta.env.DEV) {
-            console.log("OAUTH_BROWSER_OPEN_GOOGLE_DIRECT");
-          }
-        } else if (import.meta.env.DEV) {
-          console.log("OAUTH_BROWSER_OPEN_SUPABASE_AUTHORIZE");
-        }
-      } else {
-        browserTargetUrl = buildOAuthGoogleStartBrowserUrl(url);
-      }
+      const browserTargetUrl = googleOAuthNativeBrowserTargetUrl(
+        url,
+        isIos ? "ios" : "android",
+      );
 
-      await Browser.open({ url: browserTargetUrl, presentationStyle: "fullscreen" });
+      console.log("OAUTH_AUTHORIZE_URL_OPENED", {
+        platform: Capacitor.getPlatform(),
+        isSupabaseAuthorize: isSupabaseGoogleAuthorizeUrl(browserTargetUrl),
+        isGoogleAccountsHost: isGoogleAccountsOAuthUrl(browserTargetUrl),
+        urlLength: browserTargetUrl.length,
+      });
+      logUrlForXcode("OAUTH_AUTHORIZE_URL_OPENED", browserTargetUrl);
+
+      try {
+        await Browser.open({ url: browserTargetUrl, presentationStyle: "fullscreen" });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.log("OAUTH_BROWSER_OPEN_ERROR", { message });
+        hideGoogleSignInOverlay("browser_open_error");
+        return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
+      }
     }
 
     console.log("BROWSER_OPEN_DONE");
