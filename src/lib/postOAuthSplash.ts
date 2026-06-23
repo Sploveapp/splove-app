@@ -1,4 +1,5 @@
 import { isNativeCapacitorApp } from "./authRedirect";
+import { notifyOAuthUxOverlayChanged } from "./oauthUxNotify";
 
 /** Garde-fou : masque l’overlay OAuth si le callback ne termine jamais. */
 export const POST_OAUTH_MAX_MS = 120_000;
@@ -20,6 +21,7 @@ export function beginPostOAuthSplash(): void {
   if (!isNativeCapacitorApp()) return;
   postOAuthSplashRequested = true;
   notifyListeners();
+  notifyOAuthUxOverlayChanged();
 }
 
 /** Masque le splash dès que la session OAuth est OK (navigation Discover). */
@@ -28,6 +30,7 @@ export function dismissPostOAuthSplash(): void {
   postOAuthSplashRequested = false;
   postOAuthSplashActive = false;
   notifyListeners();
+  notifyOAuthUxOverlayChanged();
 }
 
 export function subscribePostOAuthSplash(listener: Listener): () => void {
@@ -43,6 +46,7 @@ export function isPostOAuthSplashRequested(): boolean {
 
 export function markPostOAuthSplashActive(): void {
   postOAuthSplashActive = true;
+  notifyOAuthUxOverlayChanged();
 }
 
 export function markPostOAuthSplashComplete(): void {
@@ -65,6 +69,7 @@ export const POST_OAUTH_ROUTING_SAFETY_MS = 1_500;
 export function forceClearPostOAuthSplash(): void {
   markPostOAuthSplashComplete();
   notifyListeners();
+  notifyOAuthUxOverlayChanged();
 }
 
 export function abortPostOAuthSplash(): void {

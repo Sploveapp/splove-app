@@ -3,7 +3,7 @@ import { useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { BOOT_SPLASH_MIN_MS } from "../lib/bootSplashTiming";
 import { resolveBootRoute } from "../lib/bootRouteDecision";
-import { isOAuthCallbackRouteBlocking, isOAuthUxOverlayActive } from "../lib/oauthUxOverlay";
+import { useOAuthUxOverlayActive, isOAuthCallbackRouteBlocking } from "../lib/oauthUxOverlay";
 import { isOAuthGoogleStartPath } from "../lib/oauthGoogleStartUrl";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
 import { SploveOAuthLoadingScreen } from "./SploveOAuthLoadingScreen";
@@ -32,9 +32,21 @@ export function BootSplashGate({ children }: Props) {
   const pathname = location.pathname || "/";
   const isAuthCallbackRoute = isOAuthCallbackRouteBlocking(pathname, hash);
   const isOAuthGoogleStartRoute = isOAuthGoogleStartPath(pathname);
-  const oauthUxActive = isOAuthUxOverlayActive();
+  const oauthUxActive = useOAuthUxOverlayActive({
+    hasSession: Boolean(auth.session?.user?.id),
+    pathname,
+    hash,
+  });
+  const sessionOnMove =
+    Boolean(auth.session?.user?.id) &&
+    auth.isAuthInitialized &&
+    (pathname === "/move" || hash.startsWith("#/move"));
   const booting = isBooting(auth, oauthUxActive, isAuthCallbackRoute);
-  const showSplash = isOAuthGoogleStartRoute ? false : booting || !minElapsed;
+  const showSplash = isOAuthGoogleStartRoute
+    ? false
+    : sessionOnMove
+      ? oauthUxActive || isAuthCallbackRoute
+      : booting || !minElapsed;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setMinElapsed(true), BOOT_SPLASH_MIN_MS);

@@ -2,7 +2,7 @@ import { type ReactNode, useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { resolveAppShellState } from "../lib/appShellState";
-import { isOAuthUxOverlayActive } from "../lib/oauthUxOverlay";
+import { useOAuthUxOverlayActive } from "../lib/oauthUxOverlay";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
 import { SploveOAuthLoadingScreen } from "./SploveOAuthLoadingScreen";
 import { SplashScreen } from "./SplashScreen";
@@ -55,7 +55,11 @@ export function AuthenticatedPageGate({ children }: Props) {
     profileId: auth.profile?.id,
   });
 
-  const oauthUxActive = isOAuthUxOverlayActive();
+  const oauthUxActive = useOAuthUxOverlayActive({
+    hasSession: Boolean(auth.session?.user?.id),
+    pathname,
+    hash: typeof window !== "undefined" ? window.location.hash : "",
+  });
 
   useEffect(() => {
     if (oauthUxActive) {
