@@ -2,6 +2,7 @@ import { supabase } from "./supabase";
 import { isNativeOAuthCallbackUrl } from "./authRedirect";
 import { formatExchangeCodeLog, formatSetSessionLog } from "./oauthLogSanitize";
 import { logPkceStorageKeys } from "./oauthPkceDiagnostics";
+import { logOAuthSuccess } from "./oauthSessionRecoveryDiag";
 
 /** OAuth params extracted from callback URL (PKCE code or implicit tokens). */
 export type OAuthCallbackParams = {
@@ -192,6 +193,9 @@ export async function establishSupabaseSessionFromOAuthCallbackUrl(callbackUrl: 
     }
     const ok = Boolean(data.session?.user?.id);
     console.log("[AuthCallback] setSession result", formatSetSessionLog(data, null));
+    if (ok) {
+      logOAuthSuccess("establish_session", { method: "setSession" });
+    }
     return { ok, method: "setSession", error: ok ? null : "setSession returned no user" };
   }
 
@@ -200,17 +204,21 @@ export async function establishSupabaseSessionFromOAuthCallbackUrl(callbackUrl: 
     // Passer splove://… en entier échoue et supprime splove-auth-code-verifier (GoTrueClient).
     await logPkceStorageKeys("PKCE_KEYS_BEFORE_EXCHANGE");
     console.log("EXCHANGE_START");
+    console.log("EXCHANGE_CODE_START", { codeLength: params.code.length });
 
     const exchanged = await supabase.auth.exchangeCodeForSession(params.code);
     if (!exchanged.error && exchanged.data.session?.user?.id) {
       console.log("EXCHANGE_SUCCESS");
+      console.log("EXCHANGE_CODE_SUCCESS", { userId: exchanged.data.session.user.id });
       console.log("[AuthCallback] exchangeCodeForSession", formatExchangeCodeLog(exchanged));
+      logOAuthSuccess("establish_session", { method: "exchangeCodeForSession" });
       await logPkceStorageKeys("PKCE_KEYS_AFTER_EXCHANGE");
       return { ok: true, method: "exchangeCodeForSession(code)", error: null };
     }
 
     const failMessage = exchanged.error?.message ?? "exchange returned no session";
     console.log("EXCHANGE_FAIL", { message: failMessage });
+    console.log("EXCHANGE_CODE_ERROR", { message: failMessage });
     console.log("[AuthCallback] exchangeCodeForSession", formatExchangeCodeLog(exchanged));
     await logPkceStorageKeys("PKCE_KEYS_AFTER_EXCHANGE");
     return { ok: false, method: "exchangeCodeForSession", error: failMessage };

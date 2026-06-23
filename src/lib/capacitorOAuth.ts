@@ -152,6 +152,13 @@ export async function closeCapacitorOAuthBrowser(): Promise<void> {
 
 async function routeOAuthDeepLink(url: string): Promise<void> {
   const trimmed = url.trim();
+  console.log("OAUTH_DEEP_LINK_RECEIVED", {
+    called: true,
+    empty: !trimmed,
+    isNativeCallback: trimmed ? isNativeOAuthCallbackUrl(trimmed) : false,
+    urlLength: trimmed.length,
+    hasCode: trimmed.includes("code="),
+  });
   if (!trimmed) {
     console.log("OAUTH_RETURN_SKIP", "empty_url");
     return;
@@ -210,7 +217,12 @@ export function initCapacitorAuthBridge(): void {
 
   void App.addListener("appUrlOpen", (event) => {
     const opened = event.url?.trim() ?? "";
-    console.log("APP_URL_OPEN_RECEIVED", true);
+    console.log("APP_URL_OPEN", {
+      received: true,
+      urlLength: opened.length,
+      hasCode: opened.includes("code="),
+      scheme: opened.includes("://") ? opened.slice(0, opened.indexOf("://")) : "(none)",
+    });
     logUrlForXcode("APP_URL_OPEN", opened);
     void routeOAuthDeepLink(event.url);
   });
