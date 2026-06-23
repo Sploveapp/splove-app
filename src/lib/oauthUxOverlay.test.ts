@@ -1,10 +1,15 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { isOAuthUxOverlayActive } from "./oauthUxOverlay";
-import { setOauthProcessingLock, clearOauthProcessingLock } from "./oauthCallbackLock";
+import {
+  clearAllOAuthSessionLocks,
+  setOauthProcessingLock,
+} from "./oauthCallbackLock";
+import { forceClearPostOAuthSplash } from "./postOAuthSplash";
 
 describe("oauthUxOverlay", () => {
   beforeEach(() => {
-    clearOauthProcessingLock();
+    clearAllOAuthSessionLocks();
+    forceClearPostOAuthSplash();
   });
 
   it("active pendant le verrou OAuth", () => {

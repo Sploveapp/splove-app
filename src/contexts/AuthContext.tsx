@@ -43,6 +43,7 @@ import { DISCOVER_BETA_SIMPLE_PIPELINE } from "../lib/discoverBetaPipeline";
 import type { User, Session } from "@supabase/supabase-js";
 import { clearAllOAuthSessionLocks, isOAuthCallbackInProgress, isOauthProcessingLocked } from "../lib/oauthCallbackLock";
 import { formatAuthStateChangeLog } from "../lib/oauthLogSanitize";
+import { tryExitOAuthLoadingAfterProfileReady } from "../lib/oauthProfileReadyExit";
 
 export type Profile = {
   id: string;
@@ -334,6 +335,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ),
           );
           console.log("AUTH_PROFILE_READY", { userId: fast.id.slice(0, 8) });
+          tryExitOAuthLoadingAfterProfileReady(
+            fast as unknown as Record<string, unknown>,
+            userId,
+          );
         }
         if (!DISCOVER_BETA_SIMPLE_PIPELINE && fast?.id) {
           deferSecondaryWork(() => {
@@ -745,6 +750,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }),
     [isAuthInitialized, isLoading, session?.user?.id, profile?.id],
   );
+
+  useEffect(() => {
+    const uid = session?.user?.id;
+    if (!uid || profile?.id !== uid) return;
+    tryExitOAuthLoadingAfterProfileReady(profile as unknown as Record<string, unknown>, uid);
+  }, [session?.user?.id, profile]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || profile == null) return;
