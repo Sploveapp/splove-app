@@ -29,10 +29,16 @@ import { isGoogleAccountsOAuthUrl } from "./oauthGoogleBrowserUrl";
 import { googleOAuthNativeBrowserTargetUrl } from "./googleOAuthNativeBrowserUrl";
 import {
   ensureIosBrowserNeverOpensSupabase,
+  logIosOAuthBrowserTarget,
   resolveIosGoogleOAuthBrowserTarget,
 } from "./iosGoogleOAuthBrowserTarget";
 import { parseOAuthCallbackParams } from "./oauthCallbackParams";
 import { hideIosGoogleOAuthConnectingOverlay } from "./iosGoogleOAuthDisplay";
+import {
+  isOAuthGoogleStartPath,
+  isSupabaseGoogleAuthorizeUrl,
+  OAUTH_GOOGLE_START_PATH,
+} from "./oauthGoogleStartUrl";
 
 export const OAUTH_BROWSER_TIMEOUT_USER_MSG = OAUTH_CALLBACK_INTERRUPTED_MSG;
 export const GOOGLE_OAUTH_INTERRUPTED_MSG = GOOGLE_OAUTH_USER_ERROR_MSG;
@@ -179,6 +185,83 @@ async function handleNativeOAuthCallback(deepLinkUrl: string): Promise<void> {
   }
 }
 
+/** Traite splove://auth/callback — jamais via Browser.open. */
+export async function routeOAuthDeepLink(url: string): Promise<boolean> {
+  const trimmed = url.trim();
+  if (!isNativeOAuthCallbackWithCode(trimmed)) return false;
+  console.log("OAUTH_DEEP_LINK_ROUTE", { via: "routeOAuthDeepLink" });
+  await handleNativeOAuthCallback(trimmed);
+  return true;
+}
+
+function hostFromOAuthUrl(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "(invalid)";
+  }
+}
+
+function isOAuthGoogleStartBrowserUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed.includes(OAUTH_GOOGLE_START_PATH)) return false;
+  try {
+    const parsed = new URL(trimmed);
+    const hashPath = parsed.hash.replace(/^#/, "").split("?")[0] ?? "";
+    return isOAuthGoogleStartPath(hashPath);
+  } catch {
+    return trimmed.includes(`#${OAUTH_GOOGLE_START_PATH}`);
+  }
+}
+
+/** Browser.open : Google, Supabase /authorize, ou page start SPLove — jamais splove://callback. */
+export function isOAuthBrowserOpenAllowedUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  if (isNativeOAuthCallbackUrl(trimmed)) return false;
+  if (isGoogleAccountsOAuthUrl(trimmed)) return true;
+  if (isSupabaseGoogleAuthorizeUrl(trimmed)) return true;
+  if (isOAuthGoogleStartBrowserUrl(trimmed)) return true;
+  return false;
+}
+
+async function openOAuthBrowser(url: string): Promise<{ error: Error | null }> {
+  const trimmed = url.trim();
+
+  if (await routeOAuthDeepLink(trimmed)) {
+    return { error: null };
+  }
+
+  if (!isOAuthBrowserOpenAllowedUrl(trimmed)) {
+    console.log("BROWSER_OPEN_BLOCKED", {
+      host: hostFromOAuthUrl(trimmed),
+      reason: "url_not_google_or_supabase_authorize",
+    });
+    hideGoogleSignInOverlay("browser_open_blocked");
+    hideIosGoogleOAuthConnectingOverlay("browser_open_blocked");
+    return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
+  }
+
+  if (isGoogleAccountsOAuthUrl(trimmed)) {
+    console.log("BROWSER_OPEN_GOOGLE", { host: "accounts.google.com" });
+  }
+
+  console.log("BROWSER_OPEN_START", { host: hostFromOAuthUrl(trimmed) });
+  try {
+    oauthBrowserOpen = true;
+    await Browser.open({ url: trimmed, presentationStyle: "fullscreen" });
+    console.log("BROWSER_OPEN_DONE", { host: hostFromOAuthUrl(trimmed) });
+    return { error: null };
+  } catch (e) {
+    oauthBrowserOpen = false;
+    const message = e instanceof Error ? e.message : String(e);
+    console.log("BROWSER_OPEN_FAIL", { message });
+    hideGoogleSignInOverlay("browser_open_error");
+    hideIosGoogleOAuthConnectingOverlay("browser_open_error");
+    return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
+  }
+}
+
 export async function closeCapacitorOAuthBrowser(): Promise<void> {
   await closeOAuthBrowser();
 }
@@ -224,17 +307,20 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
 
     if (error) {
       hideGoogleSignInOverlay("oauth_url_error");
+      hideIosGoogleOAuthConnectingOverlay("oauth_url_error");
       return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
     }
 
     const url = typeof data?.url === "string" ? data.url.trim() : "";
     if (!url) {
       hideGoogleSignInOverlay("missing_oauth_url");
+      hideIosGoogleOAuthConnectingOverlay("missing_oauth_url");
       return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
     }
 
     if (isForbiddenOAuthRedirectTarget(url)) {
       hideGoogleSignInOverlay("forbidden_redirect");
+      hideIosGoogleOAuthConnectingOverlay("forbidden_redirect");
       return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
     }
 
@@ -244,6 +330,7 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
         await resolveIosGoogleOAuthBrowserTarget(url),
         url,
       );
+      logIosOAuthBrowserTarget(iosTarget, url);
       browserTargetUrl = iosTarget.url;
     } else {
       browserTargetUrl = googleOAuthNativeBrowserTargetUrl(url, "android");
@@ -257,22 +344,7 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
       logGoogleSignInBrowserOpen();
     }
 
-    if (isGoogleAccountsOAuthUrl(browserTargetUrl)) {
-      console.log("BROWSER_OPEN_GOOGLE", {
-        host: "accounts.google.com",
-      });
-    }
-
-    try {
-      oauthBrowserOpen = true;
-      await Browser.open({ url: browserTargetUrl, presentationStyle: "fullscreen" });
-    } catch (e) {
-      oauthBrowserOpen = false;
-      hideGoogleSignInOverlay("browser_open_error");
-      return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
-    }
-
-    return { error: null };
+    return openOAuthBrowser(browserTargetUrl);
   }
 
   console.log("GOOGLE_SIGNIN_START");

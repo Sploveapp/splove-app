@@ -59,10 +59,17 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     expect(iosTargetSource).toContain("disableRedirects: true");
     expect(capSource).toContain("ensureIosBrowserNeverOpensSupabase");
     expect(capSource).toContain("BROWSER_OPEN_GOOGLE");
+    expect(capSource).toContain("routeOAuthDeepLink");
+    expect(capSource).toContain("isOAuthBrowserOpenAllowedUrl");
+    expect(capSource).toContain("BROWSER_OPEN_START");
+    expect(capSource).toContain("BROWSER_OPEN_DONE");
+    expect(capSource).not.toContain("startIosGoogleOAuthWebAuth");
+    expect(capSource).not.toContain("SploveOAuth");
+    expect(capSource).not.toContain("ASWebAuthenticationSession");
 
     const androidBlock = capSource.slice(
       capSource.indexOf("if (!isIos) {"),
-      capSource.indexOf("if (isGoogleAccountsOAuthUrl(browserTargetUrl))", capSource.indexOf("if (!isIos) {")),
+      capSource.indexOf("return openOAuthBrowser(browserTargetUrl)", capSource.indexOf("if (!isIos) {")),
     );
     expect(androidBlock).toContain("showGoogleSignInOverlay");
   });

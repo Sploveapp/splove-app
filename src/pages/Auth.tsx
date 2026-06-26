@@ -311,6 +311,7 @@ export default function Auth() {
   });
 
   async function signInWithGoogle() {
+    console.log("GOOGLE_SIGNIN_BUTTON_TAP");
     setMessage(null);
     setOauthLoading("google");
     if (isIosGoogleOAuthBrowserFlow()) {
@@ -323,7 +324,7 @@ export default function Auth() {
       const { error } = await signInWithGoogleOAuth();
       if (error) {
         hideGoogleSignInOverlay("sign_in_error");
-        setMessage({ type: "error", text: GOOGLE_OAUTH_USER_ERROR_MSG });
+        setMessage({ type: "error", text: error.message || GOOGLE_OAUTH_USER_ERROR_MSG });
         setOauthLoading(null);
       }
     } catch (err: unknown) {

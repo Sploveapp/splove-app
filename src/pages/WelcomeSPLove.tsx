@@ -185,6 +185,7 @@ export default function WelcomeSPLove() {
 
   async function signInWithGoogle() {
     if (!navigationReady) return;
+    console.log("GOOGLE_SIGNIN_BUTTON_TAP");
     setOauthBanner(null);
     setOauthLoading("google");
     if (isIosGoogleOAuthBrowserFlow()) {

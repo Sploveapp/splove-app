@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  OAUTH_BROWSER_TIMEOUT_USER_MSG,
+  isOAuthBrowserOpenAllowedUrl,
   resetOAuthBrowserWaitStateForTests,
-  subscribeGoogleOAuthBrowserTimeout,
+  routeOAuthDeepLink,
 } from "./capacitorOAuth";
+
+const GOOGLE_AUTHORIZE =
+  "https://accounts.google.com/o/oauth2/v2/auth?client_id=abc.apps.googleusercontent.com&redirect_uri=https%3A%2F%2Fabc.supabase.co%2Fauth%2Fv1%2Fcallback&response_type=code&scope=openid+email+profile&state=xyz";
+
+const SUPABASE_AUTHORIZE =
+  "https://abc.supabase.co/auth/v1/authorize?provider=google&redirect_to=splove%3A%2F%2Fauth%2Fcallback";
+
+const CALLBACK = "splove://auth/callback?code=oauth-code-123";
 
 vi.mock("@capacitor/app", () => ({
   App: { addListener: vi.fn(() => Promise.resolve({ remove: vi.fn() })) },
@@ -26,11 +34,7 @@ vi.mock("./supabase", () => ({
 }));
 
 vi.mock("./completeNativeOAuthReturn", () => ({
-  completeNativeOAuthReturn: vi.fn(),
-}));
-
-vi.mock("./postGoogleAuthComplete", () => ({
-  completePostGoogleAuth: vi.fn(),
+  completeNativeOAuthReturn: vi.fn(async () => true),
 }));
 
 vi.mock("./oauthUxRelease", () => ({
@@ -52,30 +56,22 @@ vi.mock("./authOAuthUserMessage", () => ({
   stashAuthOAuthUserMessage: vi.fn(),
 }));
 
-vi.mock("./iosGoogleOAuthBrowserTarget", () => ({
-  resolveIosGoogleOAuthBrowserTarget: vi.fn(async () => ({
-    url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=x&redirect_uri=y&response_type=code&scope=openid&state=z",
-    strategy: "google_direct",
-    sourceAuthorizeHost: "abc.supabase.co",
-    openHost: "accounts.google.com",
-    supabaseFlashRisk: false,
-    googleVisible: true,
-  })),
-  ensureIosBrowserNeverOpensSupabase: vi.fn((target: { url: string }) => target),
-}));
-
-describe("capacitorOAuth flux simple", () => {
+describe("capacitorOAuth garde-fous Browser.open", () => {
   beforeEach(() => {
     resetOAuthBrowserWaitStateForTests();
   });
 
-  it("expose le message utilisateur erreur", () => {
-    expect(OAUTH_BROWSER_TIMEOUT_USER_MSG).toBe("Connexion interrompue, réessaie");
+  it("autorise Google et Supabase /authorize", () => {
+    expect(isOAuthBrowserOpenAllowedUrl(GOOGLE_AUTHORIZE)).toBe(true);
+    expect(isOAuthBrowserOpenAllowedUrl(SUPABASE_AUTHORIZE)).toBe(true);
   });
 
-  it("subscribeGoogleOAuthBrowserTimeout est un no-op", () => {
-    const unsub = subscribeGoogleOAuthBrowserTimeout(() => undefined);
-    expect(typeof unsub).toBe("function");
-    unsub();
+  it("refuse splove://auth/callback", () => {
+    expect(isOAuthBrowserOpenAllowedUrl(CALLBACK)).toBe(false);
+  });
+
+  it("routeOAuthDeepLink traite le callback sans Browser.open", async () => {
+    const routed = await routeOAuthDeepLink(CALLBACK);
+    expect(routed).toBe(true);
   });
 });
