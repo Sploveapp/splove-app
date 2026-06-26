@@ -1,5 +1,10 @@
+import { useEffect } from "react";
 import { SploveSplashMark } from "./SploveSplashMark";
 import { useTranslation } from "../i18n/useTranslation";
+import {
+  collectOAuthLoadingScreenBlockers,
+  logOAuthLoadingScreenGate,
+} from "../lib/oauthLoadingScreenDiag";
 
 const FOOTER_FONT =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
@@ -80,4 +85,24 @@ export function SploveOAuthLoadingScreen() {
       </footer>
     </div>
   );
+}
+
+type OAuthLoadingOverlayProps = {
+  gate: string;
+  visible: boolean;
+};
+
+/** Trace quel gate affiche l’overlay et les verrous actifs. */
+export function OAuthLoadingScreenOverlay({ gate, visible }: OAuthLoadingOverlayProps) {
+  useEffect(() => {
+    if (!visible) {
+      logOAuthLoadingScreenGate(gate, false);
+      return;
+    }
+    const blockers = collectOAuthLoadingScreenBlockers();
+    logOAuthLoadingScreenGate(gate, true, blockers.length > 0 ? blockers : ["gate_visible"]);
+  }, [visible, gate]);
+
+  if (!visible) return null;
+  return <SploveOAuthLoadingScreen />;
 }

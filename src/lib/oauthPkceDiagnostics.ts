@@ -6,6 +6,7 @@ const CODE_VERIFIER_KEY = `${AUTH_STORAGE_KEY}-code-verifier`;
 
 export type PkceDiagnosticsPhase =
   | "PKCE_KEYS_BEFORE_EXCHANGE"
+  | "PKCE_KEYS_BEFORE_RETRY"
   | "PKCE_KEYS_AFTER_EXCHANGE"
   | "PKCE_KEYS_AFTER_SIGNIN";
 

@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useLocation } from "react-router-dom";
+import { Capacitor } from "@capacitor/core";
 import { SploveOAuthLoadingScreen } from "../components/SploveOAuthLoadingScreen";
+import { logOAuthLoadingScreenGate } from "../lib/oauthLoadingScreenDiag";
 import {
   isSupabaseGoogleAuthorizeUrl,
   parseOAuthGoogleStartAuthUrl,
@@ -13,6 +15,13 @@ import {
 export default function OAuthGoogleStart() {
   const location = useLocation();
   const redirectedRef = useRef(false);
+
+  useEffect(() => {
+    logOAuthLoadingScreenGate("OAuthGoogleStart", true, ["oauth_google_start_route"]);
+    return () => {
+      logOAuthLoadingScreenGate("OAuthGoogleStart", false);
+    };
+  }, []);
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -38,6 +47,12 @@ export default function OAuthGoogleStart() {
     const redirectToSupabase = () => {
       if (cancelled || redirectedRef.current) return;
       redirectedRef.current = true;
+      if (Capacitor.getPlatform() === "ios") {
+        console.log("IOS_SUPABASE_FLASH_DETECTED", {
+          reason: "oauth_start_redirect_to_supabase",
+          phase: "safari_redirect",
+        });
+      }
       if (import.meta.env.DEV) {
         console.log("OAUTH_START_REDIRECT_TO_SUPABASE");
       }

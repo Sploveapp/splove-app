@@ -200,24 +200,21 @@ export async function establishSupabaseSessionFromOAuthCallbackUrl(callbackUrl: 
   }
 
   if (params.hasCode && params.code) {
-    // Une seule tentative : auth_code = code OAuth uniquement.
-    // Passer splove://… en entier échoue et supprime splove-auth-code-verifier (GoTrueClient).
     await logPkceStorageKeys("PKCE_KEYS_BEFORE_EXCHANGE");
-    console.log("EXCHANGE_START");
     console.log("EXCHANGE_CODE_START", { codeLength: params.code.length });
 
     const exchanged = await supabase.auth.exchangeCodeForSession(params.code);
     if (!exchanged.error && exchanged.data.session?.user?.id) {
-      console.log("EXCHANGE_SUCCESS");
-      console.log("EXCHANGE_CODE_SUCCESS", { userId: exchanged.data.session.user.id });
+      console.log("EXCHANGE_CODE_SUCCESS", {
+        userId: exchanged.data.session.user.id,
+      });
       console.log("[AuthCallback] exchangeCodeForSession", formatExchangeCodeLog(exchanged));
-      logOAuthSuccess("establish_session", { method: "exchangeCodeForSession" });
       await logPkceStorageKeys("PKCE_KEYS_AFTER_EXCHANGE");
+      logOAuthSuccess("establish_session", { method: "exchangeCodeForSession" });
       return { ok: true, method: "exchangeCodeForSession(code)", error: null };
     }
 
     const failMessage = exchanged.error?.message ?? "exchange returned no session";
-    console.log("EXCHANGE_FAIL", { message: failMessage });
     console.log("EXCHANGE_CODE_ERROR", { message: failMessage });
     console.log("[AuthCallback] exchangeCodeForSession", formatExchangeCodeLog(exchanged));
     await logPkceStorageKeys("PKCE_KEYS_AFTER_EXCHANGE");

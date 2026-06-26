@@ -3,6 +3,10 @@ import { Link, useNavigate } from "react-router-dom";
 import { Bike, CircleDot, Footprints, Mountain, Waves } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { beginPostOAuthSplash } from "../lib/postOAuthSplash";
+import {
+  isIosGoogleOAuthBrowserFlow,
+  showIosGoogleOAuthConnectingOverlay,
+} from "../lib/iosGoogleOAuthDisplay";
 import { isIosGoogleNativeEnabled } from "../lib/googleNativeSignIn";
 import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
 import { isAppAuthReady } from "../lib/isAppAuthReady";
@@ -183,7 +187,9 @@ export default function WelcomeSPLove() {
     if (!navigationReady) return;
     setOauthBanner(null);
     setOauthLoading("google");
-    if (!isIosGoogleNativeEnabled()) {
+    if (isIosGoogleOAuthBrowserFlow()) {
+      await showIosGoogleOAuthConnectingOverlay();
+    } else if (!isIosGoogleNativeEnabled()) {
       beginPostOAuthSplash();
     }
     try {

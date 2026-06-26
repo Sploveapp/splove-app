@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { BOOT_SPLASH_MIN_MS } from "../lib/bootSplashTiming";
@@ -6,8 +6,16 @@ import { resolveBootRoute } from "../lib/bootRouteDecision";
 import { useOAuthUxOverlayActive, isOAuthCallbackRouteBlocking } from "../lib/oauthUxOverlay";
 import { isOAuthGoogleStartPath } from "../lib/oauthGoogleStartUrl";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
-import { SploveOAuthLoadingScreen } from "./SploveOAuthLoadingScreen";
+import {
+  logOAuthLoadingScreenGate,
+  shouldSuppressOAuthLoadingOnMoveRoute,
+} from "../lib/oauthLoadingScreenDiag";
+import { OAuthLoadingScreenOverlay } from "./SploveOAuthLoadingScreen";
 import { SplashScreen } from "./SplashScreen";
+import {
+  isOAuthSessionVerifiedLatch,
+  subscribeOAuthSessionVerifiedLatch,
+} from "../lib/oauthSessionVerifiedLatch";
 
 type Props = {
   children: ReactNode;
@@ -27,26 +35,41 @@ export function BootSplashGate({ children }: Props) {
   const auth = useAuth();
   const location = useLocation();
   const [minElapsed, setMinElapsed] = useState(false);
+  const sessionLatch = useSyncExternalStore(
+    subscribeOAuthSessionVerifiedLatch,
+    isOAuthSessionVerifiedLatch,
+    () => false,
+  );
 
   const hash = location.hash || "";
   const pathname = location.pathname || "/";
+  const authSessionVerified =
+    auth.isAuthInitialized && Boolean(auth.session?.user?.id);
   const isAuthCallbackRoute = isOAuthCallbackRouteBlocking(pathname, hash);
   const isOAuthGoogleStartRoute = isOAuthGoogleStartPath(pathname);
   const oauthUxActive = useOAuthUxOverlayActive({
-    hasSession: Boolean(auth.session?.user?.id),
+    hasSession: authSessionVerified || sessionLatch,
     pathname,
     hash,
   });
   const sessionOnMove =
-    Boolean(auth.session?.user?.id) &&
-    auth.isAuthInitialized &&
+    (authSessionVerified || sessionLatch) &&
     (pathname === "/move" || hash.startsWith("#/move"));
+  const suppressOAuthOnMove = shouldSuppressOAuthLoadingOnMoveRoute(
+    pathname,
+    hash,
+    authSessionVerified || sessionLatch,
+  );
+  const oauthLoadingVisible =
+    (oauthUxActive || isAuthCallbackRoute) && !suppressOAuthOnMove && !sessionLatch;
   const booting = isBooting(auth, oauthUxActive, isAuthCallbackRoute);
   const showSplash = isOAuthGoogleStartRoute
     ? false
     : sessionOnMove
-      ? oauthUxActive || isAuthCallbackRoute
-      : booting || !minElapsed;
+      ? oauthLoadingVisible
+      : sessionLatch && suppressOAuthOnMove
+        ? false
+        : booting || !minElapsed;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setMinElapsed(true), BOOT_SPLASH_MIN_MS);
@@ -54,6 +77,16 @@ export function BootSplashGate({ children }: Props) {
   }, []);
 
   useEffect(() => {
+    if (showSplash && oauthLoadingVisible) {
+      logOAuthLoadingScreenGate("BootSplashGate", true, [
+        ...(oauthUxActive ? ["oauthUxActive"] : []),
+        ...(isAuthCallbackRoute ? ["authCallbackRoute"] : []),
+        ...(sessionOnMove ? ["sessionOnMove"] : []),
+      ]);
+    } else if (!oauthLoadingVisible) {
+      logOAuthLoadingScreenGate("BootSplashGate", false);
+    }
+
     if (!showSplash) {
       logOAuthLoaderDiag("WhiteScreenGuard/BootSplashGate", "render children (splash hidden)", {
         booting,
@@ -90,6 +123,10 @@ export function BootSplashGate({ children }: Props) {
     auth.isProfileLoading,
     pathname,
     hash,
+    sessionOnMove,
+    oauthLoadingVisible,
+    sessionLatch,
+    suppressOAuthOnMove,
   ]);
 
   if (!showSplash) {
@@ -98,7 +135,8 @@ export function BootSplashGate({ children }: Props) {
 
   return (
     <>
-      {oauthUxActive || isAuthCallbackRoute ? <SploveOAuthLoadingScreen /> : <SplashScreen overlay />}
+      <OAuthLoadingScreenOverlay gate="BootSplashGate" visible={oauthLoadingVisible} />
+      {!oauthLoadingVisible ? <SplashScreen overlay /> : null}
     </>
   );
 }

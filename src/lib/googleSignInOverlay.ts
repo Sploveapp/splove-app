@@ -2,6 +2,7 @@ import { isNativeCapacitorApp } from "./authRedirect";
 import { getLanguage, translate } from "../i18n/index";
 import { publicAssetUrl } from "./publicAssetUrl";
 import { forceClearPostOAuthSplash } from "./postOAuthSplash";
+import { notifyOAuthUxOverlayChanged } from "./oauthUxNotify";
 
 const OVERLAY_ROOT_ID = "splove-google-oauth-overlay";
 const OVERLAY_Z_INDEX = 100_000;
@@ -139,6 +140,12 @@ function unmountImperativeOverlay(): void {
   document.getElementById(OVERLAY_ROOT_ID)?.remove();
 }
 
+/** Overlay DOM impératif encore monté (hors état React). */
+export function isGoogleSignInOverlayMounted(): boolean {
+  if (typeof document === "undefined") return false;
+  return Boolean(document.getElementById(OVERLAY_ROOT_ID));
+}
+
 /** Laisse le navigateur peindre l’overlay impératif avant Browser.open(). */
 export function awaitGoogleSignInOverlayPaint(): Promise<void> {
   if (typeof window === "undefined") return Promise.resolve();
@@ -153,14 +160,35 @@ export function awaitGoogleSignInOverlayPaint(): Promise<void> {
 export function showGoogleSignInOverlay(): void {
   if (!isNativeCapacitorApp()) return;
   mountImperativeOverlay();
+  console.log("OAUTH_LOADING_SCREEN_SHOW", {
+    gate: "googleSignInOverlay",
+    reasons: ["imperative_dom_overlay"],
+  });
+  console.log("OAUTH_LOADING_SCREEN_REASON", {
+    gate: "googleSignInOverlay",
+    reasons: ["imperative_dom_overlay"],
+  });
   devLog("GOOGLE_SIGNIN_OVERLAY_SHOW");
 }
 
 /** Retire l’overlay (succès routé, erreur, annulation). */
 export function hideGoogleSignInOverlay(reason?: string): void {
   if (!isNativeCapacitorApp()) return;
+  const wasMounted = isGoogleSignInOverlayMounted();
   unmountImperativeOverlay();
   forceClearPostOAuthSplash();
+  notifyOAuthUxOverlayChanged();
+  if (wasMounted) {
+    console.log("OAUTH_LOADING_SCREEN_HIDE", {
+      gate: "googleSignInOverlay",
+      reasons: reason ? [reason] : ["imperative_dom_overlay"],
+    });
+    console.log("OAUTH_LOADING_SCREEN_REASON", {
+      gate: "googleSignInOverlay",
+      reasons: reason ? [reason, "imperative_dom_unmount"] : ["imperative_dom_unmount"],
+      phase: "hide",
+    });
+  }
   if (reason) {
     console.log("GOOGLE_SIGNIN_OVERLAY_HIDE", { reason });
   } else {
@@ -173,6 +201,7 @@ export function dismissGoogleSignInOverlayIfIdle(): void {
   if (!isNativeCapacitorApp()) return;
   unmountImperativeOverlay();
   forceClearPostOAuthSplash();
+  notifyOAuthUxOverlayChanged();
   devLog("GOOGLE_SIGNIN_OVERLAY_HIDE", { reason: "browser_closed_idle" });
 }
 
@@ -181,5 +210,6 @@ export function logGoogleSignInBrowserOpen(): void {
 }
 
 export function logGoogleSignInCallbackReceived(): void {
+  console.log("AUTH_CALLBACK_RECEIVED");
   devLog("GOOGLE_SIGNIN_CALLBACK_RECEIVED");
 }

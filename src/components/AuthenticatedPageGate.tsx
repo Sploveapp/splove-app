@@ -4,6 +4,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { resolveAppShellState } from "../lib/appShellState";
 import { useOAuthUxOverlayActive } from "../lib/oauthUxOverlay";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
+import { logOAuthLoadingScreenGate } from "../lib/oauthLoadingScreenDiag";
 import { SploveOAuthLoadingScreen } from "./SploveOAuthLoadingScreen";
 import { SplashScreen } from "./SplashScreen";
 import { LikesListSkeleton } from "./skeletons/LikesListSkeleton";
@@ -63,6 +64,7 @@ export function AuthenticatedPageGate({ children }: Props) {
 
   useEffect(() => {
     if (oauthUxActive) {
+      logOAuthLoadingScreenGate("AuthenticatedPageGate", true, ["oauthUxActive"]);
       logOAuthLoaderDiag("WhiteScreenGuard/AuthenticatedPageGate", "blocked → SploveOAuthLoadingScreen", {
         authLoading: auth.isLoading,
         profileLoading: auth.isProfileLoading,
@@ -75,6 +77,7 @@ export function AuthenticatedPageGate({ children }: Props) {
       });
       return;
     }
+    logOAuthLoadingScreenGate("AuthenticatedPageGate", false);
     if (!shell.authResolved) {
       logOAuthLoaderDiag("WhiteScreenGuard/AuthenticatedPageGate", "blocked → SplashScreen (auth unresolved)", {
         authLoading: auth.isLoading,

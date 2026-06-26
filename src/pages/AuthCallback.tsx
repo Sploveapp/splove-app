@@ -31,6 +31,11 @@ import { hideCapacitorSplashWhenReady } from "../lib/capacitorNativeSplash";
 import { OAuthConnectingSplash } from "../components/OAuthConnectingSplash";
 import { completeNativeOAuthReturn, isNativeOAuthReturnInFlight } from "../lib/completeNativeOAuthReturn";
 import { scrubOAuthTokensFromNativeWindow } from "../lib/scrubOAuthUrlFromWindow";
+import {
+  logOAuthRedirectDestination,
+  logOAuthSuccess,
+  verifyDefinitiveSupabaseSession,
+} from "../lib/oauthSessionRecoveryDiag";
 
 const GOOGLE_SET_SESSION_MS = 8000;
 const isDev = import.meta.env.DEV;
@@ -162,6 +167,7 @@ export default function AuthCallback() {
 
   const finalizeOAuthSuccess = async (sessionUserId: string) => {
     console.log("SESSION_RESTORED");
+    logOAuthSuccess("auth_callback", { userId: redactUserId(sessionUserId) });
     console.log("AUTH_SESSION_READY", { userId: redactUserId(sessionUserId) });
     markOAuthSessionAt();
     logSetSessionResult(true, sessionUserId, null);
@@ -172,9 +178,20 @@ export default function AuthCallback() {
     }));
     clearOauthCallbackStorage();
     await syncAuthSession();
+    const sessionVerify = await verifyDefinitiveSupabaseSession("auth_callback_finalize");
+    if (!sessionVerify.ok) {
+      console.warn("[AuthCallback] redirect blocked — session not verified", sessionVerify.reason);
+      failGoogleAndReturnToAuth(sessionVerify.reason);
+      return;
+    }
     await ensureProfileRowForAuthUserId(sessionUserId);
     const path = await resolvePostOAuthPath(supabase, sessionUserId);
     const navTarget = path === "/move" ? "/move" : path === "/onboarding" ? "/onboarding" : "/";
+    logOAuthRedirectDestination("auth_callback_finalize", navTarget, {
+      blocked: false,
+      sessionVerified: true,
+      oauthRoute: path,
+    });
     console.log("[BOOT] route decision", { status: "ready", route: navTarget, oauthRoute: path, reason: "oauth_callback" });
     console.log("[BOOT] redirect to", navTarget);
     finish();

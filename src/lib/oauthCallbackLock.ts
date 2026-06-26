@@ -1,4 +1,5 @@
 import { isAuthCallbackPath } from "./authRedirect";
+import { clearOAuthSessionVerifiedLatch } from "./oauthSessionVerifiedLatch";
 
 export const OAUTH_PROCESSING_STORAGE_KEY = "splove_oauth_processing";
 
@@ -16,6 +17,7 @@ function syncWindowOauthFlag(locked: boolean): void {
 export function setOauthProcessingLock(): void {
   oauthCallbackInProgress = true;
   syncWindowOauthFlag(true);
+  console.log("OAUTH_CALLBACK_LOCK_SET");
   try {
     sessionStorage.setItem(OAUTH_PROCESSING_STORAGE_KEY, "1");
   } catch {
@@ -26,6 +28,7 @@ export function setOauthProcessingLock(): void {
 export function clearOauthProcessingLock(): void {
   oauthCallbackInProgress = false;
   syncWindowOauthFlag(false);
+  console.log("OAUTH_CALLBACK_LOCK_CLEAR");
   try {
     sessionStorage.removeItem(OAUTH_PROCESSING_STORAGE_KEY);
   } catch {
@@ -36,6 +39,7 @@ export function clearOauthProcessingLock(): void {
 /** Nettoie tous les verrous / marqueurs OAuth (logout ou timeout Google iOS). */
 export function clearAllOAuthSessionLocks(): void {
   clearOauthProcessingLock();
+  clearOAuthSessionVerifiedLatch();
   const keys = [
     OAUTH_PROCESSING_STORAGE_KEY,
     "splove_oauth_processing",

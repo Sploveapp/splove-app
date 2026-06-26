@@ -7,6 +7,7 @@ import {
 import { isGoogleSignInOverlayMounted } from "./googleSignInOverlay";
 import { logOAuthLoaderDiag } from "./oauthLoaderDiag";
 import { releasePostAuthUi } from "./oauthUxRelease";
+import { forceReleaseOAuthLoadingOnMove } from "./oauthLoadingScreenRelease";
 import {
   getOAuthUxOverlayEpoch,
   subscribeOAuthUxOverlay,
@@ -121,7 +122,7 @@ export function useOAuthUxOverlayActive(ctx?: OAuthUxOverlayContext): boolean {
       postOAuthSplashActive: isPostOAuthSplashActive(),
       googleSignInOverlayMounted: isGoogleSignInOverlayMounted(),
     });
-    releasePostAuthUi("session_on_move", "/move");
+    forceReleaseOAuthLoadingOnMove("oauth_ux_overlay_move");
   }, [hasSession, pathname, hash, rawActive]);
 
   useEffect(() => {

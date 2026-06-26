@@ -3,6 +3,7 @@ import { Navigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { logBootDecision, resolveBootRoute } from "../lib/bootRouteDecision";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
+import { logOAuthRedirectDestination } from "../lib/oauthSessionRecoveryDiag";
 import Onboarding from "../pages/Onboarding";
 import { SplashScreen } from "./SplashScreen";
 
@@ -17,6 +18,14 @@ export function OnboardingRouteGate() {
   useEffect(() => {
     logBootDecision(decision, "/onboarding");
   }, [decision]);
+
+  if (decision.status === "ready" && decision.route === "/onboarding") {
+    logOAuthRedirectDestination("onboarding_route_gate", "/onboarding", {
+      hasSession: Boolean(auth.session?.user?.id),
+      profileId: auth.profile?.id ?? null,
+      decisionReason: decision.reason,
+    });
+  }
 
   if (decision.status === "loading") {
     logOAuthLoaderDiag("ReactGuard/OnboardingRouteGate", "splash (profile bootstrap)", {

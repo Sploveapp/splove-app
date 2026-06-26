@@ -44,6 +44,10 @@ import type { User, Session } from "@supabase/supabase-js";
 import { clearAllOAuthSessionLocks, isOAuthCallbackInProgress, isOauthProcessingLocked } from "../lib/oauthCallbackLock";
 import { formatAuthStateChangeLog } from "../lib/oauthLogSanitize";
 import { tryExitOAuthLoadingAfterProfileReady } from "../lib/oauthProfileReadyExit";
+import {
+  logOAuthSessionReceived,
+  logOAuthUserReceived,
+} from "../lib/oauthSessionRecoveryDiag";
 
 export type Profile = {
   id: string;
@@ -335,7 +339,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ),
           );
           console.log("AUTH_PROFILE_READY", { userId: fast.id.slice(0, 8) });
-          tryExitOAuthLoadingAfterProfileReady(
+          void tryExitOAuthLoadingAfterProfileReady(
             fast as unknown as Record<string, unknown>,
             userId,
           );
@@ -670,6 +674,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           userId: nextSession.user.id.slice(0, 8),
           event,
         });
+        logOAuthSessionReceived("onAuthStateChange", nextSession, null);
+        logOAuthUserReceived("onAuthStateChange", nextSession.user, null);
+        if (event === "SIGNED_IN") {
+          console.log("[OAuthRecovery/onAuthStateChange] OAUTH_SUCCESS", { event });
+        }
         setIsLoading(false);
         setIsAuthInitialized(true);
       }
@@ -754,7 +763,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const uid = session?.user?.id;
     if (!uid || profile?.id !== uid) return;
-    tryExitOAuthLoadingAfterProfileReady(profile as unknown as Record<string, unknown>, uid);
+    void tryExitOAuthLoadingAfterProfileReady(profile as unknown as Record<string, unknown>, uid);
   }, [session?.user?.id, profile]);
 
   useEffect(() => {

@@ -6,6 +6,7 @@ import { consumeAuthOAuthUserMessage } from "../lib/authOAuthUserMessage";
 import { GOOGLE_OAUTH_USER_ERROR_MSG } from "../lib/googleOAuthFlow";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { showGoogleSignInOverlay, hideGoogleSignInOverlay, awaitGoogleSignInOverlayPaint } from "../lib/googleSignInOverlay";
+import { isIosGoogleOAuthBrowserFlow, showIosGoogleOAuthConnectingOverlay } from "../lib/iosGoogleOAuthDisplay";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
 import { useAuth } from "../contexts/AuthContext";
 import { APP_BG, APP_TEXT_MUTED, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
@@ -312,8 +313,12 @@ export default function Auth() {
   async function signInWithGoogle() {
     setMessage(null);
     setOauthLoading("google");
-    showGoogleSignInOverlay();
-    await awaitGoogleSignInOverlayPaint();
+    if (isIosGoogleOAuthBrowserFlow()) {
+      await showIosGoogleOAuthConnectingOverlay();
+    } else {
+      showGoogleSignInOverlay();
+      await awaitGoogleSignInOverlayPaint();
+    }
     try {
       const { error } = await signInWithGoogleOAuth();
       if (error) {

@@ -6,12 +6,39 @@ import {
   POST_OAUTH_ROUTING_SAFETY_MS,
 } from "./postOAuthSplash";
 import { stashAuthOAuthUserMessage } from "./authOAuthUserMessage";
-import { GOOGLE_OAUTH_USER_ERROR_MSG } from "./googleOAuthFlow";
+import { OAUTH_CALLBACK_INTERRUPTED_MSG } from "./googleOAuthFlow";
 import { clearOAuthCallbackUrl } from "./oauthCallbackUrlStash";
 import { logOAuthRedirect, markOAuthSessionAt } from "./postLoginPerf";
 import { redactUserId } from "./oauthLogSanitize";
 import { scrubOAuthTokensFromNativeWindow } from "./scrubOAuthUrlFromWindow";
 import { forceReleaseOAuthUx } from "./oauthUxRelease";
+import { hideIosGoogleOAuthConnectingOverlay } from "./iosGoogleOAuthDisplay";
+import {
+  logOAuthRedirectDestination,
+  logOAuthSuccess,
+  shouldDeferOAuthRedirectUntilSessionLoaded,
+  verifyDefinitiveSupabaseSession,
+} from "./oauthSessionRecoveryDiag";
+
+async function navigateAfterOAuthVerified(path: string, context: string, reason: string): Promise<boolean> {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  const sessionVerify = await verifyDefinitiveSupabaseSession(context);
+  if (shouldDeferOAuthRedirectUntilSessionLoaded(normalized, sessionVerify)) {
+    logOAuthRedirectDestination(context, normalized, {
+      blocked: true,
+      reason: sessionVerify.reason,
+      oauthReason: reason,
+    });
+    return false;
+  }
+  logOAuthRedirectDestination(context, normalized, {
+    blocked: false,
+    sessionVerified: true,
+    oauthReason: reason,
+  });
+  navigateAfterOAuth(normalized);
+  return true;
+}
 
 function navigateAfterOAuth(path: string): void {
   const normalized = path.startsWith("/") ? path : `/${path}`;
@@ -32,16 +59,23 @@ function navigateAfterOAuth(path: string): void {
   }
 }
 
-function applyHashRoute(path: string, reason: string): void {
+async function applyHashRoute(path: string, reason: string): Promise<boolean> {
   const normalized = path.startsWith("/") ? path : `/${path}`;
   console.log("ROUTE_AFTER_AUTH", { path: normalized, reason });
+
+  const navigated = await navigateAfterOAuthVerified(normalized, "post_google_auth", reason);
+  if (!navigated) {
+    console.warn("[PostOAuth] redirect deferred — session not verified", { path: normalized, reason });
+    return false;
+  }
+
   forceReleaseOAuthUx("route_after_auth");
-  navigateAfterOAuth(normalized);
   logOAuthRedirect();
   console.log("AUTH_REDIRECT_ONBOARDING", normalized === "/onboarding" ? { reason, native: true } : undefined);
   if (normalized === "/move") {
     console.log("AUTH_REDIRECT_MOVE", { reason, native: true });
   }
+  return true;
 }
 
 /** Après session Supabase établie (OAuth navigateur ou Google natif iOS). */
@@ -49,6 +83,8 @@ export async function completePostGoogleAuth(sessionUserId: string, reason: stri
   const isNativeGoogleIos = reason === "google_native_ios";
 
   console.log("GOOGLE_SIGNIN_SUCCESS");
+  hideIosGoogleOAuthConnectingOverlay("google_signin_success");
+  logOAuthSuccess("post_google_auth", { reason });
   if (import.meta.env.DEV) {
     console.log("SESSION_RESTORED");
     console.log("AUTH_SESSION_READY", { userId: redactUserId(sessionUserId) });
@@ -61,29 +97,29 @@ export async function completePostGoogleAuth(sessionUserId: string, reason: stri
     const routePath = await resolvePostOAuthPath(supabase, sessionUserId);
     const hashTarget = routePath === "/move" ? "/move" : "/";
     console.log("[BOOT] route decision", { status: "ready", route: hashTarget, oauthRoute: routePath, reason });
-    applyHashRoute(hashTarget, reason);
-    return true;
+    return await applyHashRoute(hashTarget, reason);
   }
 
   let routePath: "/move" | "/onboarding" | "/" = "/onboarding";
   let routed = false;
 
-  const applyPostOAuthRoute = (path: string) => {
+  const applyPostOAuthRoute = async (path: string) => {
     const normalized = path === "/move" ? "/move" : path === "/onboarding" ? "/onboarding" : "/";
     routePath = normalized;
-    applyHashRoute(routePath, reason);
-    routed = true;
+    const ok = await applyHashRoute(routePath, reason);
+    if (ok) routed = true;
   };
 
   const safetyTimer = window.setTimeout(() => {
     if (routed) return;
     console.warn("[PostOAuth] routing safety timeout", POST_OAUTH_ROUTING_SAFETY_MS, "ms →", routePath);
-    applyPostOAuthRoute(routePath);
+    void applyPostOAuthRoute(routePath);
   }, POST_OAUTH_ROUTING_SAFETY_MS);
 
   try {
     try {
       await ensureProfileRowForAuthUserId(sessionUserId);
+      console.log("PROFILE_FETCH_SUCCESS", { userId: sessionUserId });
       routePath = await resolvePostOAuthPath(supabase, sessionUserId);
     } catch (e) {
       console.warn("[PostOAuth] profile/route resolution failed — fallback onboarding", e);
@@ -91,7 +127,7 @@ export async function completePostGoogleAuth(sessionUserId: string, reason: stri
     }
 
     console.log("[BOOT] route decision", { status: "ready", route: routePath, reason });
-    applyPostOAuthRoute(routePath);
+    await applyPostOAuthRoute(routePath);
 
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
@@ -99,18 +135,20 @@ export async function completePostGoogleAuth(sessionUserId: string, reason: stri
   } finally {
     window.clearTimeout(safetyTimer);
     if (!routed) {
-      applyPostOAuthRoute(routePath);
+      await applyPostOAuthRoute(routePath);
     }
-    forceReleaseOAuthUx("post_oauth_finally");
+    if (routed) {
+      forceReleaseOAuthUx("post_oauth_finally");
+    }
   }
 
-  return true;
+  return routed;
 }
 
 export function abortGoogleSignInFlow(): void {
   clearOAuthCallbackUrl();
   scrubOAuthTokensFromNativeWindow("#/auth");
-  stashAuthOAuthUserMessage(GOOGLE_OAUTH_USER_ERROR_MSG);
+  stashAuthOAuthUserMessage(OAUTH_CALLBACK_INTERRUPTED_MSG);
   forceReleaseOAuthUx("flow_aborted");
   window.location.hash = "#/auth";
 }
