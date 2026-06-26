@@ -17,7 +17,9 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
       source.indexOf("const [debug, setDebug]"),
     );
     expect(finalizeBlock).not.toContain("abortPostOAuthSplash");
-    expect(finalizeBlock).not.toContain("dismissPostOAuthSplash");
+    expect(finalizeBlock).toContain("dismissPostOAuthSplash");
+    expect(finalizeBlock).toContain("verifyDefinitiveSupabaseSession");
+    expect(finalizeBlock).toContain("resolvePostOAuthPath");
   });
 
   it("capacitorOAuth : flux callback simple sans probes ni resume", () => {
