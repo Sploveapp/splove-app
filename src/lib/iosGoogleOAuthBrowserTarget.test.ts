@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ensureIosBrowserNeverOpensSupabase,
+  isIosBrowserOpenAllowed,
   logIosOAuthBrowserTarget,
   resolveGoogleAuthorizeUrlFromSupabase,
   resolveIosGoogleOAuthBrowserTarget,
@@ -18,6 +19,10 @@ const { requestMock } = vi.hoisted(() => ({
 
 vi.mock("@capacitor/core", () => ({
   CapacitorHttp: { request: requestMock },
+}));
+
+vi.mock("./env", () => ({
+  env: { supabaseAnonKey: "test-anon-key" },
 }));
 
 describe("resolveIosGoogleOAuthBrowserTarget", () => {
@@ -42,9 +47,7 @@ describe("resolveIosGoogleOAuthBrowserTarget", () => {
     );
     expect(target.url).toBe(GOOGLE_AUTHORIZE);
     expect(target.openHost).toBe("accounts.google.com");
-    expect(target.sourceAuthorizeHost).toBe("abc.supabase.co");
-    expect(target.googleVisible).toBe(true);
-    expect(target.supabaseFlashRisk).toBe(false);
+    expect(isIosBrowserOpenAllowed(target.url)).toBe(true);
   });
 
   it("suit une chaîne de 302 intermédiaires jusqu’à Google", async () => {
@@ -68,35 +71,43 @@ describe("resolveIosGoogleOAuthBrowserTarget", () => {
     expect(requestMock).toHaveBeenCalledTimes(2);
   });
 
-  it("retombe sur la page SPLove start si la résolution échoue", async () => {
+  it("échoue sans ouvrir Supabase si la résolution HTTP échoue", async () => {
     requestMock.mockRejectedValue(new Error("network"));
 
     const target = await resolveIosGoogleOAuthBrowserTarget(SUPABASE_AUTHORIZE);
-    expect(target.strategy).toBe("splove_start_page");
-    expect(target.url).toContain("#/oauth/google/start");
-    expect(target.supabaseFlashRisk).toBe(true);
+    expect(target.strategy).toBe("resolve_failed");
+    expect(target.url).toBeNull();
     expect(target.googleVisible).toBe(false);
-    expect(target.openHost).toBe("localhost");
+    expect(target.reason).toBe("resolve_http_error");
+    expect(isIosBrowserOpenAllowed(target.url)).toBe(false);
   });
 
-  it("ensureIosBrowserNeverOpensSupabase bloque toute URL supabase.co", () => {
+  it("échoue sans ouvrir Supabase si pas de redirect Google", async () => {
+    requestMock.mockResolvedValue({ status: 200, headers: {}, url: SUPABASE_AUTHORIZE });
+
+    const target = await resolveIosGoogleOAuthBrowserTarget(SUPABASE_AUTHORIZE);
+    expect(target.strategy).toBe("resolve_failed");
+    expect(target.url).toBeNull();
+    expect(target.reason).toBe("google_url_unresolved");
+  });
+
+  it("ensureIosBrowserNeverOpensSupabase rejette toute URL supabase.co", () => {
     const blocked = ensureIosBrowserNeverOpensSupabase(
       {
         url: SUPABASE_AUTHORIZE,
         strategy: "google_direct",
         sourceAuthorizeHost: "abc.supabase.co",
         openHost: "abc.supabase.co",
-        supabaseFlashRisk: false,
         googleVisible: false,
       },
       SUPABASE_AUTHORIZE,
     );
-    expect(blocked.strategy).toBe("splove_start_page");
-    expect(blocked.url).toContain("#/oauth/google/start");
-    expect(blocked.url).not.toContain("supabase.co/auth/v1/authorize");
+    expect(blocked.strategy).toBe("resolve_failed");
+    expect(blocked.url).toBeNull();
+    expect(isIosBrowserOpenAllowed(SUPABASE_AUTHORIZE)).toBe(false);
   });
 
-  it("logIosOAuthBrowserTarget émet les diagnostics iOS attendus", () => {
+  it("logIosOAuthBrowserTarget émet IOS_BROWSER_VISIBLE_HOST accounts.google.com", () => {
     const logs: unknown[][] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...args) => {
       logs.push([...args]);
@@ -108,16 +119,16 @@ describe("resolveIosGoogleOAuthBrowserTarget", () => {
         strategy: "google_direct",
         sourceAuthorizeHost: "abc.supabase.co",
         openHost: "accounts.google.com",
-        supabaseFlashRisk: false,
         googleVisible: true,
       },
       SUPABASE_AUTHORIZE,
     );
 
-    expect(logs.some((row) => row[0] === "IOS_BROWSER_INITIAL_URL" && row[1] === "abc.supabase.co")).toBe(
-      true,
-    );
-    expect(logs.some((row) => row[0] === "IOS_BROWSER_GOOGLE_VISIBLE" && row[1] === true)).toBe(true);
+    expect(
+      logs.some(
+        (row) => row[0] === "IOS_BROWSER_VISIBLE_HOST" && row[1] === "accounts.google.com",
+      ),
+    ).toBe(true);
     spy.mockRestore();
   });
 });

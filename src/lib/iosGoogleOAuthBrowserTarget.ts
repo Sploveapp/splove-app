@@ -1,26 +1,27 @@
 import { CapacitorHttp } from "@capacitor/core";
+import { env } from "./env";
 import {
   hasRequiredGoogleOAuthParams,
   isCompleteGoogleOAuthAuthorizeUrl,
   isGoogleAccountsOAuthUrl,
 } from "./oauthGoogleBrowserUrl";
-import { buildOAuthGoogleStartBrowserUrl, isSupabaseGoogleAuthorizeUrl } from "./oauthGoogleStartUrl";
+import { isSupabaseGoogleAuthorizeUrl } from "./oauthGoogleStartUrl";
 
-export type IosOAuthBrowserTargetStrategy = "google_direct" | "splove_start_page";
+export type IosOAuthBrowserTargetStrategy = "google_direct" | "resolve_failed";
 
 export type IosOAuthBrowserTarget = {
-  url: string;
+  url: string | null;
   strategy: IosOAuthBrowserTargetStrategy;
   /** Host de l’URL Supabase /authorize d’origine. */
   sourceAuthorizeHost: string;
-  /** Host réellement ouvert dans SFSafariViewController. */
+  /** Host réellement ouvert dans SFSafariViewController (accounts.google.com si ok). */
   openHost: string;
-  supabaseFlashRisk: boolean;
   googleVisible: boolean;
+  reason?: string;
 };
 
 const MAX_REDIRECT_HOPS = 10;
-const REDIRECT_STATUSES = new Set([302, 303, 307, 308]);
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 function hostFromUrl(url: string): string {
   try {
@@ -30,12 +31,20 @@ function hostFromUrl(url: string): string {
   }
 }
 
-function isSupabaseAuthHost(url: string): boolean {
+export function isSupabaseAuthHost(url: string): boolean {
   try {
     return /\.supabase\.co$/i.test(new URL(url).hostname);
   } catch {
     return /\.supabase\.co/i.test(url);
   }
+}
+
+/** iOS : Browser.open autorisé uniquement sur accounts.google.com. */
+export function isIosBrowserOpenAllowed(url: string | null | undefined): boolean {
+  if (!url?.trim()) return false;
+  if (isSupabaseAuthHost(url)) return false;
+  if (isSupabaseGoogleAuthorizeUrl(url)) return false;
+  return isGoogleAccountsOAuthUrl(url);
 }
 
 function locationHeader(headers: Record<string, unknown> | undefined): string | null {
@@ -69,6 +78,20 @@ export function isUsableGoogleOAuthAuthorizeUrl(url: string): boolean {
   }
 }
 
+function authorizeResolveHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+    "User-Agent":
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  };
+  const anon = env.supabaseAnonKey?.trim();
+  if (anon) {
+    headers.apikey = anon;
+    headers.Authorization = `Bearer ${anon}`;
+  }
+  return headers;
+}
+
 async function fetchRedirectHop(url: string): Promise<{
   status: number;
   location: string | null;
@@ -78,9 +101,7 @@ async function fetchRedirectHop(url: string): Promise<{
     url,
     method: "GET",
     disableRedirects: true,
-    headers: {
-      Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-    },
+    headers: authorizeResolveHeaders(),
   });
 
   const responseUrl = typeof res.url === "string" && res.url.trim() ? res.url.trim() : null;
@@ -93,7 +114,7 @@ async function fetchRedirectHop(url: string): Promise<{
 }
 
 /**
- * Suit uniquement les redirects 302/303/307/308 jusqu’à accounts.google.com.
+ * Suit uniquement les redirects 301/302/303/307/308 jusqu’à accounts.google.com.
  * Ne charge jamais le corps Supabase dans le navigateur système.
  */
 export async function resolveGoogleAuthorizeUrlFromSupabase(
@@ -108,7 +129,11 @@ export async function resolveGoogleAuthorizeUrlFromSupabase(
     const { status, location, responseUrl } = await fetchRedirectHop(current);
 
     if (responseUrl && isUsableGoogleOAuthAuthorizeUrl(responseUrl)) {
-      console.log("IOS_OAUTH_RESOLVE_GOOGLE", { hop, host: hostFromUrl(responseUrl), via: "response_url" });
+      console.log("IOS_OAUTH_RESOLVE_GOOGLE", {
+        hop,
+        host: hostFromUrl(responseUrl),
+        via: "response_url",
+      });
       return responseUrl;
     }
 
@@ -143,19 +168,59 @@ export async function resolveGoogleAuthorizeUrlFromSupabase(
     break;
   }
 
+  const followed = await fetchGoogleUrlFollowingRedirects(supabaseAuthorizeUrl.trim());
+  if (followed) return followed;
+
   return null;
 }
 
-function buildSploveStartFallback(supabaseAuthorizeUrl: string): IosOAuthBrowserTarget {
-  const trimmed = supabaseAuthorizeUrl.trim();
-  const startUrl = buildOAuthGoogleStartBrowserUrl(trimmed);
+/** Repli HTTP natif : suivre les 302 côté app sans ouvrir le navigateur. */
+async function fetchGoogleUrlFollowingRedirects(supabaseAuthorizeUrl: string): Promise<string | null> {
+  try {
+    const res = await CapacitorHttp.request({
+      url: supabaseAuthorizeUrl,
+      method: "GET",
+      headers: authorizeResolveHeaders(),
+    });
+    const responseUrl = typeof res.url === "string" ? res.url.trim() : "";
+    if (responseUrl && isUsableGoogleOAuthAuthorizeUrl(responseUrl)) {
+      console.log("IOS_OAUTH_RESOLVE_GOOGLE", {
+        via: "follow_redirects",
+        host: hostFromUrl(responseUrl),
+        status: res.status ?? 0,
+      });
+      return responseUrl;
+    }
+    const location = locationHeader(res.headers as Record<string, unknown> | undefined);
+    if (location) {
+      const absolute = toAbsoluteUrl(location, supabaseAuthorizeUrl);
+      if (isUsableGoogleOAuthAuthorizeUrl(absolute)) {
+        console.log("IOS_OAUTH_RESOLVE_GOOGLE", {
+          via: "follow_redirects_location",
+          host: hostFromUrl(absolute),
+        });
+        return absolute;
+      }
+    }
+  } catch (e) {
+    console.log("IOS_OAUTH_RESOLVE_FOLLOW_ERROR", {
+      message: e instanceof Error ? e.message : String(e),
+    });
+  }
+  return null;
+}
+
+function buildResolveFailedTarget(
+  supabaseAuthorizeUrl: string,
+  reason: string,
+): IosOAuthBrowserTarget {
   return {
-    url: startUrl,
-    strategy: "splove_start_page",
-    sourceAuthorizeHost: hostFromUrl(trimmed),
-    openHost: hostFromUrl(startUrl),
-    supabaseFlashRisk: true,
+    url: null,
+    strategy: "resolve_failed",
+    sourceAuthorizeHost: hostFromUrl(supabaseAuthorizeUrl),
+    openHost: "(none)",
     googleVisible: false,
+    reason,
   };
 }
 
@@ -168,12 +233,11 @@ function buildGoogleDirectTarget(
     strategy: "google_direct",
     sourceAuthorizeHost: hostFromUrl(supabaseAuthorizeUrl),
     openHost: hostFromUrl(googleUrl),
-    supabaseFlashRisk: false,
     googleVisible: true,
   };
 }
 
-/** iOS : ne jamais retourner une URL *.supabase.co pour Browser.open. */
+/** iOS : ne retourne une URL que pour accounts.google.com — jamais Supabase ni page start. */
 export async function resolveIosGoogleOAuthBrowserTarget(
   supabaseAuthorizeUrl: string,
 ): Promise<IosOAuthBrowserTarget> {
@@ -181,31 +245,38 @@ export async function resolveIosGoogleOAuthBrowserTarget(
 
   try {
     const googleUrl = await resolveGoogleAuthorizeUrlFromSupabase(trimmed);
-    if (googleUrl && !isSupabaseAuthHost(googleUrl)) {
+    if (googleUrl && isIosBrowserOpenAllowed(googleUrl)) {
       return buildGoogleDirectTarget(trimmed, googleUrl);
+    }
+    if (googleUrl && !isIosBrowserOpenAllowed(googleUrl)) {
+      console.log("IOS_BROWSER_OPEN_BLOCKED_SUPABASE", { host: hostFromUrl(googleUrl) });
+      return buildResolveFailedTarget(trimmed, "resolved_non_google_url");
     }
   } catch (e) {
     console.log("IOS_GOOGLE_OAUTH_RESOLVE_ERROR", {
       message: e instanceof Error ? e.message : String(e),
     });
+    return buildResolveFailedTarget(trimmed, "resolve_http_error");
   }
 
-  return buildSploveStartFallback(trimmed);
+  return buildResolveFailedTarget(trimmed, "google_url_unresolved");
 }
 
-/** Dernière barrière : jamais Browser.open sur supabase.co (iOS). */
+/** Dernière barrière avant Browser.open — rejette toute URL non-Google. */
 export function ensureIosBrowserNeverOpensSupabase(
   target: IosOAuthBrowserTarget,
   supabaseAuthorizeUrl: string,
 ): IosOAuthBrowserTarget {
-  if (
-    isSupabaseAuthHost(target.url) ||
-    isSupabaseGoogleAuthorizeUrl(target.url)
-  ) {
-    console.log("IOS_BROWSER_OPEN_BLOCKED_SUPABASE", { host: hostFromUrl(target.url) });
-    return buildSploveStartFallback(supabaseAuthorizeUrl);
+  if (target.strategy === "google_direct" && target.url && isIosBrowserOpenAllowed(target.url)) {
+    return target;
   }
-  return target;
+  if (target.url && (isSupabaseAuthHost(target.url) || isSupabaseGoogleAuthorizeUrl(target.url))) {
+    console.log("IOS_BROWSER_OPEN_BLOCKED_SUPABASE", { host: hostFromUrl(target.url) });
+  }
+  return buildResolveFailedTarget(
+    supabaseAuthorizeUrl,
+    target.reason ?? "browser_open_not_google",
+  );
 }
 
 export function logIosOAuthBrowserTarget(
@@ -217,16 +288,16 @@ export function logIosOAuthBrowserTarget(
     : target.sourceAuthorizeHost;
 
   console.log("IOS_BROWSER_INITIAL_URL", sourceHost);
-  console.log("IOS_BROWSER_VISIBLE_HOST", target.openHost);
 
-  if (target.googleVisible) {
+  if (target.googleVisible && target.openHost === "accounts.google.com") {
+    console.log("IOS_BROWSER_VISIBLE_HOST", "accounts.google.com");
     console.log("IOS_BROWSER_GOOGLE_VISIBLE", true);
-  }
-
-  if (target.supabaseFlashRisk) {
+  } else {
+    console.log("IOS_BROWSER_VISIBLE_HOST", target.openHost);
     console.log("IOS_SUPABASE_FLASH_DETECTED", {
+      blocked: true,
       strategy: target.strategy,
-      phase: "browser_open",
+      reason: target.reason ?? "not_google",
     });
   }
 
@@ -235,6 +306,6 @@ export function logIosOAuthBrowserTarget(
     sourceHost,
     openHost: target.openHost,
     googleVisible: target.googleVisible,
-    isSupabaseOpen: isSupabaseAuthHost(target.url),
+    allowed: target.url ? isIosBrowserOpenAllowed(target.url) : false,
   });
 }

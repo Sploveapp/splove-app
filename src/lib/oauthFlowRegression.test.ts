@@ -57,19 +57,28 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     expect(iosTargetSource).toContain("resolveGoogleAuthorizeUrlFromSupabase");
     expect(iosTargetSource).toContain("ensureIosBrowserNeverOpensSupabase");
     expect(iosTargetSource).toContain("disableRedirects: true");
+    expect(iosTargetSource).toContain("resolve_failed");
+    expect(iosTargetSource).toContain("isIosBrowserOpenAllowed");
+    expect(iosTargetSource).not.toContain("splove_start_page");
+    expect(iosTargetSource).not.toContain("buildOAuthGoogleStartBrowserUrl");
     expect(capSource).toContain("ensureIosBrowserNeverOpensSupabase");
+    expect(capSource).toContain("openIosOAuthBrowser");
+    expect(capSource).toContain("isIosOAuthBrowserOpenAllowedUrl");
+    expect(capSource).toContain("IOS_OAUTH_RESOLVE_FAIL");
     expect(capSource).toContain("BROWSER_OPEN_GOOGLE");
     expect(capSource).toContain("routeOAuthDeepLink");
-    expect(capSource).toContain("isOAuthBrowserOpenAllowedUrl");
+    expect(capSource).toContain("assertIosBrowserOpenBeforeOpen");
     expect(capSource).toContain("BROWSER_OPEN_START");
-    expect(capSource).toContain("BROWSER_OPEN_DONE");
+    expect(capSource).toContain("strategy");
+    expect(capSource).toContain("IOS_BROWSER_OPEN_SUPABASE_FORBIDDEN");
     expect(capSource).not.toContain("startIosGoogleOAuthWebAuth");
     expect(capSource).not.toContain("SploveOAuth");
     expect(capSource).not.toContain("ASWebAuthenticationSession");
+    expect(capSource).not.toContain("browser_supabase_authorize");
 
     const androidBlock = capSource.slice(
-      capSource.indexOf("if (!isIos) {"),
-      capSource.indexOf("return openOAuthBrowser(browserTargetUrl)", capSource.indexOf("if (!isIos) {")),
+      capSource.indexOf("const browserTargetUrl = googleOAuthNativeBrowserTargetUrl"),
+      capSource.indexOf("return openAndroidOAuthBrowser(browserTargetUrl)"),
     );
     expect(androidBlock).toContain("showGoogleSignInOverlay");
   });
