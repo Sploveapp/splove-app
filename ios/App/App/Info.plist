@@ -84,6 +84,15 @@
 				<string>com.splove.app</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.splove.app.google-signin</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.326751885638-3l4sibo9hmce1hjt5ijaqlktim65l8ok</string>
+				<string>com.googleusercontent.apps.326751885638-314sibo9hmce1hjt5ijaqlktim65l8ok</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>
