@@ -186,8 +186,12 @@ export default function Profile() {
     fallbackUrls: avatarIosFetchUrls.filter((u) => u !== avatarRemoteBase),
   });
   /** Src finale avatar : data URL iOS si prête, sinon signed/public résolue. */
+  const rawProfileAvatarDisplaySrc =
+    iosAvatarPhoto.displaySrc?.trim() || avatarRemoteBase?.trim() || "";
   const profileAvatarDisplaySrc =
-    iosAvatarPhoto.displaySrc?.trim() || avatarRemoteBase?.trim() || null;
+    typeof rawProfileAvatarDisplaySrc === "string" && rawProfileAvatarDisplaySrc.length > 0
+      ? rawProfileAvatarDisplaySrc
+      : null;
   const showAvatarImg = Boolean(profileAvatarDisplaySrc);
   const showAvatarPlaceholder =
     !showAvatarImg && (avatarPhoto.isLoading || iosAvatarPhoto.isResolving);
@@ -251,7 +255,7 @@ export default function Profile() {
         profileId: profile?.id ?? user.id,
         main_photo_url: profile?.main_photo_url ?? null,
         portrait_url: profile?.portrait_url ?? null,
-        avatar_url: profile?.avatar_url ?? null,
+        avatar_url: typeof profile?.avatar_url === "string" ? profile.avatar_url : null,
         fullbody_url: profile?.fullbody_url ?? null,
         photo1_status: (profile as Record<string, unknown> | undefined)?.photo1_status as string | null,
         photo2_status: (profile as Record<string, unknown> | undefined)?.photo2_status as string | null,

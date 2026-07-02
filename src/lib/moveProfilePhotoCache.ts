@@ -1,4 +1,4 @@
-import { Capacitor, CapacitorHttp } from "@capacitor/core";
+import { CapacitorHttp } from "@capacitor/core";
 import { supabase } from "./supabase";
 import { buildIosCapacitorImageFetchUrlCandidates } from "./profilePhotoIosDisplayUrls";
 import {
