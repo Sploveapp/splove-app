@@ -12,6 +12,7 @@ import { flushSync } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
+import { normalizeProfileRowCanonicalPhotos } from "../lib/onboardingProfilePhotos";
 import { isNativeCapacitorApp } from "../lib/authRedirect";
 import {
   AUTH_BOOTSTRAP_MAX_MS,
@@ -207,7 +208,11 @@ async function fetchProfileCore(
     return null;
   }
 
-  return profileRowToProfile(data as AppProfile);
+  const normalized =
+    normalizeProfileRowCanonicalPhotos(data as Record<string, unknown>, supabase) ??
+    (data as Record<string, unknown>);
+
+  return profileRowToProfile(normalized as AppProfile);
 }
 
 async function enrichProfileOptionalFields(userId: string, base: Profile): Promise<Profile> {

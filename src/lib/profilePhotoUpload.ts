@@ -207,6 +207,7 @@ export async function uploadProfilePhoto(
     slot,
     fileSize: normalizedFile.size,
     fileType: normalizedFile.type,
+    objectPath,
   });
 
   const { data: uploadData, error: uploadError } = await supabase.storage
@@ -218,6 +219,13 @@ export async function uploadProfilePhoto(
     });
 
   if (uploadError) {
+    PhotoFlowLog.uploadFailed({
+      userId,
+      slot,
+      error: uploadError.message,
+      code: (uploadError as { statusCode?: string }).statusCode ?? null,
+      objectPath,
+    });
     PhotoFlowLog.uploadResult({
       userId,
       slot,
@@ -249,6 +257,15 @@ export async function uploadProfilePhoto(
     slot,
     objectPath,
     storedRef,
+  });
+
+  PhotoFlowLog.supabaseUrlReturned({
+    userId,
+    slot,
+    storedRef,
+    publicUrl,
+    displayUrl: null,
+    objectPath,
   });
 
   SPLovePhotoLog.urlGenerated({
@@ -297,6 +314,15 @@ export async function uploadProfilePhoto(
     storedRef,
     displayUrl,
     extra: { bucketReadableViaPublicUrl },
+  });
+  PhotoFlowLog.supabaseUrlReturned({
+    userId,
+    slot,
+    storedRef,
+    publicUrl,
+    displayUrl,
+    objectPath,
+    bucketReadableViaPublicUrl,
   });
   PhotoFlowLog.onboardingUploadSuccess({
     userId,

@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import type { Profile } from "../contexts/AuthContext";
+import { normalizeProfileRowCanonicalPhotos } from "./onboardingProfilePhotos";
 
 export type DiscoverFeedRow = {
   profile: Profile | null;
@@ -56,13 +57,18 @@ export async function fetchDiscoverFeedAlive(
       return { rows: [], source: "feed_profiles_fallback", error: feedErr.message };
     }
 
-    const rows: DiscoverFeedRow[] = (feedRows ?? []).map((p) => ({
-      profile: p as unknown as Profile,
-      activity_label: null,
-      availability_label: null,
-      vibe_label: null,
-      feed_reason: "feed_profiles_fallback",
-    }));
+    const rows: DiscoverFeedRow[] = (feedRows ?? []).map((p) => {
+      const normalized =
+        normalizeProfileRowCanonicalPhotos(p as Record<string, unknown>, supabase) ??
+        (p as Record<string, unknown>);
+      return {
+        profile: normalized as unknown as Profile,
+        activity_label: null,
+        availability_label: null,
+        vibe_label: null,
+        feed_reason: "feed_profiles_fallback",
+      };
+    });
     return { rows, source: "feed_profiles_fallback", error: null };
   } catch (e) {
     console.warn("[Discover feed] fetch failed", e);

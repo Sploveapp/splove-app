@@ -29,8 +29,12 @@ import {
   logProfilePhotoUiDecision,
   resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
+import { normalizeProfileRowCanonicalPhotos } from "../lib/onboardingProfilePhotos";
+import { PhotoFlowLog, photoFlowFieldsFromRow } from "../lib/photoFlowLog";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
 import { useIosCapacitorImageDisplay } from "../hooks/useIosCapacitorImageDisplay";
+import { buildIosCapacitorImageFetchUrlCandidates } from "../lib/profilePhotoIosDisplayUrls";
+import { buildIosAwareProfilePhotoImgHandlers } from "../lib/profilePhotoIosImgHandlers";
 import { coerceProfileHeightCm, parseHeightCmOptionalInput } from "../lib/profileHeightCm";
 import { uploadProfilePhoto } from "../lib/profilePhotoUpload";
 import { sportPictogramForSlug } from "../lib/onboardingSportsQuickPick";
@@ -93,6 +97,10 @@ function buildEditPrimaryPhotoCandidates(
   profile: EditProfilePhotoFields | null | undefined,
   localSavedUrl: string,
 ): { refs: string[]; fieldByRef: Record<string, string> } {
+  const normalized = profile
+    ? (normalizeProfileRowCanonicalPhotos(profile as Record<string, unknown>, supabase) ??
+      (profile as Record<string, unknown>))
+    : null;
   const fieldOrder = ["portrait_url", "main_photo_url", "avatar_url"] as const;
   const refs: string[] = [];
   const fieldByRef: Record<string, string> = {};
@@ -105,7 +113,7 @@ function buildEditPrimaryPhotoCandidates(
     fieldByRef[t] = key;
   };
   for (const key of fieldOrder) {
-    push(key, profile?.[key]);
+    push(key, normalized?.[key]);
   }
   const local = localSavedUrl.trim();
   if (local && !seen.has(local)) {
@@ -120,10 +128,14 @@ function buildEditSecondaryPhotoCandidates(
   profile: EditProfilePhotoFields | null | undefined,
   localSavedUrl: string,
 ): { refs: string[]; fieldByRef: Record<string, string> } {
+  const normalized = profile
+    ? (normalizeProfileRowCanonicalPhotos(profile as Record<string, unknown>, supabase) ??
+      (profile as Record<string, unknown>))
+    : null;
   const refs: string[] = [];
   const fieldByRef: Record<string, string> = {};
   const fullbody =
-    typeof profile?.fullbody_url === "string" ? profile.fullbody_url.trim() : "";
+    typeof normalized?.fullbody_url === "string" ? normalized.fullbody_url.trim() : "";
   if (fullbody) {
     refs.push(fullbody);
     fieldByRef[fullbody] = "fullbody_url";
@@ -315,24 +327,112 @@ export default function EditProfile() {
   const primaryRemoteBase =
     primaryPhoto.isFailed && !primaryPhoto.src ? null : primaryResolvedSrc;
 
+  const primaryIosFetchUrls = useMemo(
+    () => buildIosCapacitorImageFetchUrlCandidates(primaryStoredRef, primaryRemoteBase),
+    [primaryStoredRef, primaryRemoteBase],
+  );
+  const secondaryRemoteBase =
+    secondaryPhoto.isFailed && !secondaryPhoto.src ? null : secondaryResolvedSrc;
+  const secondaryIosFetchUrls = useMemo(
+    () => buildIosCapacitorImageFetchUrlCandidates(secondaryStoredRef, secondaryRemoteBase),
+    [secondaryStoredRef, secondaryRemoteBase],
+  );
+
   /** iOS WKWebView : repli CapacitorHttp → data URL (même pattern que Profil). */
   const iosPrimaryPhoto = useIosCapacitorImageDisplay(
     portraitFile ? null : primaryRemoteBase,
+    { fallbackUrls: primaryIosFetchUrls.filter((u) => u !== primaryRemoteBase) },
+  );
+  const iosSecondaryPhoto = useIosCapacitorImageDisplay(
+    secondaryRemoteBase,
+    { fallbackUrls: secondaryIosFetchUrls.filter((u) => u !== secondaryRemoteBase) },
   );
 
   const primaryImgSrc = portraitFile ? primaryRemoteBase : iosPrimaryPhoto.displaySrc;
-  const secondaryImgSrc =
-    secondaryPhoto.isFailed || (secondaryPhoto.isLoading && secondaryEditCandidates.refs.length > 0)
-      ? null
-      : secondaryResolvedSrc;
+  const secondaryImgSrc = iosSecondaryPhoto.displaySrc;
 
   const showPrimaryImg = portraitFile
     ? Boolean(primaryImgSrc)
     : Boolean(primaryImgSrc) &&
       !(iosPrimaryPhoto.resolutionFailed && !iosPrimaryPhoto.usingDataUrl);
-  const showSecondaryImg = Boolean(secondaryImgSrc);
+  const showSecondaryImg =
+    Boolean(secondaryImgSrc) &&
+    !(iosSecondaryPhoto.resolutionFailed && !iosSecondaryPhoto.usingDataUrl);
 
   useEffect(() => {
+    if (!user?.id) return;
+
+    const logSlot = (
+      slot: "primary" | "secondary",
+      showing: boolean,
+      imgSrc: string | null,
+      storedRef: string | null,
+      photo: typeof primaryPhoto,
+      refs: string[],
+      iosResolving?: boolean,
+      iosFailed?: boolean,
+      iosDataUrl?: boolean,
+    ) => {
+      if (showing && imgSrc) {
+        PhotoFlowLog.profilePhotoResolved({
+          userId: user.id,
+          profileId: profile?.id ?? user.id,
+          screen: "EditProfile",
+          photoField: photo.activeField,
+          storedRef,
+          displayUrl: imgSrc,
+          candidateIndex: photo.urlIndex,
+        });
+        return;
+      }
+      let reason: Parameters<typeof PhotoFlowLog.placeholderShown>[0]["reason"] = "unknown";
+      if (refs.length === 0) reason = "no_photo_refs_in_profile";
+      else if (photo.isLoading && slot === "secondary") reason = "secondary_loading";
+      else if (photo.isLoading) reason = "resolving_urls";
+      else if (iosResolving) reason = "ios_capacitor_resolving";
+      else if (photo.isFailed && !photo.src) reason = "url_resolution_failed";
+      else if (!imgSrc) reason = "no_display_src";
+      else if (iosFailed && !iosDataUrl) reason = "ios_capacitor_failed";
+      PhotoFlowLog.placeholderShown({
+        screen: "EditProfile",
+        slot,
+        userId: user.id,
+        profileId: profile?.id ?? user.id,
+        reason,
+        photoFields: photoFlowFieldsFromRow(profile as Record<string, unknown> | undefined),
+        storedRef,
+        resolvedUrl: photo.src,
+        extra: {
+          candidateRefCount: refs.length,
+          isLoading: photo.isLoading,
+          isFailed: photo.isFailed,
+        },
+      });
+    };
+
+    logSlot(
+      "primary",
+      showPrimaryImg,
+      primaryImgSrc,
+      primaryStoredRef,
+      primaryPhoto,
+      portraitRefs,
+      iosPrimaryPhoto.isResolving,
+      iosPrimaryPhoto.resolutionFailed,
+      iosPrimaryPhoto.usingDataUrl,
+    );
+    logSlot(
+      "secondary",
+      showSecondaryImg,
+      secondaryImgSrc,
+      secondaryStoredRef,
+      secondaryPhoto,
+      bodyRefs,
+      iosSecondaryPhoto.isResolving,
+      iosSecondaryPhoto.resolutionFailed,
+      iosSecondaryPhoto.usingDataUrl,
+    );
+
     logProfilePhotoUiDecision("edit_profile.screen", profile, primaryImgSrc, "primary");
     logProfilePhotoUiDecision("edit_profile.screen", profile, secondaryImgSrc, "secondary");
     PhotoRenderLog.displaySrc({
@@ -364,14 +464,50 @@ export default function EditProfile() {
       extra: { profileId: profile?.id ?? user?.id ?? null, slot: "secondary", urlIndex: secondaryPhoto.urlIndex },
     });
   }, [
+    user?.id,
     profile,
+    showPrimaryImg,
+    showSecondaryImg,
     primaryImgSrc,
     secondaryImgSrc,
+    primaryStoredRef,
+    secondaryStoredRef,
+    portraitRefs,
+    bodyRefs,
+    primaryPhoto,
+    secondaryPhoto,
+    iosPrimaryPhoto.isResolving,
+    iosPrimaryPhoto.resolutionFailed,
+    iosPrimaryPhoto.usingDataUrl,
+    iosSecondaryPhoto.isResolving,
+    iosSecondaryPhoto.resolutionFailed,
+    iosSecondaryPhoto.usingDataUrl,
     primaryPhoto.src,
     secondaryPhoto.src,
     primaryPhoto.urlIndex,
     secondaryPhoto.urlIndex,
-    user?.id,
+  ]);
+
+  useEffect(() => {
+    if (portraitFile) return;
+    if (iosPrimaryPhoto.resolutionFailed && !iosPrimaryPhoto.usingDataUrl) {
+      primaryPhoto.onImageError();
+    }
+  }, [
+    portraitFile,
+    iosPrimaryPhoto.resolutionFailed,
+    iosPrimaryPhoto.usingDataUrl,
+    primaryPhoto.onImageError,
+  ]);
+
+  useEffect(() => {
+    if (iosSecondaryPhoto.resolutionFailed && !iosSecondaryPhoto.usingDataUrl) {
+      secondaryPhoto.onImageError();
+    }
+  }, [
+    iosSecondaryPhoto.resolutionFailed,
+    iosSecondaryPhoto.usingDataUrl,
+    secondaryPhoto.onImageError,
   ]);
 
   const editPrimaryImgHandlers = chainPhotoRenderHandlers(
@@ -382,13 +518,17 @@ export default function EditProfile() {
       profile,
       extra: { profileId: profile?.id ?? user?.id ?? null, slot: "primary" },
     },
-    {
-      onLoad: primaryPhoto.onImageLoad,
-      onError: () => {
-        if (!portraitFile) iosPrimaryPhoto.onImageError();
-        primaryPhoto.onImageError();
-      },
-    },
+    portraitFile
+      ? {
+          onLoad: primaryPhoto.onImageLoad,
+          onError: primaryPhoto.onImageError,
+        }
+      : buildIosAwareProfilePhotoImgHandlers({
+          iosOnError: iosPrimaryPhoto.onImageError,
+          photoOnError: primaryPhoto.onImageError,
+          photoOnLoad: primaryPhoto.onImageLoad,
+          iosResolutionFailed: iosPrimaryPhoto.resolutionFailed,
+        }),
   );
 
   const editSecondaryImgHandlers = chainPhotoRenderHandlers(
@@ -399,13 +539,37 @@ export default function EditProfile() {
       profile,
       extra: { profileId: profile?.id ?? user?.id ?? null, slot: "secondary" },
     },
-    { onLoad: secondaryPhoto.onImageLoad, onError: secondaryPhoto.onImageError },
+    buildIosAwareProfilePhotoImgHandlers({
+      iosOnError: iosSecondaryPhoto.onImageError,
+      photoOnError: secondaryPhoto.onImageError,
+      photoOnLoad: secondaryPhoto.onImageLoad,
+      iosResolutionFailed: iosSecondaryPhoto.resolutionFailed,
+    }),
   );
 
   const syncProfileForScreen = useCallback(async () => {
     if (!user?.id) return;
     const row = await fetchProfileScreenFields(user.id);
-    if (!row) return;
+    if (!row) {
+      PhotoFlowLog.screenProfileRow({
+        userId: user.id,
+        screen: "EditProfile",
+        source: "syncProfileForScreen",
+        row: null,
+        error: "fetchProfileScreenFields_returned_null",
+      });
+      return;
+    }
+    PhotoFlowLog.screenProfileRow({
+      userId: user.id,
+      screen: "EditProfile",
+      source: "syncProfileForScreen",
+      row,
+      candidateRefs: [
+        ...buildEditPrimaryPhotoCandidates(profileRef.current, "").refs,
+        ...buildEditSecondaryPhotoCandidates(profileRef.current, "").refs,
+      ],
+    });
     const base = profileRef.current;
     if (base?.id) {
       commitProfileRow(mergeProfileScreenRowPreservingPhotos(base as Record<string, unknown>, row));

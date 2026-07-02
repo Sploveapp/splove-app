@@ -77,8 +77,9 @@ import {
   uploadProfilePhoto,
 } from "../lib/profilePhotoUpload";
 import { SPLovePhotoLog } from "../lib/profilePhotoPipelineLog";
-import { PhotoFlowLog } from "../lib/photoFlowLog";
+import { PhotoFlowLog, PHOTO_FLOW_READBACK_SELECT } from "../lib/photoFlowLog";
 import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
+import { buildOnboardingPhotoUpsertPayload } from "../lib/onboardingProfilePhotos";
 import {
   ensureOnboardingCompletionInProfile,
   fetchProfileAfterOnboardingSubmit,
@@ -415,8 +416,14 @@ function reinjectOnboardingPhotoUrlsInPayload(
   if (portrait) {
     next.portrait_url = portrait;
     if (!String(next.avatar_url ?? "").trim()) next.avatar_url = portrait;
+    next.portrait_path = portrait;
   }
-  if (fullbody) next.fullbody_url = fullbody;
+  if (fullbody) {
+    next.fullbody_url = fullbody;
+    next.photo2_path = fullbody;
+    next.activity_photo_path = fullbody;
+    next.fullbody_path = fullbody;
+  }
   next.main_photo_url = portrait || fullbody;
   return next;
 }
@@ -429,8 +436,7 @@ function profileRowHasCanonicalPhotos(row: Record<string, unknown> | null | unde
   return portrait.length > 0 || fullbody.length > 0 || main.length > 0;
 }
 
-const ONBOARDING_PHOTO_READBACK_SELECT =
-  "id, portrait_url, fullbody_url, main_photo_url, avatar_url";
+const ONBOARDING_PHOTO_READBACK_SELECT = PHOTO_FLOW_READBACK_SELECT;
 
 /** Retire les champs photo vides du payload pour qu’un upsert ne force pas `null` en BDD. */
 function omitEmptyCanonicalPhotoUrlsFromPayload(
@@ -455,6 +461,11 @@ async function readbackOnboardingProfilePhotos(
     .eq("id", userId)
     .maybeSingle();
   if (error) {
+    PhotoFlowLog.profileReadback({
+      userId,
+      source: "Onboarding.readbackOnboardingProfilePhotos",
+      error: error.message,
+    });
     console.error("[Onboarding] photo readback failed", {
       userId,
       message: error.message,
@@ -479,12 +490,22 @@ async function ensureOnboardingPhotosPersistedWithReadback(
   await ensureOnboardingPhotosInProfile(userId, portraitUrl, fullbodyUrl, source);
   let row = await readbackOnboardingProfilePhotos(userId);
   if (row && profileRowHasCanonicalPhotos(row)) {
+    PhotoFlowLog.profileReadback({
+      userId,
+      source: `${source}.readback_ok`,
+      row,
+    });
     return { ok: true, row };
   }
 
   await ensureOnboardingPhotosInProfile(userId, portraitUrl, fullbodyUrl, `${source}.retry`);
   row = await readbackOnboardingProfilePhotos(userId);
   if (row && profileRowHasCanonicalPhotos(row)) {
+    PhotoFlowLog.profileReadback({
+      userId,
+      source: `${source}.retry.readback_ok`,
+      row,
+    });
     return { ok: true, row };
   }
 
@@ -516,8 +537,14 @@ function mergeOnboardingPhotosIntoProfileRow(
   if (portrait) {
     next.portrait_url = portrait;
     if (!String(next.avatar_url ?? "").trim()) next.avatar_url = portrait;
+    next.portrait_path = portrait;
   }
-  if (fullbody) next.fullbody_url = fullbody;
+  if (fullbody) {
+    next.fullbody_url = fullbody;
+    next.photo2_path = fullbody;
+    next.activity_photo_path = fullbody;
+    next.fullbody_path = fullbody;
+  }
   next.main_photo_url = portrait || fullbody;
   return next;
 }
@@ -541,27 +568,21 @@ async function ensureOnboardingPhotosInProfile(
     extra: { hasPortrait: Boolean(portrait), hasFullbody: Boolean(fullbody) },
   });
 
-  const payload: Record<string, unknown> = {
-    id: userId,
-    updated_at: new Date().toISOString(),
-    ...(portrait ? { portrait_url: portrait, avatar_url: portrait } : {}),
-    ...(fullbody ? { fullbody_url: fullbody } : {}),
-    main_photo_url: portrait || fullbody,
-  };
+  const payload =
+    buildOnboardingPhotoUpsertPayload(userId, portraitUrl, fullbodyUrl, supabase) ?? null;
+  if (!payload) return null;
 
-  PhotoFlowLog.profilePayloadSent({
+  PhotoFlowLog.profileSavePayload({
     userId,
     source,
-    portrait_url: portrait || null,
-    fullbody_url: fullbody || null,
-    main_photo_url: (portrait || fullbody) || null,
-    avatar_url: portrait || null,
+    operation: "upsert",
+    payload,
   });
 
   const { data, error } = await supabase
     .from("profiles")
     .upsert(payload, { onConflict: "id" })
-    .select("id, portrait_url, fullbody_url, main_photo_url, avatar_url")
+    .select(PHOTO_FLOW_READBACK_SELECT)
     .maybeSingle();
 
   if (error) {
@@ -584,10 +605,7 @@ async function ensureOnboardingPhotosInProfile(
   PhotoFlowLog.profileReadback({
     userId,
     source,
-    portrait_url: typeof savedRow.portrait_url === "string" ? savedRow.portrait_url : null,
-    fullbody_url: typeof savedRow.fullbody_url === "string" ? savedRow.fullbody_url : null,
-    main_photo_url: typeof savedRow.main_photo_url === "string" ? savedRow.main_photo_url : null,
-    avatar_url: typeof savedRow.avatar_url === "string" ? savedRow.avatar_url : null,
+    row: savedRow,
   });
 
   SPLovePhotoLog.dbSaveSuccess({
@@ -1817,9 +1835,13 @@ export default function Onboarding() {
             portrait_url: storedRef,
             avatar_url: storedRef,
             main_photo_url: storedRef,
+            portrait_path: storedRef,
           }
         : {
             fullbody_url: storedRef,
+            photo2_path: storedRef,
+            activity_photo_path: storedRef,
+            fullbody_path: storedRef,
           }),
     };
 
@@ -1828,19 +1850,17 @@ export default function Onboarding() {
       payload.main_photo_url = portraitRef || storedRef;
     }
 
-    PhotoFlowLog.profilePayloadSent({
+    PhotoFlowLog.profileSavePayload({
       userId,
       source: "Onboarding.persistOnboardingPhotoInProfile",
-      portrait_url: typeof payload.portrait_url === "string" ? payload.portrait_url : null,
-      fullbody_url: typeof payload.fullbody_url === "string" ? payload.fullbody_url : null,
-      main_photo_url: typeof payload.main_photo_url === "string" ? payload.main_photo_url : null,
-      avatar_url: typeof payload.avatar_url === "string" ? payload.avatar_url : null,
+      operation: "upsert",
+      payload,
     });
 
     const { data: profileUpdateData, error: profileUpdateError } = await supabase
       .from("profiles")
       .upsert(payload, { onConflict: "id" })
-      .select("id, portrait_url, fullbody_url, main_photo_url")
+      .select(PHOTO_FLOW_READBACK_SELECT)
       .maybeSingle();
 
     if (profileUpdateError) {
@@ -1851,7 +1871,11 @@ export default function Onboarding() {
         storedRef,
         error: profileUpdateError.message,
       });
-      console.error("PHOTO_PROFILE_UPDATE_ERROR", profileUpdateError);
+      PhotoFlowLog.profileReadback({
+        userId,
+        source: "Onboarding.persistOnboardingPhotoInProfile",
+        error: profileUpdateError.message,
+      });
       throw profileUpdateError;
     }
     SPLovePhotoLog.dbSaveSuccess({
@@ -1865,10 +1889,7 @@ export default function Onboarding() {
     PhotoFlowLog.profileReadback({
       userId,
       source: "Onboarding.persistOnboardingPhotoInProfile",
-      portrait_url: typeof savedRow.portrait_url === "string" ? savedRow.portrait_url : null,
-      fullbody_url: typeof savedRow.fullbody_url === "string" ? savedRow.fullbody_url : null,
-      main_photo_url: typeof savedRow.main_photo_url === "string" ? savedRow.main_photo_url : null,
-      avatar_url: typeof savedRow.avatar_url === "string" ? savedRow.avatar_url : null,
+      row: savedRow,
     });
     PhotoFlowLog.savedToProfile({
       userId,
@@ -1884,7 +1905,6 @@ export default function Onboarding() {
         typeof savedRow.portrait_url === "string" ? savedRow.portrait_url : null,
     });
     clearProfilePhotoResolutionCache();
-    console.log("PHOTO_PROFILE_UPDATE_SUCCESS", profileUpdateData);
     return savedRow;
   }
 
@@ -1909,32 +1929,30 @@ export default function Onboarding() {
       return;
     }
 
-    PhotoFlowLog.fileSelected({
+    if (kind === "portrait") setPortraitFile(file);
+    else setBodyFile(file);
+
+    const localPreviewUrl = URL.createObjectURL(file);
+    PhotoFlowLog.localPhotoSelected({
       userId: user.id,
       slot: kind === "portrait" ? "portrait" : "activity",
       fileName: file.name,
       fileSize: file.size,
       fileType: file.type,
+      localPreviewUrl,
     });
-
-    if (kind === "portrait") setPortraitFile(file);
-    else setBodyFile(file);
-
-    const localPreviewUrl = URL.createObjectURL(file);
     if (kind === "portrait") {
       setPortraitLocalPreviewUrl((prev) => {
         revokeObjectUrlSafe(prev);
         return localPreviewUrl;
       });
       setPortraitPreviewLoadFailed(false);
-      console.log("PHOTO_PREVIEW_LOCAL_OK", { slot: "face", phase: "selected" });
     } else {
       setBodyLocalPreviewUrl((prev) => {
         revokeObjectUrlSafe(prev);
         return localPreviewUrl;
       });
       setBodyPreviewLoadFailed(false);
-      console.log("PHOTO_PREVIEW_LOCAL_OK", { slot: "activity", phase: "selected" });
     }
     setPhotoUploadingKind(kind);
 
@@ -2701,16 +2719,12 @@ export default function Onboarding() {
           prodSanitizeCtx,
         );
 
-        console.log("[Onboarding submit] sending data:", {
-          table: "profiles",
-          operation: attempt === 0 ? "upsert" : "upsert retry",
+        PhotoFlowLog.profileSavePayload({
+          userId: authUserId,
+          source: "Onboarding.submit.upsert",
+          operation: "upsert",
           attempt: attempt + 1,
-          payload: payloadForUpsert,
-        });
-
-        console.log("[Onboarding submit] start: upsert profiles", {
-          select: profileUpsertSelect,
-          payload: payloadForUpsert,
+          payload: { ...payloadForUpsert, id: authUserId },
         });
 
         const profilesRequest = await supabase
@@ -2734,6 +2748,11 @@ export default function Onboarding() {
         });
 
         if (!profileError) {
+          PhotoFlowLog.profileReadback({
+            userId: authUserId,
+            source: "Onboarding.submit.upsert",
+            row: (upsertRow ?? payloadForUpsert) as Record<string, unknown>,
+          });
           SPLovePhotoLog.dbSaveSuccess({
             source: "Onboarding.submit.upsert",
             userId: authUserId,
@@ -2743,7 +2762,18 @@ export default function Onboarding() {
           break;
         }
 
-        if (attempt === 0) {
+        if (profileError) {
+          PhotoFlowLog.profileSavePayload({
+            userId: authUserId,
+            source: "Onboarding.submit.upsert",
+            operation: "upsert",
+            attempt: attempt + 1,
+            payload: { ...payloadForUpsert, id: authUserId },
+            error: profileError.message ?? "upsert_failed",
+          });
+        }
+
+        if (attempt === 0 && profileError) {
           const faultyColumn = extractFaultyColumnNameFromPostgrestMessage(profileError.message);
           console.error("[Onboarding submit] upsert/select failure details", {
             operation: "profiles upsert(...).select(...).maybeSingle()",

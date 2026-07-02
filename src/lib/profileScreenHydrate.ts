@@ -2,6 +2,11 @@ import { supabase } from "./supabase";
 import { selectProfilesFirstMatch } from "./profileSelect";
 import { SPLovePhotoLog, snapshotProfilePhotoFields } from "./profilePhotoPipelineLog";
 import { PhotoFlowLog } from "./photoFlowLog";
+import {
+  buildOnboardingPhotoUpsertPayload,
+  normalizeProfileRowCanonicalPhotos,
+  profileRowHasCanonicalPhotos,
+} from "./onboardingProfilePhotos";
 
 const PROFILE_PHOTO_FIELD_KEYS = [
   "portrait_url",
@@ -42,8 +47,75 @@ export function mergeAuthProfileRow(
   return mergeProfileScreenRowPreservingPhotos(prev, incoming);
 }
 
+/** Colonnes canoniques réellement présentes en BDD (sans résolution legacy). */
+function rawRowHasCanonicalPhotoColumns(row: Record<string, unknown>): boolean {
+  const portrait = typeof row.portrait_url === "string" ? row.portrait_url.trim() : "";
+  const fullbody = typeof row.fullbody_url === "string" ? row.fullbody_url.trim() : "";
+  const main = typeof row.main_photo_url === "string" ? row.main_photo_url.trim() : "";
+  return portrait.length > 0 || fullbody.length > 0 || main.length > 0;
+}
+
+/** Réécrit les colonnes canoniques en BDD si seules les colonnes legacy contiennent les URLs. */
+async function healCanonicalProfilePhotosInDbIfNeeded(
+  userId: string,
+  rawRow: Record<string, unknown>,
+  normalizedRow: Record<string, unknown>,
+): Promise<void> {
+  if (!userId || rawRowHasCanonicalPhotoColumns(rawRow)) return;
+  if (!profileRowHasCanonicalPhotos(normalizedRow)) return;
+
+  const portrait =
+    typeof normalizedRow.portrait_url === "string" ? normalizedRow.portrait_url : "";
+  const fullbody =
+    typeof normalizedRow.fullbody_url === "string" ? normalizedRow.fullbody_url : "";
+  const payload = buildOnboardingPhotoUpsertPayload(userId, portrait, fullbody, supabase);
+  if (!payload) return;
+
+  PhotoFlowLog.profilePayloadSent({
+    userId,
+    source: "healCanonicalProfilePhotosInDbIfNeeded",
+    portrait_url: portrait || null,
+    fullbody_url: fullbody || null,
+    main_photo_url: (portrait || fullbody) || null,
+    avatar_url: portrait || null,
+  });
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .upsert(payload, { onConflict: "id" })
+    .select("id, portrait_url, fullbody_url, main_photo_url, avatar_url")
+    .maybeSingle();
+
+  if (error) {
+    console.warn("[profile-screen-hydrate] heal canonical photos failed", {
+      userId,
+      message: error.message,
+    });
+    return;
+  }
+
+  const saved = (data ?? payload) as Record<string, unknown>;
+  PhotoFlowLog.profileReadback({
+    userId,
+    source: "healCanonicalProfilePhotosInDbIfNeeded",
+    portrait_url: typeof saved.portrait_url === "string" ? saved.portrait_url : null,
+    fullbody_url: typeof saved.fullbody_url === "string" ? saved.fullbody_url : null,
+    main_photo_url: typeof saved.main_photo_url === "string" ? saved.main_photo_url : null,
+    avatar_url: typeof saved.avatar_url === "string" ? saved.avatar_url : null,
+  });
+  PhotoFlowLog.savedToProfile({
+    userId,
+    profileId: userId,
+    photoField: portrait ? "portrait_url" : "fullbody_url",
+    storedRef: portrait || fullbody,
+    main_photo_url: portrait || fullbody,
+    portrait_url: portrait || null,
+  });
+}
+
 /** Champs affichés sur Profil / EditProfile — indépendants du palier FAST auth post-OAuth. */
 const PROFILE_SCREEN_SELECT_TIERS: string[] = [
+  "id, portrait_url, fullbody_url, main_photo_url, avatar_url, portrait_path, fullbody_path, activity_photo_path, photo2_path, city, latitude, longitude, discovery_radius_km, location_source, preferred_age_min, preferred_age_max, sport_phrase, intent, looking_for, sport_match_preference, height_cm, updated_at",
   "id, portrait_url, fullbody_url, main_photo_url, avatar_url, city, latitude, longitude, discovery_radius_km, location_source, preferred_age_min, preferred_age_max, sport_phrase, intent, looking_for, sport_match_preference, height_cm, updated_at",
   "id, portrait_url, fullbody_url, main_photo_url, avatar_url, city, latitude, longitude, discovery_radius_km, preferred_age_min, preferred_age_max, sport_phrase, intent, looking_for, updated_at",
   "id, portrait_url, fullbody_url, main_photo_url, avatar_url, city, latitude, longitude, discovery_radius_km, sport_phrase, intent, looking_for, updated_at",
@@ -73,7 +145,20 @@ export async function fetchProfileScreenFields(
     });
     return null;
   }
-  const photos = snapshotProfilePhotoFields(data);
+
+  const rawRow = data as Record<string, unknown>;
+  const normalizedRow = normalizeProfileRowCanonicalPhotos(rawRow, supabase) ?? rawRow;
+
+  PhotoFlowLog.screenProfileRow({
+    userId,
+    screen: "profile_hydrate",
+    source: "fetchProfileScreenFields",
+    row: normalizedRow,
+  });
+
+  void healCanonicalProfilePhotosInDbIfNeeded(userId, rawRow, normalizedRow).catch(() => undefined);
+
+  const photos = snapshotProfilePhotoFields(normalizedRow);
   PhotoFlowLog.profileReadback({
     userId,
     source: "fetchProfileScreenFields",
@@ -86,17 +171,17 @@ export async function fetchProfileScreenFields(
     SPLovePhotoLog.profileLoadSuccess({
       source: "fetchProfileScreenFields",
       userId,
-      profileRow: data,
+      profileRow: normalizedRow,
       extra: { usedSelectSample: usedSelect?.slice(0, 80) ?? null },
     });
   } else {
     SPLovePhotoLog.profileLoadEmpty({
       source: "fetchProfileScreenFields",
       userId,
-      profileRow: data,
+      profileRow: normalizedRow,
       error: "row_without_photo_urls",
       extra: { usedSelectSample: usedSelect?.slice(0, 80) ?? null },
     });
   }
-  return data;
+  return normalizedRow;
 }

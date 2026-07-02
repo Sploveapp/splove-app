@@ -218,16 +218,23 @@ export function useProfilePhotoDisplaySrc(
     const ctx = logContextRef.current;
     const field = fieldForRef(ctx, ref);
     logSelected(ref);
-    emitConnectedPhotoLog(ctx, "field_try", {
+    PhotoFlowLog.urlResolveAttempt({
+      screen: ctx?.source ?? "profile.screen",
+      userId: ctx?.userId,
+      profileId: ctx?.profileId,
       photoField: field,
-      storedRef: photoUrlPrefix(ref),
+      storedRef: ref,
+      refIndex: ri,
+      candidateCount: refsRef.current.length,
     });
     const candidates = await resolveProfilePhotoStoredRefDisplayUrls(ref);
     if (candidates.length === 0) {
-      emitConnectedPhotoLog(ctx, "field_no_display_url", {
-        photoField: field,
-        storedRef: photoUrlPrefix(ref),
-        error: "no_public_or_signed_url",
+      PhotoFlowLog.noValidPhoto({
+        context: ctx?.source ?? "profile.screen",
+        userId: ctx?.userId,
+        profileId: ctx?.profileId,
+        storedRef: ref,
+        reason: "no_public_or_signed_url",
       });
       return false;
     }
@@ -236,10 +243,14 @@ export function useProfilePhotoDisplaySrc(
     setUrlIndex(0);
     setIsLoading(false);
     setIsFailed(false);
-    emitConnectedPhotoLog(ctx, "display_url_ready", {
+    PhotoFlowLog.profilePhotoResolved({
+      userId: ctx?.userId,
+      profileId: ctx?.profileId,
+      screen: ctx?.source ?? "profile.screen",
       photoField: field,
-      storedRef: photoUrlPrefix(ref),
-      displayUrl: photoUrlPrefix(candidates[0] ?? null),
+      storedRef: ref,
+      displayUrl: candidates[0] ?? null,
+      candidateIndex: 0,
       candidateCount: candidates.length,
     });
     return true;

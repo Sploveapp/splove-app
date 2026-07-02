@@ -205,10 +205,19 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
                 : t("profile_photo")
             }
             className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+            loading="eager"
+            decoding="async"
             onLoad={onPhotoLoad}
             onError={onPhotoError}
           />
-        ) : photoPending ? null : (
+        ) : photoPending ? (
+          <div
+            className="absolute inset-0 bg-zinc-900"
+            style={{ background: "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)" }}
+            aria-busy
+            aria-label={t("profile_photo")}
+          />
+        ) : (
           <button
             type="button"
             className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-zinc-900"

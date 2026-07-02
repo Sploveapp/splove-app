@@ -14,6 +14,17 @@ export const PROFILE_CANONICAL_PHOTO_COLUMNS = [
   "avatar_url",
 ] as const;
 
+/** Colonnes legacy encore lues en prod (sanitize onboarding / schéma partiel). */
+export const PROFILE_LEGACY_PORTRAIT_REF_KEYS = [
+  "portrait_path",
+] as const;
+
+export const PROFILE_LEGACY_FULLBODY_REF_KEYS = [
+  "fullbody_path",
+  "activity_photo_path",
+  "photo2_path",
+] as const;
+
 export type ProfilePhotoUrlRow = {
   portrait_url?: string | null;
   fullbody_url?: string | null;
@@ -21,15 +32,104 @@ export type ProfilePhotoUrlRow = {
   avatar_url?: string | null;
 };
 
+function pickFirstTrimmedRef(...candidates: unknown[]): string {
+  for (const candidate of candidates) {
+    const t = typeof candidate === "string" ? candidate.trim() : "";
+    if (t) return t;
+  }
+  return "";
+}
+
+/** URL Storage SPLove (`profile-photos`) — pas un avatar OAuth externe. */
+export function isSploveProfileStoragePhotoRef(value: string | null | undefined): boolean {
+  const t = typeof value === "string" ? value.trim() : "";
+  if (!t) return false;
+  return t.includes("/profile-photos/") || t.startsWith("profile-photos/");
+}
+
+/**
+ * Portrait : canonique → legacy → avatar Storage (évite avatar Google sans photo uploadée).
+ * Même ordre que l’hydratation onboarding.
+ */
+export function resolvePortraitStoredRefFromRow(
+  row: Record<string, unknown> | null | undefined,
+  supabase?: SupabaseClient,
+): string {
+  if (!row) return "";
+  const portrait = pickFirstTrimmedRef(row.portrait_url);
+  const main = pickFirstTrimmedRef(row.main_photo_url);
+  const avatar = pickFirstTrimmedRef(row.avatar_url);
+  const legacy = pickFirstTrimmedRef(...PROFILE_LEGACY_PORTRAIT_REF_KEYS.map((k) => row[k]));
+
+  const ordered: string[] = [];
+  if (portrait) ordered.push(portrait);
+  if (main && isSploveProfileStoragePhotoRef(main)) ordered.push(main);
+  if (avatar && isSploveProfileStoragePhotoRef(avatar)) ordered.push(avatar);
+  if (legacy) ordered.push(legacy);
+  if (!ordered.length && main) ordered.push(main);
+  if (!ordered.length && avatar) ordered.push(avatar);
+
+  const raw = ordered[0] ?? "";
+  return raw ? normalizeProfilePhotoStoredRef(raw, supabase).trim() : "";
+}
+
+/** Silhouette : fullbody_url puis chemins legacy (photo2_path, etc.). */
+export function resolveFullbodyStoredRefFromRow(
+  row: Record<string, unknown> | null | undefined,
+  supabase?: SupabaseClient,
+): string {
+  if (!row) return "";
+  const raw = pickFirstTrimmedRef(
+    row.fullbody_url,
+    ...PROFILE_LEGACY_FULLBODY_REF_KEYS.map((k) => row[k]),
+  );
+  return raw ? normalizeProfilePhotoStoredRef(raw, supabase).trim() : "";
+}
+
+/**
+ * Aligne portrait_url / fullbody_url / main_photo_url / avatar_url depuis canonique + legacy.
+ * Ne modifie pas la row si aucune référence utilisable.
+ */
+export function normalizeProfileRowCanonicalPhotos(
+  row: Record<string, unknown> | null | undefined,
+  supabase?: SupabaseClient,
+): Record<string, unknown> | null {
+  if (!row || typeof row !== "object") return null;
+  const portrait = resolvePortraitStoredRefFromRow(row, supabase);
+  const fullbody = resolveFullbodyStoredRefFromRow(row, supabase);
+  if (!portrait && !fullbody) return row;
+
+  const next: Record<string, unknown> = { ...row };
+  if (portrait) {
+    next.portrait_url = portrait;
+    const avatar = pickFirstTrimmedRef(next.avatar_url);
+    if (!avatar || !isSploveProfileStoragePhotoRef(avatar)) {
+      next.avatar_url = portrait;
+    }
+  }
+  if (fullbody) next.fullbody_url = fullbody;
+  next.main_photo_url = portrait || fullbody;
+  return next;
+}
+
 /** Au moins une URL canonique non vide (main, portrait ou fullbody). */
 export function profileRowHasCanonicalPhotos(
   row: Record<string, unknown> | null | undefined,
 ): boolean {
   if (!row) return false;
-  const portrait = typeof row.portrait_url === "string" ? row.portrait_url.trim() : "";
-  const fullbody = typeof row.fullbody_url === "string" ? row.fullbody_url.trim() : "";
-  const main = typeof row.main_photo_url === "string" ? row.main_photo_url.trim() : "";
-  return portrait.length > 0 || fullbody.length > 0 || main.length > 0;
+  const normalized = normalizeProfileRowCanonicalPhotos(row) ?? row;
+  const portrait =
+    typeof normalized.portrait_url === "string" ? normalized.portrait_url.trim() : "";
+  const fullbody =
+    typeof normalized.fullbody_url === "string" ? normalized.fullbody_url.trim() : "";
+  const main =
+    typeof normalized.main_photo_url === "string" ? normalized.main_photo_url.trim() : "";
+  const avatar =
+    typeof normalized.avatar_url === "string" &&
+    isSploveProfileStoragePhotoRef(normalized.avatar_url)
+      ? normalized.avatar_url.trim()
+      : "";
+  return portrait.length > 0 || fullbody.length > 0 || main.length > 0 || avatar.length > 0;
 }
 
 /** Référence affichage principale : main → portrait → avatar. */
@@ -53,8 +153,14 @@ export function mergeOnboardingPhotosIntoProfileRow(
   if (portrait) {
     next.portrait_url = portrait;
     if (!String(next.avatar_url ?? "").trim()) next.avatar_url = portrait;
+    next.portrait_path = portrait;
   }
-  if (fullbody) next.fullbody_url = fullbody;
+  if (fullbody) {
+    next.fullbody_url = fullbody;
+    next.photo2_path = fullbody;
+    next.activity_photo_path = fullbody;
+    next.fullbody_path = fullbody;
+  }
   next.main_photo_url = portrait || fullbody;
   return next;
 }
@@ -73,8 +179,21 @@ export function buildOnboardingPhotoUpsertPayload(
   return {
     id: userId,
     updated_at: new Date().toISOString(),
-    ...(portrait ? { portrait_url: portrait, avatar_url: portrait } : {}),
-    ...(fullbody ? { fullbody_url: fullbody } : {}),
+    ...(portrait
+      ? {
+          portrait_url: portrait,
+          avatar_url: portrait,
+          portrait_path: portrait,
+        }
+      : {}),
+    ...(fullbody
+      ? {
+          fullbody_url: fullbody,
+          photo2_path: fullbody,
+          activity_photo_path: fullbody,
+          fullbody_path: fullbody,
+        }
+      : {}),
     main_photo_url: portrait || fullbody,
   };
 }
@@ -88,7 +207,8 @@ export function assertValidatedProfileHasCanonicalPhotoUrl(
 ): void {
   if (!profile || typeof profile !== "object") return;
   if (!hasProfilePhotosModerationValidated(profile)) return;
-  if (!profileRowHasCanonicalPhotos(profile)) {
+  const normalized = normalizeProfileRowCanonicalPhotos(profile) ?? profile;
+  if (!profileRowHasCanonicalPhotos(normalized)) {
     throw new Error(
       "REGRESSION: photo moderation validated but no canonical photo URL (main_photo_url, portrait_url, avatar_url, fullbody_url)",
     );

@@ -2,6 +2,10 @@ import sploveMark from "../assets/welcome/splove-mark.png";
 import { photoUrlPrefix } from "./profilePhotoPipelineLog";
 import { isKnownBrokenProfilePhotoUrl } from "./profilePhotoStorageHealth";
 import type { ProfilePhotoUrlFields } from "./profilePhotoDisplayUrl";
+import {
+  resolvePortraitStoredRefFromRow,
+} from "./onboardingProfilePhotos";
+import { supabase } from "./supabase";
 
 /** Logo SPLove — fallback UI quand aucune photo valide n’est affichable. */
 export const SPLOVE_PROFILE_PHOTO_FALLBACK_SRC: string = sploveMark;
@@ -73,6 +77,16 @@ export function getUserMainPhoto(
   if (!storedRef && fieldSnapshot.fullbody_url) {
     storedRef = fieldSnapshot.fullbody_url;
     sourceField = "fullbody_url";
+  }
+
+  if (!storedRef && profile && typeof profile === "object") {
+    const legacyPortrait = trimPhotoRef(
+      resolvePortraitStoredRefFromRow(profile as Record<string, unknown>, supabase),
+    );
+    if (legacyPortrait) {
+      storedRef = legacyPortrait;
+      sourceField = "portrait_url";
+    }
   }
 
   const resolvedUserId =

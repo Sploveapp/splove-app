@@ -1,7 +1,9 @@
-import { Capacitor } from "@capacitor/core";
-import { capacitorFetch } from "./supabaseCapacitorFetch";
+import { Capacitor, CapacitorHttp } from "@capacitor/core";
+import { PhotoFlowLog } from "./photoFlowLog";
+import { photoUrlPrefix } from "./profilePhotoPipelineLog";
 
 const CACHE_MAX_ENTRIES = 32;
+const FETCH_TIMEOUT_MS = 25_000;
 const dataUrlCache = new Map<string, string>();
 
 /** iOS WKWebView : `<img src=https://…>` échoue souvent ; CapacitorHttp GET fonctionne. */
@@ -19,7 +21,9 @@ function cacheKey(url: string): string {
 }
 
 export function getCachedCapacitorImageDataUrl(url: string): string | null {
-  return dataUrlCache.get(cacheKey(url)) ?? null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  return dataUrlCache.get(cacheKey(trimmed)) ?? null;
 }
 
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -40,44 +44,148 @@ function rememberDataUrl(url: string, dataUrl: string): void {
   dataUrlCache.set(key, dataUrl);
 }
 
+function contentTypeFromHeaders(headers: Record<string, unknown> | undefined): string {
+  if (!headers) return "image/jpeg";
+  const raw =
+    (headers["Content-Type"] as string | undefined) ??
+    (headers["content-type"] as string | undefined) ??
+    (headers["Content-type"] as string | undefined);
+  return (typeof raw === "string" ? raw.split(";")[0]?.trim() : "") || "image/jpeg";
+}
+
+function dataUrlFromCapacitorBody(data: unknown, mime: string): string | null {
+  if (typeof data === "string") {
+    const trimmed = data.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith("data:")) return trimmed;
+    if (trimmed.startsWith("{") || trimmed.startsWith("<") || trimmed.startsWith("[")) {
+      return null;
+    }
+    return `data:${mime};base64,${trimmed}`;
+  }
+
+  if (data instanceof ArrayBuffer) {
+    if (!data.byteLength) return null;
+    return `data:${mime};base64,${uint8ToBase64(new Uint8Array(data))}`;
+  }
+
+  if (ArrayBuffer.isView(data)) {
+    const view = data as ArrayBufferView;
+    if (!view.byteLength) return null;
+    return `data:${mime};base64,${uint8ToBase64(new Uint8Array(view.buffer, view.byteOffset, view.byteLength))}`;
+  }
+
+  return null;
+}
+
 /**
- * GET image via CapacitorHttp → `data:image/jpeg;base64,…` (cache mémoire par URL).
+ * GET image via CapacitorHttp natif (pas capacitorFetch — évite corruption binaire JSON.stringify).
  */
-export async function fetchCapacitorImageDataUrl(url: string): Promise<string | null> {
+async function fetchOneRemoteImageDataUrl(url: string): Promise<string | null> {
+  const trimmed = url.trim();
+  if (!isRemoteHttpImageUrl(trimmed)) return null;
+
+  PhotoFlowLog.urlResolveAttempt({
+    screen: "ios.capacitor_http",
+    storedRef: trimmed,
+    refIndex: 0,
+    candidateCount: 1,
+  });
+
+  try {
+    const response = await Promise.race([
+      CapacitorHttp.get({ url: trimmed }),
+      new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error("CapacitorHttp image timeout")), FETCH_TIMEOUT_MS);
+      }),
+    ]);
+
+    const status = response.status ?? 0;
+    const mime = contentTypeFromHeaders(response.headers as Record<string, unknown> | undefined);
+
+    if (status < 200 || status >= 300) {
+      PhotoFlowLog.imageLoadError({
+        context: "ios.capacitor_http",
+        storedRef: trimmed,
+        displayUrl: trimmed,
+        error: `http_${status}`,
+      });
+      return null;
+    }
+
+    const dataUrl = dataUrlFromCapacitorBody(response.data, mime);
+    if (!dataUrl) {
+      PhotoFlowLog.imageLoadError({
+        context: "ios.capacitor_http",
+        storedRef: trimmed,
+        displayUrl: trimmed,
+        error: "unrecognized_response_body",
+      });
+      return null;
+    }
+
+    PhotoFlowLog.profilePhotoResolved({
+      screen: "ios.capacitor_http",
+      storedRef: trimmed,
+      displayUrl: dataUrl,
+      resolveKind: "data",
+    });
+
+    return dataUrl;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    PhotoFlowLog.imageLoadError({
+      context: "ios.capacitor_http",
+      storedRef: trimmed,
+      displayUrl: trimmed,
+      error: message,
+    });
+    return null;
+  }
+}
+
+/**
+ * GET image(s) via CapacitorHttp → `data:image/jpeg;base64,…` (cache mémoire par URL).
+ * Essaie `url` puis chaque fallback (signed → public, etc.).
+ */
+export async function fetchCapacitorImageDataUrl(
+  url: string,
+  fallbackUrls: string[] = [],
+): Promise<string | null> {
   const trimmed = url.trim();
   if (!isRemoteHttpImageUrl(trimmed)) return null;
   if (!shouldUseIosCapacitorImageFallback()) return null;
 
-  const key = cacheKey(trimmed);
-  const cached = dataUrlCache.get(key);
-  if (cached) return cached;
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of [trimmed, ...fallbackUrls]) {
+    const t = typeof candidate === "string" ? candidate.trim() : "";
+    if (!t || !isRemoteHttpImageUrl(t) || seen.has(t)) continue;
+    seen.add(t);
+    candidates.push(t);
+  }
 
-  try {
-    const res = await capacitorFetch(trimmed, { method: "GET" });
-    if (!res.ok) {
-      console.warn("[capacitorImageDataUrl] http_error", {
-        url: trimmed.slice(0, 96),
-        status: res.status,
-      });
-      return null;
+  for (const candidate of candidates) {
+    const cached = getCachedCapacitorImageDataUrl(candidate);
+    if (cached) {
+      rememberDataUrl(trimmed, cached);
+      return cached;
     }
-    const rawType = res.headers.get("content-type") || "image/jpeg";
-    const mime = rawType.split(";")[0]?.trim() || "image/jpeg";
-    const buffer = await res.arrayBuffer();
-    if (!buffer.byteLength) return null;
-    const dataUrl = `data:${mime};base64,${uint8ToBase64(new Uint8Array(buffer))}`;
+  }
+
+  for (const candidate of candidates) {
+    const dataUrl = await fetchOneRemoteImageDataUrl(candidate);
+    if (!dataUrl) continue;
+    rememberDataUrl(candidate, dataUrl);
     rememberDataUrl(trimmed, dataUrl);
-    console.log("[capacitorImageDataUrl] cached", {
-      url: trimmed.slice(0, 96),
-      mime,
-      bytes: buffer.byteLength,
+    console.log("[PhotoFlow] ios_capacitor_data_url_ready", {
+      requestedUrl: photoUrlPrefix(trimmed),
+      fetchedUrl: photoUrlPrefix(candidate),
+      mime: dataUrl.slice(5, dataUrl.indexOf(";")) || "image/jpeg",
+      bytesEstimate: Math.max(0, Math.floor((dataUrl.length - dataUrl.indexOf(",")) * 0.75)),
     });
     return dataUrl;
-  } catch (e) {
-    console.warn("[capacitorImageDataUrl] fetch_failed", {
-      url: trimmed.slice(0, 96),
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return null;
   }
+
+  return null;
 }

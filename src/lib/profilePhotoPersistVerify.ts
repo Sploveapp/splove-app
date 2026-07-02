@@ -9,6 +9,7 @@ import { SPLovePhotoLog } from "./profilePhotoPipelineLog";
 import { logUserMainPhotoDisplay, getUserMainPhoto } from "./userMainPhoto";
 import { logPhotoProfileSaveSuccess } from "./profilePhotoMainLog";
 import { logPhotoDebug, photoDebugRowSnapshot } from "./photoDebugLog";
+import { buildOnboardingPhotoUpsertPayload } from "./onboardingProfilePhotos";
 
 export const PROFILE_PHOTO_READBACK_SELECT =
   "id, portrait_url, fullbody_url, main_photo_url, avatar_url";
@@ -113,13 +114,16 @@ export async function persistCanonicalProfilePhotos(
     return { ok: false, error: "no_photo_urls" };
   }
 
-  const payload: Record<string, unknown> = {
-    id: userId,
-    updated_at: new Date().toISOString(),
-    ...(portrait ? { portrait_url: portrait, avatar_url: portrait } : {}),
-    ...(fullbody ? { fullbody_url: fullbody } : {}),
-    main_photo_url: portrait || fullbody,
-  };
+  const payload =
+    buildOnboardingPhotoUpsertPayload(
+      userId,
+      urls.portraitUrl ?? "",
+      urls.fullbodyUrl ?? "",
+      supabase,
+    ) ?? null;
+  if (!payload) {
+    return { ok: false, error: "no_photo_urls" };
+  }
 
   logUserMainPhotoDisplay(`${source}.persist`, {
     userId,
@@ -129,13 +133,11 @@ export async function persistCanonicalProfilePhotos(
     extra: { portrait: Boolean(portrait), fullbody: Boolean(fullbody) },
   });
 
-  PhotoFlowLog.profilePayloadSent({
+  PhotoFlowLog.profileSavePayload({
     userId,
     source,
-    portrait_url: portrait || null,
-    fullbody_url: fullbody || null,
-    main_photo_url: (portrait || fullbody) || null,
-    avatar_url: portrait || null,
+    operation: "upsert",
+    payload,
   });
 
   const { data, error } = await supabase
@@ -177,10 +179,7 @@ export async function persistCanonicalProfilePhotos(
   PhotoFlowLog.profileReadback({
     userId,
     source,
-    portrait_url: typeof savedRow.portrait_url === "string" ? savedRow.portrait_url : null,
-    fullbody_url: typeof savedRow.fullbody_url === "string" ? savedRow.fullbody_url : null,
-    main_photo_url: typeof savedRow.main_photo_url === "string" ? savedRow.main_photo_url : null,
-    avatar_url: typeof savedRow.avatar_url === "string" ? savedRow.avatar_url : null,
+    row: savedRow,
   });
 
   return { ok: true, row: savedRow };

@@ -64,13 +64,12 @@ import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
 import { usePremium } from "../hooks/usePremium";
 import { useSplovePlus } from "../hooks/useSplovePlus";
 import { useTranslation } from "../i18n/useTranslation";
-import { useProfilePhotoDisplaySrc } from "../hooks/useProfilePhotoDisplaySrc";
-import { useIosCapacitorImageDisplay } from "../hooks/useIosCapacitorImageDisplay";
+import { useMoveProfilePhotoDisplay } from "../hooks/useMoveProfilePhotoDisplay";
+import { prefetchMoveProfilePhotos } from "../lib/moveProfilePhotoCache";
 import {
   buildPortraitFirstProfilePhotoRefCandidates,
   logProfilePhotoUiDecision,
   pickPortraitFirstProfilePhotoStoredRef,
-  resolveProfilePhotoUiSrc,
   type ProfilePhotoUrlFields,
 } from "../lib/profilePhotoDisplayUrl";
 import { logPhotoPublicProfileResolve } from "../lib/profilePhotoMainLog";
@@ -242,46 +241,19 @@ function useMoveProfilePhotoFromRefs(
   fieldByRef: Record<string, string>,
   profileId: string | null | undefined,
   logSource: string,
-  stableKey: string,
+  _stableKey: string,
 ) {
-  const logContext = useMemo(
-    () => ({
-      profileId: profileId ?? null,
-      source: logSource,
-      fieldByRef,
-    }),
-    [profileId, logSource, stableKey],
-  );
-
-  const photoDisplay = useProfilePhotoDisplaySrc(refs, { logContext });
-  const resolvedSrc = resolveProfilePhotoUiSrc(photoDisplay.activeRef, photoDisplay.src);
-  const iosPhoto = useIosCapacitorImageDisplay(
-    photoDisplay.isFailed && !photoDisplay.src ? null : resolvedSrc,
-  );
-  const displaySrc = iosPhoto.displaySrc ?? resolvedSrc;
-  const hasStoredRef = refs.length > 0;
-  const showImg =
-    Boolean(displaySrc) &&
-    !photoDisplay.isFailed &&
-    !(iosPhoto.resolutionFailed && !iosPhoto.usingDataUrl);
-  const isPending =
-    hasStoredRef &&
-    !showImg &&
-    (photoDisplay.isLoading || iosPhoto.isResolving);
-
-  const onImageError = useCallback(() => {
-    photoDisplay.onImageError();
-    iosPhoto.onImageError();
-  }, [photoDisplay.onImageError, iosPhoto.onImageError]);
+  const storedRef = refs[0] ?? null;
+  const photo = useMoveProfilePhotoDisplay(storedRef, profileId ?? null, logSource);
 
   return {
-    photoRaw: photoDisplay.activeRef ?? refs[0] ?? null,
-    photoField: photoDisplay.activeField,
-    displaySrc: showImg ? displaySrc : null,
-    isPending,
-    hasStoredRef,
-    onImageLoad: photoDisplay.onImageLoad,
-    onImageError,
+    photoRaw: storedRef,
+    photoField: storedRef ? (fieldByRef[storedRef] ?? null) : null,
+    displaySrc: photo.displaySrc,
+    isPending: photo.isPending,
+    hasStoredRef: refs.length > 0,
+    onImageLoad: photo.onImageLoad,
+    onImageError: photo.onImageError,
   };
 }
 
@@ -1650,6 +1622,11 @@ export default function Discover() {
   useEffect(() => {
     topProfileIdRef.current = profilesCardStack[0]?.id ?? null;
   }, [profilesCardStack]);
+
+  useEffect(() => {
+    if (!feedReady || profilesCardStack.length === 0) return;
+    prefetchMoveProfilePhotos(profilesCardStack, { start: 0, count: 6 });
+  }, [feedReady, profilesCardStack[0]?.id, profilesCardStack.length]);
 
   const rotateCurrentProfileWithoutAction = useCallback(() => {
     const uid = currentUserIdRef.current;
@@ -3334,6 +3311,7 @@ export default function Discover() {
       });
       setStableProfiles(commitProfiles);
       setProfiles(commitProfiles);
+      prefetchMoveProfilePhotos(commitProfiles, { start: 0, count: 10 });
       console.log("MOVE_FEED_READY", { count: commitProfiles.length });
       swipeHistoryRef.current = [];
       setSwipeHistory([]);
