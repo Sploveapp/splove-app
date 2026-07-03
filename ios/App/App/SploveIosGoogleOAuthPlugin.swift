@@ -20,6 +20,11 @@ public class SploveIosGoogleOAuthPlugin: CAPPlugin, ASWebAuthenticationPresentat
         }
     }
 
+    @objc func showConnectingMask(_ call: CAPPluginCall) {
+        SploveOAuthMaskWindow.shared.showConnecting()
+        call.resolve()
+    }
+
     @objc func showFinalizingMask(_ call: CAPPluginCall) {
         SploveOAuthMaskWindow.shared.showFinalizing()
         call.resolve()

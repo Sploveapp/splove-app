@@ -50,6 +50,7 @@ import {
   logProfilePhotoUiDecision,
   resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
+import { mergeStickyPhotoHandlers, useStickyPhotoDisplaySrc } from "../lib/profilePhotoStickyDisplay";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 import {
@@ -92,11 +93,11 @@ function extractBootPhotoFields(row: Record<string, unknown>): ProfileBootPhotoF
   };
 }
 
-/** Bulle Profil : portrait → main → avatar → fullbody (repli stable au boot iOS). */
+/** Bulle Profil : portrait → main uniquement (jamais fullbody / avatar secondaire). */
 function buildProfileAvatarRefCandidates(
   fields: ProfileAvatarPhotoFields | null | undefined,
 ): { refs: string[]; fieldByRef: Record<string, string> } {
-  const fieldOrder = ["portrait_url", "main_photo_url", "avatar_url", "fullbody_url"] as const;
+  const fieldOrder = ["portrait_url", "main_photo_url"] as const;
   const refs: string[] = [];
   const fieldByRef: Record<string, string> = {};
   const seen = new Set<string>();
@@ -192,9 +193,12 @@ export default function Profile() {
     typeof rawProfileAvatarDisplaySrc === "string" && rawProfileAvatarDisplaySrc.length > 0
       ? rawProfileAvatarDisplaySrc
       : null;
-  const showAvatarImg = Boolean(profileAvatarDisplaySrc);
+  const avatarStickyScope = `${user?.id ?? "anon"}:${primaryStoredRef ?? "none"}`;
+  const avatarSticky = useStickyPhotoDisplaySrc(profileAvatarDisplaySrc, avatarStickyScope);
+  const avatarImgSrc = avatarSticky.displaySrc;
+  const showAvatarImgStable = Boolean(avatarImgSrc);
   const showAvatarPlaceholder =
-    !showAvatarImg && (avatarPhoto.isLoading || iosAvatarPhoto.isResolving);
+    !showAvatarImgStable && (avatarPhoto.isLoading || iosAvatarPhoto.isResolving);
 
   const syncProfileForScreen = useCallback(async () => {
     if (!user?.id) return;
@@ -239,14 +243,14 @@ export default function Profile() {
 
   useEffect(() => {
     if (!user?.id) return;
-    if (showAvatarImg && profileAvatarDisplaySrc) {
+    if (showAvatarImgStable && avatarImgSrc) {
       PhotoFlowLog.profilePhotoResolved({
         userId: user.id,
         profileId: profile?.id ?? user.id,
         screen: "Profile",
         photoField: avatarPhoto.activeField,
         storedRef: primaryStoredRef,
-        displayUrl: profileAvatarDisplaySrc,
+        displayUrl: avatarImgSrc,
         candidateIndex: avatarPhoto.urlIndex,
       });
       PhotoFlowLog.uiPhotoDecision({
@@ -259,7 +263,7 @@ export default function Profile() {
         fullbody_url: profile?.fullbody_url ?? null,
         photo1_status: (profile as Record<string, unknown> | undefined)?.photo1_status as string | null,
         photo2_status: (profile as Record<string, unknown> | undefined)?.photo2_status as string | null,
-        displaySrc: profileAvatarDisplaySrc,
+        displaySrc: avatarImgSrc,
       });
       return;
     }
@@ -301,8 +305,8 @@ export default function Profile() {
   }, [
     user?.id,
     profile,
-    showAvatarImg,
-    profileAvatarDisplaySrc,
+    showAvatarImgStable,
+    avatarImgSrc,
     primaryStoredRef,
     avatarRefCandidates.refs,
     avatarPhoto.isLoading,
@@ -345,7 +349,7 @@ export default function Profile() {
     });
     console.log("[ProfileAvatar] render_decision", {
       displaySrc: photoUrlPrefix(profileAvatarDisplaySrc),
-      showAvatarImg,
+      showAvatarImg: showAvatarImgStable,
       isLoading: avatarPhoto.isLoading,
       isFailed: avatarPhoto.isFailed,
       iosResolving: iosAvatarPhoto.isResolving,
@@ -381,16 +385,10 @@ export default function Profile() {
     profile,
   ]);
 
-  useEffect(() => {
-    if (iosAvatarPhoto.resolutionFailed && !iosAvatarPhoto.usingDataUrl) {
-      avatarPhoto.onImageError();
-    }
-  }, [iosAvatarPhoto.resolutionFailed, iosAvatarPhoto.usingDataUrl, avatarPhoto.onImageError]);
-
   const profileAvatarImgHandlers = chainPhotoRenderHandlers(
     {
       screen: "Profile",
-      displaySrc: profileAvatarDisplaySrc,
+      displaySrc: avatarImgSrc,
       resolvedUrl: avatarPhoto.src,
       profile,
       extra: {
@@ -400,12 +398,12 @@ export default function Profile() {
         iosCapacitorDataUrl: iosAvatarPhoto.usingDataUrl,
       },
     },
-    buildIosAwareProfilePhotoImgHandlers({
+    mergeStickyPhotoHandlers(avatarSticky, buildIosAwareProfilePhotoImgHandlers({
       iosOnError: iosAvatarPhoto.onImageError,
       photoOnError: avatarPhoto.onImageError,
       photoOnLoad: avatarPhoto.onImageLoad,
       iosResolutionFailed: iosAvatarPhoto.resolutionFailed,
-    }),
+    })),
   );
   const [growth, setGrowth] = useState<GrowthProfileRow | null>(null);
   const [growthLinkCopied, setGrowthLinkCopied] = useState(false);
@@ -770,12 +768,12 @@ export default function Profile() {
               border: `2px solid ${APP_BORDER}`,
               background: APP_CARD,
             }}
-            aria-hidden={!profileAvatarDisplaySrc}
+            aria-hidden={!avatarImgSrc}
           >
-            {showAvatarImg ? (
+            {showAvatarImgStable ? (
               <img
-                key={profileAvatarDisplaySrc!.slice(0, 80)}
-                src={profileAvatarDisplaySrc!}
+                key={avatarImgSrc!.slice(0, 80)}
+                src={avatarImgSrc!}
                 alt=""
                 onLoad={profileAvatarImgHandlers.onLoad}
                 onError={profileAvatarImgHandlers.onError}

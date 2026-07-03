@@ -1,12 +1,18 @@
 import { Capacitor } from "@capacitor/core";
 import { isGoogleOAuthNativePlatform } from "./authRedirect";
 import { beginPostOAuthSplash } from "./postOAuthSplash";
+import { isOauthProcessingLocked } from "./oauthCallbackLock";
+import {
+  logOAuthMaskHide,
+  logOAuthMaskShow,
+} from "./oauthVisualMask";
 import {
   awaitGoogleSignInOverlayPaint,
   hideGoogleSignInOverlay,
   isGoogleSignInOverlayMounted,
   showGoogleSignInOverlay,
 } from "./googleSignInOverlay";
+import { showSploveIosOAuthConnectingMask } from "./sploveIosGoogleOAuth";
 
 /** Flux Google OAuth navigateur sur Capacitor iOS (hors Android, hors web). */
 export function isIosGoogleOAuthBrowserFlow(): boolean {
@@ -24,7 +30,9 @@ export async function showIosGoogleOAuthConnectingOverlay(): Promise<void> {
   if (!isIosGoogleOAuthBrowserFlow()) return;
   iosOAuthConnectingVisible = true;
   beginPostOAuthSplash();
+  logOAuthMaskShow("ios_google_oauth_connecting");
   showGoogleSignInOverlay();
+  await showSploveIosOAuthConnectingMask();
   await awaitGoogleSignInOverlayPaint();
   console.log("IOS_GOOGLE_OAUTH_DISPLAY_SHOW");
 }
@@ -32,9 +40,14 @@ export async function showIosGoogleOAuthConnectingOverlay(): Promise<void> {
 /** Masque l’overlay dès APP_URL_OPEN, AUTH_CALLBACK ou GOOGLE_SIGNIN_SUCCESS. */
 export function hideIosGoogleOAuthConnectingOverlay(trigger: string): void {
   if (!isIosGoogleOAuthBrowserFlow()) return;
+  if (isOauthProcessingLocked()) {
+    logOAuthMaskShow("hide_deferred_oauth_processing", { trigger });
+    return;
+  }
   if (!iosOAuthConnectingVisible && !isGoogleSignInOverlayMounted()) return;
   iosOAuthConnectingVisible = false;
   hideGoogleSignInOverlay(trigger);
+  logOAuthMaskHide(trigger);
   console.log("IOS_GOOGLE_OAUTH_DISPLAY_HIDE", { trigger });
 }
 

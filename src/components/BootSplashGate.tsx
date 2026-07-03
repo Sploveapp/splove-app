@@ -61,15 +61,15 @@ export function BootSplashGate({ children }: Props) {
     authSessionVerified || sessionLatch,
   );
   const oauthLoadingVisible =
-    (oauthUxActive || isAuthCallbackRoute) && !suppressOAuthOnMove && !sessionLatch;
+    (oauthUxActive || isAuthCallbackRoute || isOAuthGoogleStartRoute) &&
+    !suppressOAuthOnMove &&
+    !sessionLatch;
   const booting = isBooting(auth, oauthUxActive, isAuthCallbackRoute);
-  const showSplash = isOAuthGoogleStartRoute
-    ? false
-    : sessionOnMove
-      ? oauthLoadingVisible
-      : sessionLatch && suppressOAuthOnMove
-        ? false
-        : booting || !minElapsed;
+  const showSplash = sessionOnMove
+    ? oauthLoadingVisible
+    : sessionLatch && suppressOAuthOnMove
+      ? false
+      : booting || !minElapsed || isOAuthGoogleStartRoute;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setMinElapsed(true), BOOT_SPLASH_MIN_MS);
@@ -81,6 +81,7 @@ export function BootSplashGate({ children }: Props) {
       logOAuthLoadingScreenGate("BootSplashGate", true, [
         ...(oauthUxActive ? ["oauthUxActive"] : []),
         ...(isAuthCallbackRoute ? ["authCallbackRoute"] : []),
+        ...(isOAuthGoogleStartRoute ? ["oauthGoogleStartRoute"] : []),
         ...(sessionOnMove ? ["sessionOnMove"] : []),
       ]);
     } else if (!oauthLoadingVisible) {

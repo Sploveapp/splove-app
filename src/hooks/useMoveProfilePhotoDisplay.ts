@@ -51,9 +51,10 @@ export function useMoveProfilePhotoDisplay(
     setResolutionFailed(false);
 
     const unsub = subscribeMoveProfilePhotoDisplay(ref, (src) => {
+      if (!src) return;
       setDisplaySrc(src);
-      setIsPending(!src);
-      setResolutionFailed(!src);
+      setIsPending(false);
+      setResolutionFailed(false);
     });
 
     void ensureMoveProfilePhotoDisplay(ref, {
@@ -76,17 +77,9 @@ export function useMoveProfilePhotoDisplay(
   const onImageError = useCallback(() => {
     if (!ref) return;
     invalidateMoveProfilePhotoDisplay(ref);
-    setDisplaySrc(null);
-    setIsPending(true);
-    setResolutionFailed(false);
-    void ensureMoveProfilePhotoDisplay(ref, {
-      profileId: profileId ?? null,
-      logSource: `${logSource}.retry`,
-    }).then((src) => {
-      if (!src) setResolutionFailed(true);
-      setIsPending(!src);
-    });
-  }, [ref, profileId, logSource]);
+    setResolutionFailed(true);
+    setIsPending(false);
+  }, [ref]);
 
   return {
     displaySrc,

@@ -10,12 +10,18 @@ import {
   resetOAuthSessionVerifiedLatchForTests,
 } from "./oauthSessionVerifiedLatch";
 
+const postOAuthSplashRequestedMock = vi.hoisted(() => vi.fn(() => false));
+
 vi.mock("./oauthCallbackLock", () => ({
   isOauthProcessingLocked: () => false,
 }));
 
+vi.mock("./oauthBrowserOpenState", () => ({
+  isOAuthBrowserOpen: () => false,
+}));
+
 vi.mock("./postOAuthSplash", () => ({
-  isPostOAuthSplashRequested: () => true,
+  isPostOAuthSplashRequested: () => postOAuthSplashRequestedMock(),
   isPostOAuthSplashActive: () => false,
 }));
 
@@ -26,12 +32,18 @@ vi.mock("./googleSignInOverlay", () => ({
 describe("oauthSessionVerifiedLatch", () => {
   beforeEach(() => {
     resetOAuthSessionVerifiedLatchForTests();
+    postOAuthSplashRequestedMock.mockReturnValue(false);
   });
 
   it("shouldShowOAuthLoadingScreen masque dès que le latch est posé", () => {
     expect(shouldShowOAuthLoadingScreen(true, false)).toBe(true);
     markOAuthSessionVerifiedLatch();
     expect(shouldShowOAuthLoadingScreen(true, false)).toBe(false);
+  });
+
+  it("shouldShowOAuthLoadingScreen reste actif tant que le masque visuel est requis", () => {
+    postOAuthSplashRequestedMock.mockReturnValue(true);
+    expect(shouldShowOAuthLoadingScreen(false, true)).toBe(true);
   });
 
   it("shouldShowOAuthLoadingScreen masque quand AuthContext a la session", () => {
@@ -53,6 +65,7 @@ describe("oauthSessionVerifiedLatch", () => {
   });
 
   it("collectOAuthLoadingScreenBlockers liste postOAuthSplashRequested", () => {
+    postOAuthSplashRequestedMock.mockReturnValue(true);
     expect(collectOAuthLoadingScreenBlockers()).toEqual(["postOAuthSplashRequested"]);
   });
 });

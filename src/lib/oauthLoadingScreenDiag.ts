@@ -5,6 +5,7 @@ import {
   isPostOAuthSplashRequested,
 } from "./postOAuthSplash";
 import { isOAuthSessionVerifiedLatch } from "./oauthSessionVerifiedLatch";
+import { isOAuthVisualMaskRequired } from "./oauthVisualMask";
 
 /** Verrous / overlays qui peuvent afficher « Connexion sécurisée… ». */
 export function collectOAuthLoadingScreenBlockers(): string[] {
@@ -24,6 +25,7 @@ export function shouldShowOAuthLoadingScreen(
   rawVisible: boolean,
   authSessionVerified: boolean,
 ): boolean {
+  if (isOAuthVisualMaskRequired()) return true;
   if (!rawVisible) return false;
   if (isOAuthSessionVerifiedLatch()) return false;
   if (authSessionVerified) return false;
@@ -35,6 +37,7 @@ export function shouldSuppressOAuthLoadingOnMoveRoute(
   hash: string,
   authSessionVerified: boolean,
 ): boolean {
+  if (isOAuthVisualMaskRequired()) return false;
   const onMove = pathname === "/move" || hash.startsWith("#/move");
   if (!onMove) return false;
   return isOAuthSessionVerifiedLatch() || authSessionVerified;

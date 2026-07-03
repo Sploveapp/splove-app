@@ -16,6 +16,7 @@ import {
   shouldShowOAuthLoadingScreen,
 } from "../lib/oauthLoadingScreenDiag";
 import { forceReleaseOAuthLoadingOnMove } from "../lib/oauthLoadingScreenRelease";
+import { isOAuthVisualMaskRequired } from "../lib/oauthVisualMask";
 import {
   isOAuthSessionVerifiedLatch,
   subscribeOAuthSessionVerifiedLatch,
@@ -98,11 +99,13 @@ export function PostOAuthSplashGate({ children }: Props) {
     if (!ctx.isAuthInitialized && !sessionLatch) return;
 
     if (pathname === "/move" && (show || rawShow || hasResidualOAuthLoadingLocks() || sessionLatch)) {
-      forceReleaseOAuthLoadingOnMove("post_oauth_splash_move");
+      if (!isOAuthVisualMaskRequired()) {
+        forceReleaseOAuthLoadingOnMove("post_oauth_splash_move");
+      }
       return;
     }
 
-    if (hasResidualOAuthLoadingLocks()) {
+    if (hasResidualOAuthLoadingLocks() && !isOAuthVisualMaskRequired()) {
       releasePostAuthUi(
         "session_user_verified",
         pathname === "/move" ? "/move" : undefined,

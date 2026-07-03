@@ -36,6 +36,7 @@ import {
 } from "./iosGoogleOAuthBrowserTarget";
 import { parseOAuthCallbackParams } from "./oauthCallbackParams";
 import { hideIosGoogleOAuthConnectingOverlay } from "./iosGoogleOAuthDisplay";
+import { markOAuthBrowserOpen, resetOAuthBrowserOpenStateForTests } from "./oauthBrowserOpenState";
 
 export const OAUTH_BROWSER_TIMEOUT_USER_MSG = OAUTH_CALLBACK_INTERRUPTED_MSG;
 export const GOOGLE_OAUTH_INTERRUPTED_MSG = GOOGLE_OAUTH_USER_ERROR_MSG;
@@ -90,6 +91,7 @@ export function resetOAuthBrowserWaitStateForTests(): void {
   oauthBrowserClosedOnCallback = false;
   lastProcessedOAuthCode = null;
   clearOauthProcessingLock();
+  resetOAuthBrowserOpenStateForTests();
 }
 
 export function isGoogleOAuthInFlight(): boolean {
@@ -110,6 +112,7 @@ async function closeOAuthBrowser(): Promise<void> {
     }
   } finally {
     oauthBrowserOpen = false;
+    markOAuthBrowserOpen(false);
   }
 }
 
@@ -269,6 +272,7 @@ async function openIosOAuthBrowser(
     const { url, host } = assertIosBrowserOpenBeforeOpen(trimmed, strategy);
     console.log("BROWSER_OPEN_GOOGLE", { host: "accounts.google.com" });
     oauthBrowserOpen = true;
+    markOAuthBrowserOpen(true);
     await Browser.open({ url, presentationStyle: "fullscreen" });
     console.log("BROWSER_OPEN_DONE", { url, host, strategy });
     return { error: null };
@@ -309,6 +313,7 @@ async function openAndroidOAuthBrowser(url: string): Promise<{ error: Error | nu
   console.log("BROWSER_OPEN_START", { host: hostFromOAuthUrl(trimmed) });
   try {
     oauthBrowserOpen = true;
+    markOAuthBrowserOpen(true);
     await Browser.open({ url: trimmed, presentationStyle: "fullscreen" });
     console.log("BROWSER_OPEN_DONE", { host: hostFromOAuthUrl(trimmed) });
     return { error: null };
@@ -340,6 +345,7 @@ export function initCapacitorAuthBridge(): void {
 
   void Browser.addListener("browserFinished", () => {
     oauthBrowserOpen = false;
+    markOAuthBrowserOpen(false);
   });
 }
 

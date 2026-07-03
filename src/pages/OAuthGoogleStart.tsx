@@ -7,6 +7,7 @@ import {
   isSupabaseGoogleAuthorizeUrl,
   parseOAuthGoogleStartAuthUrl,
 } from "../lib/oauthGoogleStartUrl";
+import { logOAuthMaskProtectedTechnicalUrl, logOAuthMaskShow } from "../lib/oauthVisualMask";
 
 /**
  * Page intermédiaire : SPLove → redirect vers l’URL Supabase déjà construite (PKCE challenge inclus).
@@ -47,6 +48,8 @@ export default function OAuthGoogleStart() {
     const redirectToSupabase = () => {
       if (cancelled || redirectedRef.current) return;
       redirectedRef.current = true;
+      logOAuthMaskProtectedTechnicalUrl(authUrl, "oauth_google_start_redirect");
+      logOAuthMaskShow("oauth_google_start_redirect");
       if (Capacitor.getPlatform() === "ios") {
         console.log("IOS_SUPABASE_FLASH_DETECTED", {
           reason: "oauth_start_redirect_to_supabase",

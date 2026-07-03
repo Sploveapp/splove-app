@@ -9,6 +9,10 @@ export class SploveIosGoogleOAuthWeb implements SploveIosGoogleOAuthPlugin {
     return { outcome: "canceled" };
   }
 
+  async showConnectingMask(): Promise<void> {
+    /* web no-op */
+  }
+
   async showFinalizingMask(): Promise<void> {
     /* web no-op */
   }

@@ -64,7 +64,7 @@ import { hasSharedPlace } from "../lib/sharedPlaceTeaser";
 import { usePremium } from "../hooks/usePremium";
 import { useSplovePlus } from "../hooks/useSplovePlus";
 import { useTranslation } from "../i18n/useTranslation";
-import { useMoveProfilePhotoDisplay } from "../hooks/useMoveProfilePhotoDisplay";
+import { useMoveProfilePhotosFromRefs, buildMovePrimaryPhotoRefs } from "../hooks/useMoveProfilePhotosFromRefs";
 import { prefetchMoveProfilePhotos } from "../lib/moveProfilePhotoCache";
 import {
   buildPortraitFirstProfilePhotoRefCandidates,
@@ -243,34 +243,19 @@ function useMoveProfilePhotoFromRefs(
   logSource: string,
   _stableKey: string,
 ) {
-  const storedRef = refs[0] ?? null;
-  const photo = useMoveProfilePhotoDisplay(storedRef, profileId ?? null, logSource);
-
-  return {
-    photoRaw: storedRef,
-    photoField: storedRef ? (fieldByRef[storedRef] ?? null) : null,
-    displaySrc: photo.displaySrc,
-    isPending: photo.isPending,
-    hasStoredRef: refs.length > 0,
-    onImageLoad: photo.onImageLoad,
-    onImageError: photo.onImageError,
-  };
+  return useMoveProfilePhotosFromRefs(refs, fieldByRef, profileId ?? null, logSource);
 }
 
 function useMoveProfilePrimaryPhoto(
   profile: ProfilePhotoUrlFields & { id?: string | null },
   logSource: string,
 ) {
-  const candidates = useMemo(
-    () => buildPortraitFirstProfilePhotoRefCandidates(profile),
-    [
-      profile.id,
-      profile.portrait_url,
-      profile.main_photo_url,
-      profile.avatar_url,
-      profile.fullbody_url,
-    ],
-  );
+  const candidates = useMemo(() => buildMovePrimaryPhotoRefs(profile), [
+    profile.id,
+    profile.portrait_url,
+    profile.main_photo_url,
+    profile.avatar_url,
+  ]);
   const refsKey = candidates.refs.join("\0");
 
   return useMoveProfilePhotoFromRefs(

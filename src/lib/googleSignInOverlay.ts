@@ -3,6 +3,7 @@ import { getLanguage, translate } from "../i18n/index";
 import { publicAssetUrl } from "./publicAssetUrl";
 import { forceClearPostOAuthSplash } from "./postOAuthSplash";
 import { notifyOAuthUxOverlayChanged } from "./oauthUxNotify";
+import { logOAuthMaskHide, logOAuthMaskShow } from "./oauthVisualMask";
 
 const OVERLAY_ROOT_ID = "splove-google-oauth-overlay";
 const OVERLAY_Z_INDEX = 100_000;
@@ -160,6 +161,7 @@ export function awaitGoogleSignInOverlayPaint(): Promise<void> {
 export function showGoogleSignInOverlay(): void {
   if (!isNativeCapacitorApp()) return;
   mountImperativeOverlay();
+  logOAuthMaskShow("google_sign_in_overlay");
   console.log("OAUTH_LOADING_SCREEN_SHOW", {
     gate: "googleSignInOverlay",
     reasons: ["imperative_dom_overlay"],
@@ -179,6 +181,7 @@ export function hideGoogleSignInOverlay(reason?: string): void {
   forceClearPostOAuthSplash();
   notifyOAuthUxOverlayChanged();
   if (wasMounted) {
+    logOAuthMaskHide(reason ?? "google_sign_in_overlay");
     console.log("OAUTH_LOADING_SCREEN_HIDE", {
       gate: "googleSignInOverlay",
       reasons: reason ? [reason] : ["imperative_dom_overlay"],

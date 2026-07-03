@@ -28,6 +28,19 @@ vi.mock("./postOAuthSplash", () => ({
   beginPostOAuthSplash: () => beginSplashMock(),
 }));
 
+vi.mock("./oauthCallbackLock", () => ({
+  isOauthProcessingLocked: () => false,
+}));
+
+vi.mock("./oauthVisualMask", () => ({
+  logOAuthMaskShow: vi.fn(),
+  logOAuthMaskHide: vi.fn(),
+}));
+
+vi.mock("./sploveIosGoogleOAuth", () => ({
+  showSploveIosOAuthConnectingMask: () => Promise.resolve(),
+}));
+
 vi.mock("./googleSignInOverlay", () => ({
   showGoogleSignInOverlay: () => showOverlayMock(),
   hideGoogleSignInOverlay: (...args: unknown[]) => hideOverlayMock(...args),

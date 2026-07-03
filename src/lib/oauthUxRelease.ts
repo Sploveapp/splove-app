@@ -9,6 +9,7 @@ import {
   isPostOAuthSplashRequested,
 } from "./postOAuthSplash";
 import { hideGoogleSignInOverlay, isGoogleSignInOverlayMounted } from "./googleSignInOverlay";
+import { hideSploveIosOAuthMask } from "./sploveIosGoogleOAuth";
 import { isNativeCapacitorApp } from "./authRedirect";
 import { scrubOAuthTokensFromNativeWindow } from "./scrubOAuthUrlFromWindow";
 import { notifyOAuthUxOverlayChanged } from "./oauthUxNotify";
@@ -68,6 +69,7 @@ export function releasePostAuthUi(trigger: string, route?: PostAuthUiRoute): voi
   clearAllOAuthSessionLocks();
   forceClearPostOAuthSplash();
   hideGoogleSignInOverlay(trigger);
+  void hideSploveIosOAuthMask();
 
   if (route) {
     ensurePostAuthHashRoute(route);

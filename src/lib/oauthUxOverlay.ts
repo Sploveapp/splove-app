@@ -12,6 +12,7 @@ import {
   getOAuthUxOverlayEpoch,
   subscribeOAuthUxOverlay,
 } from "./oauthUxNotify";
+import { isOAuthVisualMaskRequired } from "./oauthVisualMask";
 
 /** True tant que l’utilisateur ne doit voir que l’écran SPLove OAuth (pas de routes / URLs techniques). */
 let lastOAuthUxOverlayLogKey = "";
@@ -82,6 +83,11 @@ export function isOAuthCallbackRouteBlocking(pathname: string, hash: string): bo
 }
 
 export function isOAuthUxOverlayActive(ctx?: OAuthUxOverlayContext): boolean {
+  if (rawOAuthUxOverlayActive()) {
+    logOAuthUxOverlayActiveIfNeeded(true);
+    return true;
+  }
+
   const pathname = normalizeOAuthPathname(ctx?.pathname);
   const hash = ctx?.hash ?? (typeof window !== "undefined" ? window.location.hash : "");
   const hasSession = ctx?.hasSession === true;
@@ -90,9 +96,8 @@ export function isOAuthUxOverlayActive(ctx?: OAuthUxOverlayContext): boolean {
     return false;
   }
 
-  const active = rawOAuthUxOverlayActive();
-  logOAuthUxOverlayActiveIfNeeded(active);
-  return active;
+  logOAuthUxOverlayActiveIfNeeded(false);
+  return false;
 }
 
 /**
@@ -113,6 +118,7 @@ export function useOAuthUxOverlayActive(ctx?: OAuthUxOverlayContext): boolean {
 
   useEffect(() => {
     if (!hasSession || !isOnMoveRoute(pathname, hash) || !rawActive) return;
+    if (isOAuthVisualMaskRequired() || isOauthProcessingLocked()) return;
     console.log("OAUTH_LOADING_SCREEN_BLOCKED_BY_SESSION", {
       pathname,
       hash,
@@ -127,6 +133,7 @@ export function useOAuthUxOverlayActive(ctx?: OAuthUxOverlayContext): boolean {
 
   useEffect(() => {
     if (!hasSession || !shouldFinalizePostAuthUi()) return;
+    if (isOAuthVisualMaskRequired() || isOauthProcessingLocked()) return;
     if (!isOnMoveRoute(pathname, hash) && !isOauthProcessingLocked()) return;
     releasePostAuthUi("auth_success", isOnMoveRoute(pathname, hash) ? "/move" : undefined);
   }, [hasSession, pathname, hash]);

@@ -21,6 +21,7 @@ export type SploveIosGoogleOAuthOpenResult = {
 export interface SploveIosGoogleOAuthPlugin {
   isAvailable(): Promise<{ available: boolean }>;
   openGoogleOAuth(options: { url: string }): Promise<SploveIosGoogleOAuthOpenResult>;
+  showConnectingMask(): Promise<void>;
   showFinalizingMask(): Promise<void>;
   hideOAuthMask(): Promise<void>;
 }
@@ -43,6 +44,15 @@ export async function openSploveIosGoogleOAuthSession(
   url: string,
 ): Promise<SploveIosGoogleOAuthOpenResult> {
   return SploveIosGoogleOAuth.openGoogleOAuth({ url: url.trim() });
+}
+
+export async function showSploveIosOAuthConnectingMask(): Promise<void> {
+  if (!isIosNativeGoogleOAuth()) return;
+  try {
+    await SploveIosGoogleOAuth.showConnectingMask();
+  } catch {
+    /* plugin absent */
+  }
 }
 
 export async function showSploveIosOAuthFinalizingMask(): Promise<void> {
