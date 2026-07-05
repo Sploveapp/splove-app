@@ -3,7 +3,14 @@ import { useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { BOOT_SPLASH_MIN_MS } from "../lib/bootSplashTiming";
 import { resolveBootRoute } from "../lib/bootRouteDecision";
-import { useOAuthUxOverlayActive, isOAuthCallbackRouteBlocking } from "../lib/oauthUxOverlay";
+import {
+  useOAuthUxOverlayActive,
+  isOAuthCallbackRouteBlocking,
+} from "../lib/oauthUxOverlay";
+import {
+  installOAuthTechnicalUrlGuardListeners,
+  isOAuthVisualMaskRequired,
+} from "../lib/oauthVisualMask";
 import { isOAuthGoogleStartPath } from "../lib/oauthGoogleStartUrl";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
 import {
@@ -47,6 +54,7 @@ export function BootSplashGate({ children }: Props) {
     auth.isAuthInitialized && Boolean(auth.session?.user?.id);
   const isAuthCallbackRoute = isOAuthCallbackRouteBlocking(pathname, hash);
   const isOAuthGoogleStartRoute = isOAuthGoogleStartPath(pathname);
+  const oauthVisualMask = isOAuthVisualMaskRequired({ pathname, hash });
   const oauthUxActive = useOAuthUxOverlayActive({
     hasSession: authSessionVerified || sessionLatch,
     pathname,
@@ -55,21 +63,30 @@ export function BootSplashGate({ children }: Props) {
   const sessionOnMove =
     (authSessionVerified || sessionLatch) &&
     (pathname === "/move" || hash.startsWith("#/move"));
+  const sessionOnProfile =
+    (authSessionVerified || sessionLatch) &&
+    (pathname === "/profile" || hash.startsWith("#/profile"));
+  const sessionOnFinalRoute = sessionOnMove || sessionOnProfile;
   const suppressOAuthOnMove = shouldSuppressOAuthLoadingOnMoveRoute(
     pathname,
     hash,
     authSessionVerified || sessionLatch,
   );
   const oauthLoadingVisible =
-    (oauthUxActive || isAuthCallbackRoute || isOAuthGoogleStartRoute) &&
-    !suppressOAuthOnMove &&
-    !sessionLatch;
-  const booting = isBooting(auth, oauthUxActive, isAuthCallbackRoute);
-  const showSplash = sessionOnMove
+    oauthVisualMask ||
+    ((oauthUxActive || isAuthCallbackRoute || isOAuthGoogleStartRoute) &&
+      !suppressOAuthOnMove &&
+      !sessionLatch);
+  const booting = isBooting(auth, oauthUxActive || oauthVisualMask, isAuthCallbackRoute);
+  const showSplash = sessionOnFinalRoute
     ? oauthLoadingVisible
-    : sessionLatch && suppressOAuthOnMove
+    : sessionLatch && suppressOAuthOnMove && !oauthVisualMask
       ? false
-      : booting || !minElapsed || isOAuthGoogleStartRoute;
+      : booting || !minElapsed || isOAuthGoogleStartRoute || oauthVisualMask;
+
+  useEffect(() => {
+    installOAuthTechnicalUrlGuardListeners();
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setMinElapsed(true), BOOT_SPLASH_MIN_MS);
@@ -82,7 +99,9 @@ export function BootSplashGate({ children }: Props) {
         ...(oauthUxActive ? ["oauthUxActive"] : []),
         ...(isAuthCallbackRoute ? ["authCallbackRoute"] : []),
         ...(isOAuthGoogleStartRoute ? ["oauthGoogleStartRoute"] : []),
+        ...(oauthVisualMask ? ["oauthVisualMask"] : []),
         ...(sessionOnMove ? ["sessionOnMove"] : []),
+        ...(sessionOnProfile ? ["sessionOnProfile"] : []),
       ]);
     } else if (!oauthLoadingVisible) {
       logOAuthLoadingScreenGate("BootSplashGate", false);
@@ -125,6 +144,8 @@ export function BootSplashGate({ children }: Props) {
     pathname,
     hash,
     sessionOnMove,
+    sessionOnProfile,
+    oauthVisualMask,
     oauthLoadingVisible,
     sessionLatch,
     suppressOAuthOnMove,

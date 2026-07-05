@@ -10,8 +10,17 @@ const GOOGLE_AUTHORIZE =
 const SUPABASE_AUTHORIZE =
   "https://abc.supabase.co/auth/v1/authorize?provider=google&redirect_to=splove%3A%2F%2Fauth%2Fcallback&code_challenge=xyz&code_challenge_method=s256";
 
-const { requestMock } = vi.hoisted(() => ({
+const CALLBACK = "splove://auth/callback?code=oauth-code-123";
+
+const { requestMock, isPluginAvailableMock, openNativeOAuthMock } = vi.hoisted(() => ({
   requestMock: vi.fn(),
+  isPluginAvailableMock: vi.fn<() => Promise<boolean>>(async () => true),
+  openNativeOAuthMock: vi.fn<(url: string) => Promise<{ outcome: "callback"; url: string }>>(
+    async () => ({
+      outcome: "callback" as const,
+      url: CALLBACK,
+    }),
+  ),
 }));
 
 vi.mock("@capacitor/app", () => ({
@@ -74,12 +83,27 @@ vi.mock("./oauthPkceDiagnostics", () => ({
   logPkceStorageKeys: vi.fn(),
 }));
 
-describe("signInWithGoogleOAuth iOS — résolution CapacitorHttp réelle (sans mock resolve)", () => {
+vi.mock("./oauthPkceDiagnostics", () => ({
+  logPkceStorageKeys: vi.fn(),
+}));
+
+vi.mock("./sploveIosGoogleOAuth", () => ({
+  isSploveIosGoogleOAuthAvailable: () => isPluginAvailableMock(),
+  openSploveIosGoogleOAuthSession: (url: string) => openNativeOAuthMock(url),
+}));
+
+describe("signInWithGoogleOAuth iOS — plugin natif ASWebAuthenticationSession", () => {
   beforeEach(() => {
     resetOAuthBrowserWaitStateForTests();
     requestMock.mockReset();
+    isPluginAvailableMock.mockReset();
+    isPluginAvailableMock.mockResolvedValue(true);
+    openNativeOAuthMock.mockReset();
+    openNativeOAuthMock.mockResolvedValue({ outcome: "callback", url: CALLBACK });
     vi.mocked(Browser.open).mockReset();
     vi.mocked(Browser.open).mockResolvedValue(undefined);
+    vi.mocked(Browser.close).mockReset();
+    vi.mocked(Browser.close).mockResolvedValue(undefined);
     vi.mocked(supabase.auth.signInWithOAuth).mockReset();
     vi.mocked(supabase.auth.signInWithOAuth).mockResolvedValue({
       data: { provider: "google", url: SUPABASE_AUTHORIZE },
@@ -87,7 +111,7 @@ describe("signInWithGoogleOAuth iOS — résolution CapacitorHttp réelle (sans 
     } as never);
   });
 
-  it("302 Supabase → Google : Browser.open reçoit l’URL Google dérivée du HTTP", async () => {
+  it("302 Supabase → Google : plugin natif reçoit l’URL Google, pas Browser.open", async () => {
     requestMock.mockResolvedValueOnce({
       status: 302,
       headers: { location: GOOGLE_AUTHORIZE },
@@ -97,17 +121,40 @@ describe("signInWithGoogleOAuth iOS — résolution CapacitorHttp réelle (sans 
     const { error } = await signInWithGoogleOAuth();
 
     expect(error).toBeNull();
-    expect(Browser.open).toHaveBeenCalledTimes(1);
-    const openedUrl = String(vi.mocked(Browser.open).mock.calls[0]?.[0]?.url ?? "");
-    expect(openedUrl).toContain("accounts.google.com");
-    expect(openedUrl).not.toMatch(/supabase\.co\/auth\/v1\/authorize/);
-    expect(openedUrl).toBe(GOOGLE_AUTHORIZE);
+    expect(openNativeOAuthMock).toHaveBeenCalledTimes(1);
+    expect(openNativeOAuthMock).toHaveBeenCalledWith(GOOGLE_AUTHORIZE);
+    expect(Browser.open).not.toHaveBeenCalled();
+    expect(Browser.close).not.toHaveBeenCalled();
     expect(requestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: SUPABASE_AUTHORIZE,
         disableRedirects: true,
       }),
     );
+  });
+
+  it("plugin indisponible : repli Browser.open loggué", async () => {
+    isPluginAvailableMock.mockResolvedValue(false);
+    requestMock.mockResolvedValueOnce({
+      status: 302,
+      headers: { location: GOOGLE_AUTHORIZE },
+      url: SUPABASE_AUTHORIZE,
+    });
+
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (...args: unknown[]) => {
+      if (typeof args[0] === "string") logs.push(args[0]);
+      orig(...args);
+    };
+
+    await signInWithGoogleOAuth();
+
+    console.log = orig;
+
+    expect(logs).toContain("IOS_NATIVE_OAUTH_FALLBACK_BROWSER_USED");
+    expect(Browser.open).toHaveBeenCalledTimes(1);
+    expect(openNativeOAuthMock).not.toHaveBeenCalled();
   });
 
   it("200 sans Location : pas de Browser.open, erreur Connexion interrompue", async () => {

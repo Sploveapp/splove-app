@@ -35,6 +35,11 @@ vi.mock("./completeNativeOAuthReturn", () => ({
   completeNativeOAuthReturn: vi.fn(async () => true),
 }));
 
+vi.mock("./sploveIosGoogleOAuth", () => ({
+  isSploveIosGoogleOAuthAvailable: vi.fn(async () => false),
+  openSploveIosGoogleOAuthSession: vi.fn(),
+}));
+
 describe("capacitorOAuth garde-fous Browser.open iOS", () => {
   beforeEach(() => {
     resetOAuthBrowserWaitStateForTests();

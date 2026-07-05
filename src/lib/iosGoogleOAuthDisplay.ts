@@ -3,8 +3,14 @@ import { isGoogleOAuthNativePlatform } from "./authRedirect";
 import { beginPostOAuthSplash } from "./postOAuthSplash";
 import { isOauthProcessingLocked } from "./oauthCallbackLock";
 import {
+  isPostOAuthSplashActive,
+  isPostOAuthSplashRequested,
+} from "./postOAuthSplash";
+import { isOAuthBrowserOpen } from "./oauthBrowserOpenState";
+import {
   logOAuthMaskHide,
   logOAuthMaskShow,
+  windowLocationHasTechnicalOAuthUrl,
 } from "./oauthVisualMask";
 import {
   awaitGoogleSignInOverlayPaint,
@@ -25,6 +31,14 @@ export function isIosGoogleOAuthConnectingVisible(): boolean {
   return iosOAuthConnectingVisible || isGoogleSignInOverlayMounted();
 }
 
+function shouldDeferIosOAuthMaskHide(_trigger: string): boolean {
+  if (isOauthProcessingLocked()) return true;
+  if (isOAuthBrowserOpen()) return true;
+  if (windowLocationHasTechnicalOAuthUrl()) return true;
+  if (isPostOAuthSplashRequested() || isPostOAuthSplashActive()) return true;
+  return false;
+}
+
 /** Affiche « Connexion sécurisée… » dans l’app avant Browser.open (iOS uniquement). */
 export async function showIosGoogleOAuthConnectingOverlay(): Promise<void> {
   if (!isIosGoogleOAuthBrowserFlow()) return;
@@ -37,11 +51,21 @@ export async function showIosGoogleOAuthConnectingOverlay(): Promise<void> {
   console.log("IOS_GOOGLE_OAUTH_DISPLAY_SHOW");
 }
 
-/** Masque l’overlay dès APP_URL_OPEN, AUTH_CALLBACK ou GOOGLE_SIGNIN_SUCCESS. */
+/**
+ * Masque l’overlay uniquement quand l’URL n’est plus technique et les verrous OAuth sont levés.
+ * APP_URL_OPEN / succès Google : différé tant que le splash doit rester visible.
+ */
 export function hideIosGoogleOAuthConnectingOverlay(trigger: string): void {
   if (!isIosGoogleOAuthBrowserFlow()) return;
-  if (isOauthProcessingLocked()) {
-    logOAuthMaskShow("hide_deferred_oauth_processing", { trigger });
+  if (shouldDeferIosOAuthMaskHide(trigger)) {
+    logOAuthMaskShow("hide_deferred", {
+      trigger,
+      oauthProcessingLocked: isOauthProcessingLocked(),
+      oauthBrowserOpen: isOAuthBrowserOpen(),
+      technicalOAuthUrl: windowLocationHasTechnicalOAuthUrl(),
+      postOAuthSplashRequested: isPostOAuthSplashRequested(),
+      postOAuthSplashActive: isPostOAuthSplashActive(),
+    });
     return;
   }
   if (!iosOAuthConnectingVisible && !isGoogleSignInOverlayMounted()) return;

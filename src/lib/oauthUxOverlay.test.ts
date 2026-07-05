@@ -19,7 +19,17 @@ describe("oauthUxOverlay", () => {
     expect(isOAuthUxOverlayActive()).toBe(true);
   });
 
-  it("inactive sur /move avec session même si verrous résiduels", () => {
+  it("inactive sur /move avec session uniquement quand plus aucun verrou ni URL technique", () => {
+    expect(
+      isOAuthUxOverlayActive({
+        hasSession: true,
+        pathname: "/move",
+        hash: "#/move",
+      }),
+    ).toBe(false);
+  });
+
+  it("reste active sur /move avec session si verrou OAuth encore actif", () => {
     setOauthProcessingLock();
     beginPostOAuthSplash();
     expect(
@@ -28,7 +38,7 @@ describe("oauthUxOverlay", () => {
         pathname: "/move",
         hash: "#/move",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("redevient inactive après releasePostAuthUi", () => {

@@ -4,11 +4,28 @@ import { publicAssetUrl } from "./publicAssetUrl";
 import { forceClearPostOAuthSplash } from "./postOAuthSplash";
 import { notifyOAuthUxOverlayChanged } from "./oauthUxNotify";
 import { logOAuthMaskHide, logOAuthMaskShow } from "./oauthVisualMask";
+import { isOauthProcessingLocked } from "./oauthCallbackLock";
+import { isOAuthBrowserOpen } from "./oauthBrowserOpenState";
 
 const OVERLAY_ROOT_ID = "splove-google-oauth-overlay";
 const OVERLAY_Z_INDEX = 100_000;
 const FONT =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+
+/** Évite l’import circulaire oauthVisualMask ↔ googleSignInOverlay. */
+function windowHasTechnicalOAuthUrlForOverlay(): boolean {
+  if (typeof window === "undefined") return false;
+  const probe = `${window.location.href}|${window.location.hash}`;
+  return /supabase\.co|\/auth\/v1(?:\/|$|\?)|(?:^|[/?#])oauth|callback/i.test(probe);
+}
+
+function shouldDeferGoogleSignInOverlayHide(): boolean {
+  return (
+    isOauthProcessingLocked() ||
+    isOAuthBrowserOpen() ||
+    windowHasTechnicalOAuthUrlForOverlay()
+  );
+}
 
 function devLog(event: string, extra?: Record<string, unknown>): void {
   if (!import.meta.env.DEV) return;
@@ -176,6 +193,16 @@ export function showGoogleSignInOverlay(): void {
 /** Retire l’overlay (succès routé, erreur, annulation). */
 export function hideGoogleSignInOverlay(reason?: string): void {
   if (!isNativeCapacitorApp()) return;
+  if (shouldDeferGoogleSignInOverlayHide()) {
+    logOAuthMaskShow("hide_deferred_google_sign_in_overlay", {
+      reason,
+      oauthProcessingLocked: isOauthProcessingLocked(),
+      oauthBrowserOpen: isOAuthBrowserOpen(),
+      technicalOAuthUrl: windowHasTechnicalOAuthUrlForOverlay(),
+    });
+    notifyOAuthUxOverlayChanged();
+    return;
+  }
   const wasMounted = isGoogleSignInOverlayMounted();
   unmountImperativeOverlay();
   forceClearPostOAuthSplash();

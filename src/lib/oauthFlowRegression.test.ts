@@ -51,7 +51,8 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     const iosTargetSource = readSrc("lib/iosGoogleOAuthBrowserTarget.ts");
     expect(displaySource).toContain("showIosGoogleOAuthConnectingOverlay");
     expect(displaySource).toContain("hideIosGoogleOAuthConnectingOverlay");
-    expect(capSource).toContain('hideIosGoogleOAuthConnectingOverlay("app_url_open")');
+    expect(capSource).toContain('"ios_native_callback"');
+    expect(capSource).toContain("IOS_NATIVE_OAUTH_PLUGIN_OPEN");
     expect(capSource).toContain("resolveIosGoogleOAuthBrowserTarget");
     expect(capSource).not.toContain("openIosGoogleOAuthAuthorize");
     expect(iosTargetSource).toContain("resolveGoogleAuthorizeUrlFromSupabase");
@@ -62,6 +63,9 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     expect(iosTargetSource).not.toContain("splove_start_page");
     expect(iosTargetSource).not.toContain("buildOAuthGoogleStartBrowserUrl");
     expect(capSource).toContain("ensureIosBrowserNeverOpensSupabase");
+    expect(capSource).toContain("openIosNativeOAuthSession");
+    expect(capSource).toContain("openSploveIosGoogleOAuthSession");
+    expect(capSource).toContain("IOS_NATIVE_OAUTH_PLUGIN_OPEN");
     expect(capSource).toContain("openIosOAuthBrowser");
     expect(capSource).toContain("isIosOAuthBrowserOpenAllowedUrl");
     expect(capSource).toContain("IOS_OAUTH_RESOLVE_FAIL");
@@ -72,8 +76,6 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     expect(capSource).toContain("strategy");
     expect(capSource).toContain("IOS_BROWSER_OPEN_SUPABASE_FORBIDDEN");
     expect(capSource).not.toContain("startIosGoogleOAuthWebAuth");
-    expect(capSource).not.toContain("SploveOAuth");
-    expect(capSource).not.toContain("ASWebAuthenticationSession");
     expect(capSource).not.toContain("browser_supabase_authorize");
 
     const androidBlock = capSource.slice(

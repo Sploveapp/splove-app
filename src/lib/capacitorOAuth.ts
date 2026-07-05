@@ -37,6 +37,10 @@ import {
 import { parseOAuthCallbackParams } from "./oauthCallbackParams";
 import { hideIosGoogleOAuthConnectingOverlay } from "./iosGoogleOAuthDisplay";
 import { markOAuthBrowserOpen, resetOAuthBrowserOpenStateForTests } from "./oauthBrowserOpenState";
+import {
+  isSploveIosGoogleOAuthAvailable,
+  openSploveIosGoogleOAuthSession,
+} from "./sploveIosGoogleOAuth";
 
 export const OAUTH_BROWSER_TIMEOUT_USER_MSG = OAUTH_CALLBACK_INTERRUPTED_MSG;
 export const GOOGLE_OAUTH_INTERRUPTED_MSG = GOOGLE_OAUTH_USER_ERROR_MSG;
@@ -47,6 +51,8 @@ const OAUTH_CALLBACK_STORAGE_KEY = "splove_oauth_callback_url";
 let oauthBrowserOpen = false;
 let oauthBrowserClosedOnCallback = false;
 let lastProcessedOAuthCode: string | null = null;
+/** iOS : ASWebAuthenticationSession actif — pas de Browser.open / Browser.close. */
+let iosNativeOAuthSessionActive = false;
 
 export function stashOAuthCallbackUrl(url: string): void {
   try {
@@ -90,6 +96,7 @@ export function resetOAuthBrowserWaitStateForTests(): void {
   oauthBrowserOpen = false;
   oauthBrowserClosedOnCallback = false;
   lastProcessedOAuthCode = null;
+  iosNativeOAuthSessionActive = false;
   clearOauthProcessingLock();
   resetOAuthBrowserOpenStateForTests();
 }
@@ -141,34 +148,53 @@ function failOAuthCallback(reason: string): void {
   window.location.hash = "#/auth";
 }
 
-async function handleNativeOAuthCallback(deepLinkUrl: string): Promise<void> {
+type NativeOAuthCallbackOptions = {
+  /** ASWebAuthenticationSession a déjà fermé la session — ne pas appeler Browser.close. */
+  skipBrowserClose?: boolean;
+  source?: "native_plugin" | "app_url_open";
+};
+
+async function handleNativeOAuthCallback(
+  deepLinkUrl: string,
+  options: NativeOAuthCallbackOptions = {},
+): Promise<boolean> {
   const trimmed = deepLinkUrl.trim();
   const code = oauthCodeFromUrl(trimmed);
   if (!code) {
     console.log("OAUTH_RETURN_SKIP", "missing_code");
-    return;
+    return false;
   }
 
   if (isOauthProcessingLocked()) {
     console.log("OAUTH_RETURN_SKIP", "oauth_callback_in_progress");
-    return;
+    return false;
   }
 
   if (lastProcessedOAuthCode === code) {
     console.log("OAUTH_RETURN_SKIP", "duplicate_code");
-    return;
+    return false;
   }
 
-  console.log("APP_URL_OPEN_RECEIVED");
+  const fromNativePlugin = options.source === "native_plugin" || iosNativeOAuthSessionActive;
+  if (fromNativePlugin) {
+    console.log("IOS_NATIVE_OAUTH_CALLBACK_RECEIVED");
+  } else {
+    console.log("APP_URL_OPEN_RECEIVED");
+  }
+
   lastProcessedOAuthCode = code;
   setOauthProcessingLock();
-  hideIosGoogleOAuthConnectingOverlay("app_url_open");
+  hideIosGoogleOAuthConnectingOverlay(fromNativePlugin ? "ios_native_callback" : "app_url_open");
 
-  await closeOAuthBrowserOnceOnCallback();
+  const skipBrowserClose = options.skipBrowserClose || fromNativePlugin;
+  if (!skipBrowserClose) {
+    await closeOAuthBrowserOnceOnCallback();
+  }
 
   console.log("OAUTH_DEEP_LINK_RECEIVED", {
     hasCode: true,
     urlLength: trimmed.length,
+    via: fromNativePlugin ? "native_plugin" : "app_url_open",
   });
   stashOAuthCallbackUrl(trimmed);
 
@@ -176,12 +202,16 @@ async function handleNativeOAuthCallback(deepLinkUrl: string): Promise<void> {
     const ok = await completeNativeOAuthReturn(trimmed);
     if (!ok) {
       failOAuthCallback("callback_process_failed");
+      return false;
     }
+    return true;
   } catch (e) {
     console.warn("OAUTH_CALLBACK_ERROR", e instanceof Error ? e.message : e);
     failOAuthCallback("callback_process_exception");
+    return false;
   } finally {
     clearOauthProcessingLock();
+    iosNativeOAuthSessionActive = false;
   }
 }
 
@@ -256,6 +286,70 @@ export function assertIosBrowserOpenBeforeOpen(
 
   console.log("BROWSER_OPEN_START", { url: trimmed, host, strategy });
   return { url: trimmed, host, strategy };
+}
+
+/**
+ * iOS : ASWebAuthenticationSession via SploveIosGoogleOAuth (pas de SFSafariViewController).
+ * Repli Browser.open uniquement si le plugin natif est indisponible ou échoue.
+ */
+async function openIosNativeOAuthSession(
+  googleUrl: string,
+  strategy = "google_direct",
+): Promise<{ error: Error | null }> {
+  const trimmed = googleUrl.trim();
+  console.log("IOS_NATIVE_OAUTH_START");
+
+  if (await routeOAuthDeepLink(trimmed)) {
+    return { error: null };
+  }
+
+  try {
+    assertIosBrowserOpenBeforeOpen(trimmed, strategy);
+  } catch {
+    return failIosGoogleOAuthResolve("native_oauth_url_blocked");
+  }
+
+  const pluginAvailable = await isSploveIosGoogleOAuthAvailable();
+  if (pluginAvailable) {
+    try {
+      console.log("IOS_NATIVE_OAUTH_PLUGIN_OPEN");
+      iosNativeOAuthSessionActive = true;
+      const result = await openSploveIosGoogleOAuthSession(trimmed);
+
+      if (result.outcome === "canceled") {
+        iosNativeOAuthSessionActive = false;
+        hideGoogleSignInOverlay("native_oauth_canceled");
+        hideIosGoogleOAuthConnectingOverlay("native_oauth_canceled");
+        return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
+      }
+
+      if (result.outcome === "callback" && result.url?.trim()) {
+        const ok = await handleNativeOAuthCallback(result.url.trim(), {
+          skipBrowserClose: true,
+          source: "native_plugin",
+        });
+        if (!ok) {
+          return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
+        }
+        console.log("IOS_NATIVE_OAUTH_SUCCESS");
+        return { error: null };
+      }
+
+      console.log("IOS_NATIVE_OAUTH_FALLBACK_BROWSER_USED", {
+        reason: "unexpected_plugin_outcome",
+        outcome: result.outcome,
+      });
+    } catch (e) {
+      iosNativeOAuthSessionActive = false;
+      console.log("IOS_NATIVE_OAUTH_FALLBACK_BROWSER_USED", {
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    }
+  } else {
+    console.log("IOS_NATIVE_OAUTH_FALLBACK_BROWSER_USED", { reason: "plugin_unavailable" });
+  }
+
+  return openIosOAuthBrowser(trimmed, strategy);
 }
 
 async function openIosOAuthBrowser(
@@ -402,7 +496,7 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
       }
 
       await logPkceStorageKeys("PKCE_KEYS_AFTER_SIGNIN");
-      return openIosOAuthBrowser(iosTarget.url, iosTarget.strategy);
+      return openIosNativeOAuthSession(iosTarget.url, iosTarget.strategy);
     }
 
     const browserTargetUrl = googleOAuthNativeBrowserTargetUrl(url, "android");
