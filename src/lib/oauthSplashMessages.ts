@@ -1,5 +1,3 @@
-import type { TranslationKey } from "../i18n/index";
-
 /** Phrases émotionnelles affichées pendant OAuth — jamais de libellé technique. */
 export const OAUTH_SPLASH_MESSAGE_KEYS = [
   "auth_oauth_splash_msg_1",
@@ -7,7 +5,7 @@ export const OAUTH_SPLASH_MESSAGE_KEYS = [
   "auth_oauth_splash_msg_3",
   "auth_oauth_splash_msg_4",
   "auth_oauth_splash_msg_5",
-] as const satisfies readonly TranslationKey[];
+] as const;
 
 export const OAUTH_SPLASH_ROTATION_MS = 2400;
 
