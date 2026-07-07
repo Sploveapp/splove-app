@@ -9,10 +9,20 @@ private func isGoogleOAuthURL(_ url: URL) -> Bool {
 
 /// Google OAuth iOS — ASWebAuthenticationSession uniquement (callback `splove://`).
 @objc(SploveIosGoogleOAuthPlugin)
-public class SploveIosGoogleOAuthPlugin: CAPPlugin, ASWebAuthenticationPresentationContextProviding {
+public class SploveIosGoogleOAuthPlugin: CAPPlugin, CAPBridgedPlugin, ASWebAuthenticationPresentationContextProviding {
+    public let identifier = "SploveIosGoogleOAuthPlugin"
+    public let jsName = "SploveIosGoogleOAuth"
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openGoogleOAuth", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "showConnectingMask", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "showFinalizingMask", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "hideOAuthMask", returnType: CAPPluginReturnPromise),
+    ]
+
     private var authSession: ASWebAuthenticationSession?
 
-    @objc func isAvailable(_ call: CAPPluginCall) {
+    @objc public func isAvailable(_ call: CAPPluginCall) {
         if #available(iOS 12.0, *) {
             call.resolve(["available": true])
         } else {
@@ -20,22 +30,22 @@ public class SploveIosGoogleOAuthPlugin: CAPPlugin, ASWebAuthenticationPresentat
         }
     }
 
-    @objc func showConnectingMask(_ call: CAPPluginCall) {
+    @objc public func showConnectingMask(_ call: CAPPluginCall) {
         SploveOAuthMaskWindow.shared.showConnecting()
         call.resolve()
     }
 
-    @objc func showFinalizingMask(_ call: CAPPluginCall) {
+    @objc public func showFinalizingMask(_ call: CAPPluginCall) {
         SploveOAuthMaskWindow.shared.showFinalizing()
         call.resolve()
     }
 
-    @objc func hideOAuthMask(_ call: CAPPluginCall) {
+    @objc public func hideOAuthMask(_ call: CAPPluginCall) {
         SploveOAuthMaskWindow.shared.hide()
         call.resolve()
     }
 
-    @objc func openGoogleOAuth(_ call: CAPPluginCall) {
+    @objc public func openGoogleOAuth(_ call: CAPPluginCall) {
         guard let urlString = call.getString("url")?.trimmingCharacters(in: .whitespacesAndNewlines),
               !urlString.isEmpty,
               let url = URL(string: urlString),

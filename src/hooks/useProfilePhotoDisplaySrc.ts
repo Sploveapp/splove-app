@@ -12,8 +12,16 @@ import {
   buildSyncProfilePhotoDisplaySrc,
   pickPrimaryProfilePhotoStoredRef,
   pickSecondaryProfilePhotoStoredRef,
+  resolveProfilePhotoUiSrc,
   skipSyncPublicProfilePhotoUrl,
 } from "../lib/profilePhotoDisplayUrl";
+import { buildIosCapacitorImageFetchUrlCandidates } from "../lib/profilePhotoIosDisplayUrls";
+import {
+  canMountProfilePhotoImg,
+  resolveIosAwareProfilePhotoDisplaySrc,
+  shouldShowProfilePhotoLoadingPlaceholder,
+} from "../lib/profilePhotoIosDisplay";
+import { useIosCapacitorImageDisplay } from "./useIosCapacitorImageDisplay";
 
 export type ProfilePhotoDisplayState = {
   src: string | null;
@@ -28,6 +36,86 @@ export type ProfilePhotoDisplayState = {
 };
 
 const LOG = "[profile-photo-display]";
+
+export type PhotoDebugPhotoFields = {
+  portrait_url?: string | null;
+  avatar_url?: string | null;
+  fullbody_url?: string | null;
+  main_photo_url?: string | null;
+};
+
+/** Diagnostic production — préfixe [PHOTO_DEBUG], sans effet métier. */
+export function classifyPhotoUrlForDebug(url: string | null | undefined): Record<string, unknown> {
+  if (url == null) return { urlState: "null" };
+  const t = url.trim();
+  if (!t) return { urlState: "empty" };
+  if (t.startsWith("data:")) return { urlState: "data_url", preview: photoUrlPrefix(t) };
+  if (t.startsWith("blob:")) return { urlState: "blob_url" };
+  try {
+    const parsed = new URL(t);
+    const path = parsed.pathname;
+    const isSign = path.includes("/object/sign/") || parsed.searchParams.has("token");
+    const isPublic = path.includes("/object/public/");
+    let signedExpired: boolean | "unknown" = "unknown";
+    const token = parsed.searchParams.get("token");
+    if (token && token.includes(".")) {
+      try {
+        const payload = JSON.parse(
+          atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")),
+        ) as { exp?: number };
+        if (typeof payload.exp === "number") {
+          signedExpired = payload.exp * 1000 < Date.now();
+        }
+      } catch {
+        signedExpired = "unknown";
+      }
+    }
+    return {
+      urlState: isSign ? "signed_storage" : isPublic ? "public_storage" : "remote_https",
+      host: parsed.host,
+      signedExpired: isSign ? signedExpired : undefined,
+      preview: photoUrlPrefix(t),
+    };
+  } catch {
+    return { urlState: "invalid_url", preview: t.slice(0, 64) };
+  }
+}
+
+export function logPhotoDebug(
+  event: string,
+  payload: {
+    screen: string;
+    userId?: string | null;
+    profileId?: string | null;
+    storedRef?: string | null;
+    displaySrc?: string | null;
+    photoFields?: PhotoDebugPhotoFields | null;
+    isLoading?: boolean;
+    isFailed?: boolean;
+    error?: string | null;
+    extra?: Record<string, unknown>;
+  },
+): void {
+  const displaySrc = payload.displaySrc ?? null;
+  const storedRef = payload.storedRef ?? null;
+  console.log(`[PHOTO_DEBUG] ${event}`, {
+    screen: payload.screen,
+    userId: payload.userId ?? null,
+    profileId: payload.profileId ?? null,
+    portrait_url: photoUrlPrefix(payload.photoFields?.portrait_url ?? null),
+    avatar_url: photoUrlPrefix(payload.photoFields?.avatar_url ?? null),
+    fullbody_url: photoUrlPrefix(payload.photoFields?.fullbody_url ?? null),
+    main_photo_url: photoUrlPrefix(payload.photoFields?.main_photo_url ?? null),
+    storedRef: photoUrlPrefix(storedRef),
+    imgSrc: photoUrlPrefix(displaySrc),
+    ...classifyPhotoUrlForDebug(displaySrc),
+    storedRefClass: classifyPhotoUrlForDebug(storedRef),
+    isLoading: payload.isLoading ?? false,
+    isFailed: payload.isFailed ?? false,
+    error: payload.error ?? null,
+    ...(payload.extra ?? {}),
+  });
+}
 
 type ProfilePhotoFields = {
   main_photo_url?: string | null;
@@ -273,6 +361,14 @@ export function useProfilePhotoDisplaySrc(
       emitConnectedPhotoLog(ctx, "resolve_empty", {
         error: "no_photo_refs_in_profile",
       });
+      logPhotoDebug("resolve_empty", {
+        screen: ctx?.source ?? "profile.screen",
+        userId: ctx?.userId,
+        profileId: ctx?.profileId,
+        isLoading: false,
+        isFailed: false,
+        error: "no_photo_refs_in_profile",
+      });
       return;
     }
 
@@ -293,6 +389,16 @@ export function useProfilePhotoDisplaySrc(
         displayUrl: photoUrlPrefix(syncImmediate[0] ?? null),
         candidateCount: syncImmediate.length,
         syncImmediate: true,
+      });
+      logPhotoDebug("display_url_ready", {
+        screen: ctx?.source ?? "profile.screen",
+        userId: ctx?.userId,
+        profileId: ctx?.profileId,
+        storedRef: firstStored,
+        displaySrc: syncImmediate[0] ?? null,
+        isLoading: false,
+        isFailed: false,
+        extra: { syncImmediate: true, candidateCount: syncImmediate.length },
       });
     }
 
@@ -352,6 +458,15 @@ export function useProfilePhotoDisplaySrc(
         error: "all_photo_fields_failed",
         candidateCount: refs.length,
       });
+      logPhotoDebug("resolve_failed", {
+        screen: ctx?.source ?? "profile.screen",
+        userId: ctx?.userId,
+        profileId: ctx?.profileId,
+        isLoading: false,
+        isFailed: true,
+        error: "all_photo_fields_failed",
+        extra: { candidateCount: refs.length },
+      });
     })();
   }, [refsKey, applyRef]);
 
@@ -373,6 +488,17 @@ export function useProfilePhotoDisplaySrc(
       displayUrl: photoUrlPrefix(currentSrc),
       urlIndex,
       error: "img_onerror",
+    });
+    logPhotoDebug("img_onerror", {
+      screen: ctx?.source ?? "profile.screen",
+      userId: ctx?.userId,
+      profileId: ctx?.profileId,
+      storedRef: activeRef,
+      displaySrc: currentSrc || null,
+      isLoading,
+      isFailed,
+      error: "img_onerror",
+      extra: { urlIndex, candidateCount: urlCandidates.length },
     });
     if (ctx) {
       PhotoFlowLog.imageLoadError({
@@ -458,6 +584,16 @@ export function useProfilePhotoDisplaySrc(
       displayUrl: photoUrlPrefix(loadedUrl),
       urlIndex,
     });
+    logPhotoDebug("img_onload", {
+      screen: ctx?.source ?? "profile.screen",
+      userId: ctx?.userId,
+      profileId: ctx?.profileId,
+      storedRef: activeRef,
+      displaySrc: loadedUrl || null,
+      isLoading,
+      isFailed,
+      extra: { urlIndex },
+    });
     if (ctx) {
       PhotoFlowLog.profilePhotoResolved({
         userId: ctx.userId,
@@ -473,6 +609,25 @@ export function useProfilePhotoDisplaySrc(
     advance();
   }, [advance]);
 
+  useEffect(() => {
+    const ctx = logContextRef.current;
+    logPhotoDebug("hook.state", {
+      screen: ctx?.source ?? "profile.screen",
+      userId: ctx?.userId,
+      profileId: ctx?.profileId,
+      storedRef: activeRef,
+      displaySrc: src,
+      isLoading,
+      isFailed,
+      extra: {
+        urlIndex,
+        refIndex,
+        candidateCount: urlCandidates.length,
+        mountBlocked: !src && !isLoading && refs.length > 0,
+      },
+    });
+  }, [src, isLoading, isFailed, activeRef, urlIndex, refIndex, urlCandidates.length, refs.length]);
+
   return {
     src,
     isLoading,
@@ -482,5 +637,69 @@ export function useProfilePhotoDisplaySrc(
     urlIndex,
     onImageLoad,
     onImageError,
+  };
+}
+
+export type ProfilePhotoIosDisplayLayerOptions = {
+  /** Désactive CapacitorHttp (preview blob local). */
+  disableIosFetch?: boolean;
+  /** Src distante explicite (ex. blob preview). */
+  remoteBaseOverride?: string | null;
+};
+
+/**
+ * Couche iOS : n’expose jamais une URL Storage HTTPS dans `<img>` —
+ * attend la data URL CapacitorHttp ou une URL non-Storage (OAuth).
+ */
+export function useProfilePhotoIosDisplayLayer(
+  photo: ProfilePhotoDisplayState,
+  storedRef: string | null,
+  options: ProfilePhotoIosDisplayLayerOptions = {},
+) {
+  const resolvedSrc = resolveProfilePhotoUiSrc(storedRef, photo.src);
+  const remoteBase = options.disableIosFetch
+    ? (options.remoteBaseOverride ?? null)
+    : photo.isFailed && !photo.src
+      ? null
+      : (options.remoteBaseOverride ?? resolvedSrc);
+
+  const iosFetchUrls = useMemo(
+    () => buildIosCapacitorImageFetchUrlCandidates(storedRef, remoteBase),
+    [storedRef, remoteBase],
+  );
+
+  const ios = useIosCapacitorImageDisplay(options.disableIosFetch ? null : remoteBase, {
+    fallbackUrls: iosFetchUrls.filter((u) => u !== remoteBase),
+  });
+
+  const displaySrc = options.disableIosFetch
+    ? (options.remoteBaseOverride ?? resolvedSrc)
+    : resolveIosAwareProfilePhotoDisplaySrc({
+        iosDisplaySrc: ios.displaySrc,
+        remoteBase,
+        isResolving: ios.isResolving,
+        resolutionFailed: ios.resolutionFailed,
+        usingDataUrl: ios.usingDataUrl,
+      });
+
+  const mountImg = canMountProfilePhotoImg(displaySrc, {
+    isResolving: options.disableIosFetch ? false : ios.isResolving,
+    resolutionFailed: options.disableIosFetch ? false : ios.resolutionFailed,
+    usingDataUrl: options.disableIosFetch ? false : ios.usingDataUrl,
+  });
+
+  const showLoadingPlaceholder = shouldShowProfilePhotoLoadingPlaceholder({
+    displaySrc,
+    isLoading: photo.isLoading,
+    isResolving: options.disableIosFetch ? false : ios.isResolving,
+  });
+
+  return {
+    displaySrc,
+    mountImg,
+    showLoadingPlaceholder,
+    ios,
+    remoteBase,
+    resolvedSrc,
   };
 }

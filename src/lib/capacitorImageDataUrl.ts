@@ -189,3 +189,8 @@ export async function fetchCapacitorImageDataUrl(
 
   return null;
 }
+
+/** Vide le cache mémoire (upload, changement de compte, invalidation manuelle). */
+export function clearCapacitorImageDataUrlCache(): void {
+  dataUrlCache.clear();
+}

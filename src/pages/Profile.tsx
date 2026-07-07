@@ -37,10 +37,12 @@ const ACCESSIBILITY_SAVE_SUCCESS = "Preferences enregistrees.";
 import { useTranslation } from "../i18n/useTranslation";
 import { buildAuthReferralLink, fetchGrowthProfileFields, type GrowthProfileRow } from "../services/referral.service";
 import { ProfileScreenSkeleton } from "../components/skeletons/ProfileScreenSkeleton";
-import { useIosCapacitorImageDisplay } from "../hooks/useIosCapacitorImageDisplay";
-import { buildIosCapacitorImageFetchUrlCandidates } from "../lib/profilePhotoIosDisplayUrls";
+import {
+  logPhotoDebug,
+  useProfilePhotoDisplaySrc,
+  useProfilePhotoIosDisplayLayer,
+} from "../hooks/useProfilePhotoDisplaySrc";
 import { buildIosAwareProfilePhotoImgHandlers } from "../lib/profilePhotoIosImgHandlers";
-import { useProfilePhotoDisplaySrc } from "../hooks/useProfilePhotoDisplaySrc";
 import { useBrokenProfilePhotoReuploadHint } from "../hooks/useBrokenProfilePhotoReuploadHint";
 import { snapshotProfilePhotoFields, photoUrlPrefix } from "../lib/profilePhotoPipelineLog";
 import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
@@ -48,7 +50,6 @@ import { normalizeProfileRowCanonicalPhotos } from "../lib/onboardingProfilePhot
 import { PhotoFlowLog, photoFlowFieldsFromRow } from "../lib/photoFlowLog";
 import {
   logProfilePhotoUiDecision,
-  resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
 import { mergeStickyPhotoHandlers, useStickyPhotoDisplaySrc } from "../lib/profilePhotoStickyDisplay";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
@@ -175,30 +176,14 @@ export default function Profile() {
     logContext: avatarPhotoLogContext,
   });
 
-  const avatarResolvedSrc = resolveProfilePhotoUiSrc(avatarPhoto.activeRef, avatarPhoto.src);
-  const avatarRemoteBase =
-    avatarPhoto.isFailed && !avatarPhoto.src ? null : avatarResolvedSrc;
   const primaryStoredRef = avatarPhoto.activeRef ?? avatarRefCandidates.refs[0] ?? null;
-  const avatarIosFetchUrls = useMemo(
-    () => buildIosCapacitorImageFetchUrlCandidates(primaryStoredRef, avatarRemoteBase),
-    [primaryStoredRef, avatarRemoteBase],
-  );
-  const iosAvatarPhoto = useIosCapacitorImageDisplay(avatarRemoteBase, {
-    fallbackUrls: avatarIosFetchUrls.filter((u) => u !== avatarRemoteBase),
-  });
-  /** Src finale avatar : data URL iOS si prête, sinon signed/public résolue. */
-  const rawProfileAvatarDisplaySrc =
-    iosAvatarPhoto.displaySrc?.trim() || avatarRemoteBase?.trim() || "";
-  const profileAvatarDisplaySrc =
-    typeof rawProfileAvatarDisplaySrc === "string" && rawProfileAvatarDisplaySrc.length > 0
-      ? rawProfileAvatarDisplaySrc
-      : null;
+  const avatarIosLayer = useProfilePhotoIosDisplayLayer(avatarPhoto, primaryStoredRef);
+  const profileAvatarDisplaySrc = avatarIosLayer.displaySrc;
   const avatarStickyScope = `${user?.id ?? "anon"}:${primaryStoredRef ?? "none"}`;
   const avatarSticky = useStickyPhotoDisplaySrc(profileAvatarDisplaySrc, avatarStickyScope);
   const avatarImgSrc = avatarSticky.displaySrc;
-  const showAvatarImgStable = Boolean(avatarImgSrc);
-  const showAvatarPlaceholder =
-    !showAvatarImgStable && (avatarPhoto.isLoading || iosAvatarPhoto.isResolving);
+  const showAvatarImgStable = avatarIosLayer.mountImg && Boolean(avatarImgSrc);
+  const showAvatarPlaceholder = avatarIosLayer.showLoadingPlaceholder;
 
   const syncProfileForScreen = useCallback(async () => {
     if (!user?.id) return;
@@ -273,13 +258,13 @@ export default function Profile() {
       reason = "no_photo_refs_in_profile";
     } else if (avatarPhoto.isLoading) {
       reason = "resolving_urls";
-    } else if (iosAvatarPhoto.isResolving) {
+    } else if (avatarIosLayer.ios.isResolving) {
       reason = "ios_capacitor_resolving";
     } else if (avatarPhoto.isFailed && !avatarPhoto.src) {
       reason = "url_resolution_failed";
     } else if (!profileAvatarDisplaySrc) {
       reason = "no_display_src";
-    } else if (iosAvatarPhoto.resolutionFailed && !iosAvatarPhoto.usingDataUrl) {
+    } else if (avatarIosLayer.ios.resolutionFailed && !avatarIosLayer.ios.usingDataUrl) {
       reason = "ios_capacitor_failed";
     }
 
@@ -296,9 +281,9 @@ export default function Profile() {
         candidateRefCount: avatarRefCandidates.refs.length,
         isLoading: avatarPhoto.isLoading,
         isFailed: avatarPhoto.isFailed,
-        iosResolving: iosAvatarPhoto.isResolving,
-        iosResolutionFailed: iosAvatarPhoto.resolutionFailed,
-        iosUsingDataUrl: iosAvatarPhoto.usingDataUrl,
+        iosResolving: avatarIosLayer.ios.isResolving,
+        iosResolutionFailed: avatarIosLayer.ios.resolutionFailed,
+        iosUsingDataUrl: avatarIosLayer.ios.usingDataUrl,
         hookUrlIndex: avatarPhoto.urlIndex,
       },
     });
@@ -314,9 +299,9 @@ export default function Profile() {
     avatarPhoto.src,
     avatarPhoto.activeField,
     avatarPhoto.urlIndex,
-    iosAvatarPhoto.isResolving,
-    iosAvatarPhoto.resolutionFailed,
-    iosAvatarPhoto.usingDataUrl,
+    avatarIosLayer.ios.isResolving,
+    avatarIosLayer.ios.resolutionFailed,
+    avatarIosLayer.ios.usingDataUrl,
   ]);
 
   useEffect(() => {
@@ -331,7 +316,7 @@ export default function Profile() {
         profileId: profile?.id ?? user.id,
         slot: "primary",
         view: "avatar",
-        iosCapacitorDataUrl: iosAvatarPhoto.usingDataUrl,
+        iosCapacitorDataUrl: avatarIosLayer.ios.usingDataUrl,
       },
     });
     PhotoRenderLog.resolvedUrl({
@@ -344,7 +329,7 @@ export default function Profile() {
         slot: "primary",
         view: "avatar",
         urlIndex: avatarPhoto.urlIndex,
-        iosCapacitorDataUrl: iosAvatarPhoto.usingDataUrl,
+        iosCapacitorDataUrl: avatarIosLayer.ios.usingDataUrl,
       },
     });
     console.log("[ProfileAvatar] render_decision", {
@@ -352,8 +337,8 @@ export default function Profile() {
       showAvatarImg: showAvatarImgStable,
       isLoading: avatarPhoto.isLoading,
       isFailed: avatarPhoto.isFailed,
-      iosResolving: iosAvatarPhoto.isResolving,
-      iosUsingDataUrl: iosAvatarPhoto.usingDataUrl,
+      iosResolving: avatarIosLayer.ios.isResolving,
+      iosUsingDataUrl: avatarIosLayer.ios.usingDataUrl,
     });
     console.log("[SPLovePhoto][connected-profile] profile_snapshot", {
       userId: user.id,
@@ -366,6 +351,28 @@ export default function Profile() {
       isLoading: avatarPhoto.isLoading,
       isFailed: avatarPhoto.isFailed,
     });
+    logPhotoDebug("screen.render", {
+      screen: "Profile",
+      userId: user.id,
+      profileId: profile?.id ?? user.id,
+      storedRef: primaryStoredRef,
+      displaySrc: avatarImgSrc,
+      photoFields: avatarPhotoFields,
+      isLoading: avatarPhoto.isLoading,
+      isFailed: avatarPhoto.isFailed,
+      extra: {
+        showAvatarImgStable,
+        showAvatarPlaceholder,
+        hookSrc: avatarPhoto.src,
+        iosResolving: avatarIosLayer.ios.isResolving,
+        iosResolutionFailed: avatarIosLayer.ios.resolutionFailed,
+        iosUsingDataUrl: avatarIosLayer.ios.usingDataUrl,
+        mountImg: avatarIosLayer.mountImg,
+        candidateRefCount: avatarRefCandidates.refs.length,
+        activeField: avatarPhoto.activeField,
+        urlIndex: avatarPhoto.urlIndex,
+      },
+    });
   }, [
     user?.id,
     profile?.id,
@@ -374,8 +381,8 @@ export default function Profile() {
     profile?.fullbody_url,
     profile?.avatar_url,
     bootPhotoFields,
-    iosAvatarPhoto.usingDataUrl,
-    iosAvatarPhoto.resolutionFailed,
+    avatarIosLayer.ios.usingDataUrl,
+    avatarIosLayer.ios.resolutionFailed,
     avatarPhoto.activeField,
     profileAvatarDisplaySrc,
     avatarPhoto.src,
@@ -383,28 +390,79 @@ export default function Profile() {
     avatarPhoto.isLoading,
     avatarPhoto.isFailed,
     profile,
+    showAvatarImgStable,
+    avatarImgSrc,
+    primaryStoredRef,
+    avatarPhotoFields,
+    showAvatarPlaceholder,
   ]);
 
-  const profileAvatarImgHandlers = chainPhotoRenderHandlers(
-    {
-      screen: "Profile",
-      displaySrc: avatarImgSrc,
-      resolvedUrl: avatarPhoto.src,
-      profile,
-      extra: {
-        profileId: profile?.id ?? user?.id ?? null,
-        slot: "primary",
-        view: "avatar",
-        iosCapacitorDataUrl: iosAvatarPhoto.usingDataUrl,
+  const profileAvatarImgHandlers = useMemo(() => {
+    const base = chainPhotoRenderHandlers(
+      {
+        screen: "Profile",
+        displaySrc: avatarImgSrc,
+        resolvedUrl: avatarPhoto.src,
+        profile,
+        extra: {
+          profileId: profile?.id ?? user?.id ?? null,
+          slot: "primary",
+          view: "avatar",
+          iosCapacitorDataUrl: avatarIosLayer.ios.usingDataUrl,
+        },
       },
-    },
-    mergeStickyPhotoHandlers(avatarSticky, buildIosAwareProfilePhotoImgHandlers({
-      iosOnError: iosAvatarPhoto.onImageError,
-      photoOnError: avatarPhoto.onImageError,
-      photoOnLoad: avatarPhoto.onImageLoad,
-      iosResolutionFailed: iosAvatarPhoto.resolutionFailed,
-    })),
-  );
+      mergeStickyPhotoHandlers(avatarSticky, buildIosAwareProfilePhotoImgHandlers({
+        iosOnError: avatarIosLayer.ios.onImageError,
+        photoOnError: avatarPhoto.onImageError,
+        photoOnLoad: avatarPhoto.onImageLoad,
+        iosResolutionFailed: avatarIosLayer.ios.resolutionFailed,
+      })),
+    );
+    return {
+      onLoad: () => {
+        logPhotoDebug("screen.img_onload", {
+          screen: "Profile",
+          userId: user?.id ?? null,
+          profileId: profile?.id ?? user?.id ?? null,
+          storedRef: primaryStoredRef,
+          displaySrc: avatarImgSrc,
+          photoFields: avatarPhotoFields,
+          isLoading: avatarPhoto.isLoading,
+          isFailed: avatarPhoto.isFailed,
+        });
+        base.onLoad();
+      },
+      onError: () => {
+        logPhotoDebug("screen.img_onerror", {
+          screen: "Profile",
+          userId: user?.id ?? null,
+          profileId: profile?.id ?? user?.id ?? null,
+          storedRef: primaryStoredRef,
+          displaySrc: avatarImgSrc,
+          photoFields: avatarPhotoFields,
+          isLoading: avatarPhoto.isLoading,
+          isFailed: avatarPhoto.isFailed,
+          error: "img_element_onerror",
+        });
+        base.onError();
+      },
+    };
+  }, [
+    avatarImgSrc,
+    avatarPhoto.src,
+    avatarPhoto.isLoading,
+    avatarPhoto.isFailed,
+    avatarPhoto.onImageError,
+    avatarPhoto.onImageLoad,
+    avatarPhotoFields,
+    avatarIosLayer.ios.onImageError,
+    avatarIosLayer.ios.resolutionFailed,
+    avatarIosLayer.ios.usingDataUrl,
+    avatarSticky,
+    primaryStoredRef,
+    profile,
+    user?.id,
+  ]);
   const [growth, setGrowth] = useState<GrowthProfileRow | null>(null);
   const [growthLinkCopied, setGrowthLinkCopied] = useState(false);
   const [needsAdaptedActivities, setNeedsAdaptedActivities] = useState(false);

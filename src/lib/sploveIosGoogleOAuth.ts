@@ -32,6 +32,9 @@ const SploveIosGoogleOAuth = registerPlugin<SploveIosGoogleOAuthPlugin>("SploveI
 
 export async function isSploveIosGoogleOAuthAvailable(): Promise<boolean> {
   if (!isIosNativeGoogleOAuth()) return false;
+  const pluginListed = Capacitor.isPluginAvailable("SploveIosGoogleOAuth");
+  console.log("[AUTH] SploveIosGoogleOAuth isPluginAvailable:", pluginListed);
+  if (!pluginListed) return false;
   try {
     const { available } = await SploveIosGoogleOAuth.isAvailable();
     return available === true;

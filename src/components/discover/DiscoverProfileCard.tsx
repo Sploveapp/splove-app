@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useState,
   type CSSProperties,
   type Dispatch,
@@ -36,6 +37,7 @@ import { formatHeightCmForDisplay } from "../../lib/profileHeightCm";
 import { formatCityDisplay } from "../../lib/formatCityDisplay";
 import { BLOCK_PROFILE_LINK_LABEL, REPORT_LINK_LABEL } from "../../constants/copy";
 import { SPLOVE_PROFILE_PHOTO_FALLBACK_SRC } from "../../lib/userMainPhoto";
+import { logPhotoDebug } from "../../hooks/useProfilePhotoDisplaySrc";
 import { SPLOVE_BOTTOM_CLEARANCE } from "../../constants/appBottomNavLayout";
 import { usesNativeBottomNavigation } from "../../lib/nativeBottomNav";
 
@@ -180,6 +182,113 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   const swipeNopeOpacity = Math.min(1, Math.abs(dx) / 120) * (passPreview ? 1 : 0);
   const swipeLikeOpacity = Math.min(1, Math.abs(dx) / 120) * (likePreview ? 1 : 0);
 
+  useEffect(() => {
+    logPhotoDebug("screen.render", {
+      screen: "Discover",
+      profileId: profile.id,
+      storedRef:
+        profile.portrait_url ??
+        profile.main_photo_url ??
+        profile.avatar_url ??
+        profile.fullbody_url ??
+        null,
+      displaySrc: photoUrl || null,
+      photoFields: {
+        portrait_url: profile.portrait_url ?? null,
+        avatar_url: profile.avatar_url ?? null,
+        fullbody_url: profile.fullbody_url ?? null,
+        main_photo_url: profile.main_photo_url ?? null,
+      },
+      isLoading: photoPending,
+      isFailed: !photoUrl && !photoPending,
+      extra: {
+        hasPhotoUrl: Boolean(photoUrl),
+        photoPending,
+        profileFirstName: profile.first_name,
+      },
+    });
+  }, [
+    photoUrl,
+    photoPending,
+    profile.id,
+    profile.portrait_url,
+    profile.main_photo_url,
+    profile.avatar_url,
+    profile.fullbody_url,
+    profile.first_name,
+  ]);
+
+  const handlePhotoLoad: ReactEventHandler<HTMLImageElement> = useCallback(
+    (event) => {
+      logPhotoDebug("screen.img_onload", {
+        screen: "Discover",
+        profileId: profile.id,
+        storedRef:
+          profile.portrait_url ??
+          profile.main_photo_url ??
+          profile.avatar_url ??
+          null,
+        displaySrc: photoUrl || null,
+        photoFields: {
+          portrait_url: profile.portrait_url ?? null,
+          avatar_url: profile.avatar_url ?? null,
+          fullbody_url: profile.fullbody_url ?? null,
+          main_photo_url: profile.main_photo_url ?? null,
+        },
+        isLoading: photoPending,
+        isFailed: false,
+        extra: { naturalWidth: event.currentTarget.naturalWidth },
+      });
+      onPhotoLoad?.(event);
+    },
+    [
+      onPhotoLoad,
+      photoPending,
+      photoUrl,
+      profile.avatar_url,
+      profile.fullbody_url,
+      profile.id,
+      profile.main_photo_url,
+      profile.portrait_url,
+    ],
+  );
+
+  const handlePhotoError: ReactEventHandler<HTMLImageElement> = useCallback(
+    (event) => {
+      logPhotoDebug("screen.img_onerror", {
+        screen: "Discover",
+        profileId: profile.id,
+        storedRef:
+          profile.portrait_url ??
+          profile.main_photo_url ??
+          profile.avatar_url ??
+          null,
+        displaySrc: photoUrl || null,
+        photoFields: {
+          portrait_url: profile.portrait_url ?? null,
+          avatar_url: profile.avatar_url ?? null,
+          fullbody_url: profile.fullbody_url ?? null,
+          main_photo_url: profile.main_photo_url ?? null,
+        },
+        isLoading: photoPending,
+        isFailed: true,
+        error: "img_element_onerror",
+        extra: { imgSrcAttr: event.currentTarget.currentSrc?.slice(0, 120) ?? null },
+      });
+      onPhotoError?.(event);
+    },
+    [
+      onPhotoError,
+      photoPending,
+      photoUrl,
+      profile.avatar_url,
+      profile.fullbody_url,
+      profile.id,
+      profile.main_photo_url,
+      profile.portrait_url,
+    ],
+  );
+
   return (
     <>
       <div
@@ -207,8 +316,8 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
             className="pointer-events-none absolute inset-0 h-full w-full object-cover"
             loading="eager"
             decoding="async"
-            onLoad={onPhotoLoad}
-            onError={onPhotoError}
+            onLoad={handlePhotoLoad}
+            onError={handlePhotoError}
           />
         ) : photoPending ? (
           <div

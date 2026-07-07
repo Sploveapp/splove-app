@@ -22,19 +22,19 @@ import { parseSportMatchPreference, type SportMatchPreferenceDb } from "../lib/s
 import { useTranslation } from "../i18n/useTranslation";
 import { antiExitValidator } from "../lib/antiExitValidator";
 import {
+  logPhotoDebug,
   useProfilePhotoDisplaySrc,
+  useProfilePhotoIosDisplayLayer,
 } from "../hooks/useProfilePhotoDisplaySrc";
 import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
 import {
   logProfilePhotoUiDecision,
-  resolveProfilePhotoUiSrc,
 } from "../lib/profilePhotoDisplayUrl";
 import { normalizeProfileRowCanonicalPhotos } from "../lib/onboardingProfilePhotos";
 import { PhotoFlowLog, photoFlowFieldsFromRow } from "../lib/photoFlowLog";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
-import { useIosCapacitorImageDisplay } from "../hooks/useIosCapacitorImageDisplay";
-import { buildIosCapacitorImageFetchUrlCandidates } from "../lib/profilePhotoIosDisplayUrls";
 import { buildIosAwareProfilePhotoImgHandlers } from "../lib/profilePhotoIosImgHandlers";
+import { invalidateProfilePhotoDisplayCaches } from "../lib/profilePhotoDisplayInvalidate";
 import { coerceProfileHeightCm, parseHeightCmOptionalInput } from "../lib/profileHeightCm";
 import { uploadProfilePhoto } from "../lib/profilePhotoUpload";
 import { sportPictogramForSlug } from "../lib/onboardingSportsQuickPick";
@@ -320,44 +320,17 @@ export default function EditProfile() {
   const primaryStoredRef = primaryEditCandidates.refs[0] ?? null;
   const secondaryStoredRef = secondaryEditCandidates.refs[0] ?? null;
 
-  const primaryResolvedSrc = resolveProfilePhotoUiSrc(primaryPhoto.activeRef, primaryPhoto.src);
-  const secondaryResolvedSrc = resolveProfilePhotoUiSrc(secondaryStoredRef, secondaryPhoto.src);
+  const primaryIosLayer = useProfilePhotoIosDisplayLayer(primaryPhoto, primaryStoredRef, {
+    disableIosFetch: Boolean(portraitFile),
+    remoteBaseOverride: portraitFile ? portraitPreviewUrl || primaryPhoto.src || null : undefined,
+  });
+  const secondaryIosLayer = useProfilePhotoIosDisplayLayer(secondaryPhoto, secondaryStoredRef);
 
-  /** URL distante résolue (signed/public) — afficher dès que le hook a un src, sans bloquer sur isLoading. */
-  const primaryRemoteBase =
-    primaryPhoto.isFailed && !primaryPhoto.src ? null : primaryResolvedSrc;
+  const primaryImgSrc = primaryIosLayer.displaySrc;
+  const secondaryImgSrc = secondaryIosLayer.displaySrc;
 
-  const primaryIosFetchUrls = useMemo(
-    () => buildIosCapacitorImageFetchUrlCandidates(primaryStoredRef, primaryRemoteBase),
-    [primaryStoredRef, primaryRemoteBase],
-  );
-  const secondaryRemoteBase =
-    secondaryPhoto.isFailed && !secondaryPhoto.src ? null : secondaryResolvedSrc;
-  const secondaryIosFetchUrls = useMemo(
-    () => buildIosCapacitorImageFetchUrlCandidates(secondaryStoredRef, secondaryRemoteBase),
-    [secondaryStoredRef, secondaryRemoteBase],
-  );
-
-  /** iOS WKWebView : repli CapacitorHttp → data URL (même pattern que Profil). */
-  const iosPrimaryPhoto = useIosCapacitorImageDisplay(
-    portraitFile ? null : primaryRemoteBase,
-    { fallbackUrls: primaryIosFetchUrls.filter((u) => u !== primaryRemoteBase) },
-  );
-  const iosSecondaryPhoto = useIosCapacitorImageDisplay(
-    secondaryRemoteBase,
-    { fallbackUrls: secondaryIosFetchUrls.filter((u) => u !== secondaryRemoteBase) },
-  );
-
-  const primaryImgSrc = portraitFile ? primaryRemoteBase : iosPrimaryPhoto.displaySrc;
-  const secondaryImgSrc = iosSecondaryPhoto.displaySrc;
-
-  const showPrimaryImg = portraitFile
-    ? Boolean(primaryImgSrc)
-    : Boolean(primaryImgSrc) &&
-      !(iosPrimaryPhoto.resolutionFailed && !iosPrimaryPhoto.usingDataUrl);
-  const showSecondaryImg =
-    Boolean(secondaryImgSrc) &&
-    !(iosSecondaryPhoto.resolutionFailed && !iosSecondaryPhoto.usingDataUrl);
+  const showPrimaryImg = primaryIosLayer.mountImg && Boolean(primaryImgSrc);
+  const showSecondaryImg = secondaryIosLayer.mountImg && Boolean(secondaryImgSrc);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -417,9 +390,9 @@ export default function EditProfile() {
       primaryStoredRef,
       primaryPhoto,
       portraitRefs,
-      iosPrimaryPhoto.isResolving,
-      iosPrimaryPhoto.resolutionFailed,
-      iosPrimaryPhoto.usingDataUrl,
+      primaryIosLayer.ios.isResolving,
+      primaryIosLayer.ios.resolutionFailed,
+      primaryIosLayer.ios.usingDataUrl,
     );
     logSlot(
       "secondary",
@@ -428,9 +401,9 @@ export default function EditProfile() {
       secondaryStoredRef,
       secondaryPhoto,
       bodyRefs,
-      iosSecondaryPhoto.isResolving,
-      iosSecondaryPhoto.resolutionFailed,
-      iosSecondaryPhoto.usingDataUrl,
+      secondaryIosLayer.ios.isResolving,
+      secondaryIosLayer.ios.resolutionFailed,
+      secondaryIosLayer.ios.usingDataUrl,
     );
 
     logProfilePhotoUiDecision("edit_profile.screen", profile, primaryImgSrc, "primary");
@@ -463,6 +436,50 @@ export default function EditProfile() {
       profile,
       extra: { profileId: profile?.id ?? user?.id ?? null, slot: "secondary", urlIndex: secondaryPhoto.urlIndex },
     });
+    logPhotoDebug("screen.render", {
+      screen: "EditProfile",
+      userId: user.id,
+      profileId: profile?.id ?? user.id,
+      storedRef: primaryStoredRef,
+      displaySrc: primaryImgSrc,
+      photoFields: {
+        portrait_url: profile?.portrait_url ?? portraitUrl ?? null,
+        avatar_url: typeof profile?.avatar_url === "string" ? profile.avatar_url : null,
+        fullbody_url: profile?.fullbody_url ?? bodyUrl ?? null,
+        main_photo_url: profile?.main_photo_url ?? null,
+      },
+      isLoading: primaryPhoto.isLoading,
+      isFailed: primaryPhoto.isFailed,
+      extra: {
+        slot: "primary",
+        showPrimaryImg,
+        hookSrc: primaryPhoto.src,
+        iosResolving: primaryIosLayer.ios.isResolving,
+        iosResolutionFailed: primaryIosLayer.ios.resolutionFailed,
+      },
+    });
+    logPhotoDebug("screen.render", {
+      screen: "EditProfile",
+      userId: user.id,
+      profileId: profile?.id ?? user.id,
+      storedRef: secondaryStoredRef,
+      displaySrc: secondaryImgSrc,
+      photoFields: {
+        portrait_url: profile?.portrait_url ?? null,
+        avatar_url: typeof profile?.avatar_url === "string" ? profile.avatar_url : null,
+        fullbody_url: profile?.fullbody_url ?? bodyUrl ?? null,
+        main_photo_url: profile?.main_photo_url ?? null,
+      },
+      isLoading: secondaryPhoto.isLoading,
+      isFailed: secondaryPhoto.isFailed,
+      extra: {
+        slot: "secondary",
+        showSecondaryImg,
+        hookSrc: secondaryPhoto.src,
+        iosResolving: secondaryIosLayer.ios.isResolving,
+        iosResolutionFailed: secondaryIosLayer.ios.resolutionFailed,
+      },
+    });
   }, [
     user?.id,
     profile,
@@ -476,12 +493,12 @@ export default function EditProfile() {
     bodyRefs,
     primaryPhoto,
     secondaryPhoto,
-    iosPrimaryPhoto.isResolving,
-    iosPrimaryPhoto.resolutionFailed,
-    iosPrimaryPhoto.usingDataUrl,
-    iosSecondaryPhoto.isResolving,
-    iosSecondaryPhoto.resolutionFailed,
-    iosSecondaryPhoto.usingDataUrl,
+    primaryIosLayer.ios.isResolving,
+    primaryIosLayer.ios.resolutionFailed,
+    primaryIosLayer.ios.usingDataUrl,
+    secondaryIosLayer.ios.isResolving,
+    secondaryIosLayer.ios.resolutionFailed,
+    secondaryIosLayer.ios.usingDataUrl,
     primaryPhoto.src,
     secondaryPhoto.src,
     primaryPhoto.urlIndex,
@@ -490,62 +507,175 @@ export default function EditProfile() {
 
   useEffect(() => {
     if (portraitFile) return;
-    if (iosPrimaryPhoto.resolutionFailed && !iosPrimaryPhoto.usingDataUrl) {
+    if (primaryIosLayer.ios.resolutionFailed && !primaryIosLayer.ios.usingDataUrl) {
       primaryPhoto.onImageError();
     }
   }, [
     portraitFile,
-    iosPrimaryPhoto.resolutionFailed,
-    iosPrimaryPhoto.usingDataUrl,
+    primaryIosLayer.ios.resolutionFailed,
+    primaryIosLayer.ios.usingDataUrl,
     primaryPhoto.onImageError,
   ]);
 
   useEffect(() => {
-    if (iosSecondaryPhoto.resolutionFailed && !iosSecondaryPhoto.usingDataUrl) {
+    if (secondaryIosLayer.ios.resolutionFailed && !secondaryIosLayer.ios.usingDataUrl) {
       secondaryPhoto.onImageError();
     }
   }, [
-    iosSecondaryPhoto.resolutionFailed,
-    iosSecondaryPhoto.usingDataUrl,
+    secondaryIosLayer.ios.resolutionFailed,
+    secondaryIosLayer.ios.usingDataUrl,
     secondaryPhoto.onImageError,
   ]);
 
-  const editPrimaryImgHandlers = chainPhotoRenderHandlers(
-    {
-      screen: "EditProfile",
-      displaySrc: primaryImgSrc,
-      resolvedUrl: primaryPhoto.src,
-      profile,
-      extra: { profileId: profile?.id ?? user?.id ?? null, slot: "primary" },
-    },
-    portraitFile
-      ? {
-          onLoad: primaryPhoto.onImageLoad,
-          onError: primaryPhoto.onImageError,
-        }
-      : buildIosAwareProfilePhotoImgHandlers({
-          iosOnError: iosPrimaryPhoto.onImageError,
-          photoOnError: primaryPhoto.onImageError,
-          photoOnLoad: primaryPhoto.onImageLoad,
-          iosResolutionFailed: iosPrimaryPhoto.resolutionFailed,
-        }),
-  );
+  const editPrimaryImgHandlers = useMemo(() => {
+    const base = chainPhotoRenderHandlers(
+      {
+        screen: "EditProfile",
+        displaySrc: primaryImgSrc,
+        resolvedUrl: primaryPhoto.src,
+        profile,
+        extra: { profileId: profile?.id ?? user?.id ?? null, slot: "primary" },
+      },
+      portraitFile
+        ? {
+            onLoad: primaryPhoto.onImageLoad,
+            onError: primaryPhoto.onImageError,
+          }
+        : buildIosAwareProfilePhotoImgHandlers({
+            iosOnError: primaryIosLayer.ios.onImageError,
+            photoOnError: primaryPhoto.onImageError,
+            photoOnLoad: primaryPhoto.onImageLoad,
+            iosResolutionFailed: primaryIosLayer.ios.resolutionFailed,
+          }),
+    );
+    return {
+      onLoad: () => {
+        logPhotoDebug("screen.img_onload", {
+          screen: "EditProfile",
+          userId: user?.id ?? null,
+          profileId: profile?.id ?? user?.id ?? null,
+          storedRef: primaryStoredRef,
+          displaySrc: primaryImgSrc,
+          photoFields: {
+            portrait_url: profile?.portrait_url ?? portraitUrl ?? null,
+            fullbody_url: profile?.fullbody_url ?? null,
+            avatar_url: typeof profile?.avatar_url === "string" ? profile.avatar_url : null,
+            main_photo_url: profile?.main_photo_url ?? null,
+          },
+          isLoading: primaryPhoto.isLoading,
+          isFailed: primaryPhoto.isFailed,
+          extra: { slot: "primary" },
+        });
+        base.onLoad();
+      },
+      onError: () => {
+        logPhotoDebug("screen.img_onerror", {
+          screen: "EditProfile",
+          userId: user?.id ?? null,
+          profileId: profile?.id ?? user?.id ?? null,
+          storedRef: primaryStoredRef,
+          displaySrc: primaryImgSrc,
+          photoFields: {
+            portrait_url: profile?.portrait_url ?? portraitUrl ?? null,
+            fullbody_url: profile?.fullbody_url ?? null,
+            avatar_url: typeof profile?.avatar_url === "string" ? profile.avatar_url : null,
+            main_photo_url: profile?.main_photo_url ?? null,
+          },
+          isLoading: primaryPhoto.isLoading,
+          isFailed: primaryPhoto.isFailed,
+          error: "img_element_onerror",
+          extra: { slot: "primary" },
+        });
+        base.onError();
+      },
+    };
+  }, [
+    primaryImgSrc,
+    primaryPhoto.src,
+    primaryPhoto.isLoading,
+    primaryPhoto.isFailed,
+    primaryPhoto.onImageError,
+    primaryPhoto.onImageLoad,
+    primaryIosLayer.ios.onImageError,
+    primaryIosLayer.ios.resolutionFailed,
+    primaryStoredRef,
+    portraitFile,
+    portraitUrl,
+    profile,
+    user?.id,
+  ]);
 
-  const editSecondaryImgHandlers = chainPhotoRenderHandlers(
-    {
-      screen: "EditProfile",
-      displaySrc: secondaryImgSrc,
-      resolvedUrl: secondaryPhoto.src,
-      profile,
-      extra: { profileId: profile?.id ?? user?.id ?? null, slot: "secondary" },
-    },
-    buildIosAwareProfilePhotoImgHandlers({
-      iosOnError: iosSecondaryPhoto.onImageError,
-      photoOnError: secondaryPhoto.onImageError,
-      photoOnLoad: secondaryPhoto.onImageLoad,
-      iosResolutionFailed: iosSecondaryPhoto.resolutionFailed,
-    }),
-  );
+  const editSecondaryImgHandlers = useMemo(() => {
+    const base = chainPhotoRenderHandlers(
+      {
+        screen: "EditProfile",
+        displaySrc: secondaryImgSrc,
+        resolvedUrl: secondaryPhoto.src,
+        profile,
+        extra: { profileId: profile?.id ?? user?.id ?? null, slot: "secondary" },
+      },
+      buildIosAwareProfilePhotoImgHandlers({
+        iosOnError: secondaryIosLayer.ios.onImageError,
+        photoOnError: secondaryPhoto.onImageError,
+        photoOnLoad: secondaryPhoto.onImageLoad,
+        iosResolutionFailed: secondaryIosLayer.ios.resolutionFailed,
+      }),
+    );
+    return {
+      onLoad: () => {
+        logPhotoDebug("screen.img_onload", {
+          screen: "EditProfile",
+          userId: user?.id ?? null,
+          profileId: profile?.id ?? user?.id ?? null,
+          storedRef: secondaryStoredRef,
+          displaySrc: secondaryImgSrc,
+          photoFields: {
+            portrait_url: profile?.portrait_url ?? null,
+            fullbody_url: profile?.fullbody_url ?? bodyUrl ?? null,
+            avatar_url: typeof profile?.avatar_url === "string" ? profile.avatar_url : null,
+            main_photo_url: profile?.main_photo_url ?? null,
+          },
+          isLoading: secondaryPhoto.isLoading,
+          isFailed: secondaryPhoto.isFailed,
+          extra: { slot: "secondary" },
+        });
+        base.onLoad();
+      },
+      onError: () => {
+        logPhotoDebug("screen.img_onerror", {
+          screen: "EditProfile",
+          userId: user?.id ?? null,
+          profileId: profile?.id ?? user?.id ?? null,
+          storedRef: secondaryStoredRef,
+          displaySrc: secondaryImgSrc,
+          photoFields: {
+            portrait_url: profile?.portrait_url ?? null,
+            fullbody_url: profile?.fullbody_url ?? bodyUrl ?? null,
+            avatar_url: typeof profile?.avatar_url === "string" ? profile.avatar_url : null,
+            main_photo_url: profile?.main_photo_url ?? null,
+          },
+          isLoading: secondaryPhoto.isLoading,
+          isFailed: secondaryPhoto.isFailed,
+          error: "img_element_onerror",
+          extra: { slot: "secondary" },
+        });
+        base.onError();
+      },
+    };
+  }, [
+    bodyUrl,
+    secondaryImgSrc,
+    secondaryPhoto.src,
+    secondaryPhoto.isLoading,
+    secondaryPhoto.isFailed,
+    secondaryPhoto.onImageError,
+    secondaryPhoto.onImageLoad,
+    secondaryIosLayer.ios.onImageError,
+    secondaryIosLayer.ios.resolutionFailed,
+    secondaryStoredRef,
+    profile,
+    user?.id,
+  ]);
 
   const syncProfileForScreen = useCallback(async () => {
     if (!user?.id) return;
@@ -863,11 +993,13 @@ export default function EditProfile() {
       await refetchProfile();
       await syncProfileForScreen();
       if (nextPortraitUrl) {
+        invalidateProfilePhotoDisplayCaches("edit_profile_portrait_upload");
         setPortraitUrl(nextPortraitUrl);
         setPortraitFile(null);
         setPortraitPreviewUrl("");
       }
       if (nextBodyUrl) {
+        invalidateProfilePhotoDisplayCaches("edit_profile_body_upload");
         setBodyUrl(nextBodyUrl);
         setBodyFile(null);
         setBodyPreviewUrl("");
@@ -1085,7 +1217,7 @@ export default function EditProfile() {
               <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: APP_TEXT_MUTED }}>{t("photos.primary")}</p>
               {showPrimaryImg ? (
                 <img
-                  key={`primary-${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}-${iosPrimaryPhoto.usingDataUrl ? "data" : "remote"}`}
+                  key={`primary-${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}-${primaryIosLayer.ios.usingDataUrl ? "data" : "remote"}`}
                   src={primaryImgSrc ?? undefined}
                   alt={t("photos.primary")}
                   onLoad={editPrimaryImgHandlers.onLoad}
@@ -1094,11 +1226,7 @@ export default function EditProfile() {
                 />
               ) : (
                 <EditProfilePhotoPlaceholder
-                  loading={
-                    primaryPhoto.isLoading &&
-                    Boolean(primaryStoredRef) &&
-                    !primaryImgSrc
-                  }
+                  loading={primaryIosLayer.showLoadingPlaceholder}
                 />
               )}
               <input
@@ -1144,7 +1272,7 @@ export default function EditProfile() {
                 />
               ) : (
                 <EditProfilePhotoPlaceholder
-                  loading={secondaryPhoto.isLoading && Boolean(secondaryStoredRef)}
+                  loading={secondaryIosLayer.showLoadingPlaceholder}
                 />
               )}
               <input

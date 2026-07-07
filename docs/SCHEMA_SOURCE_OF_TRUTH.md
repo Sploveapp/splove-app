@@ -1,7 +1,7 @@
 # Schéma Supabase — source de vérité
 
 > Généré par `npm run schema:check` — ne pas éditer les sections « Inventaire » à la main.
-> Dernière vérification : 2026-07-05
+> Dernière vérification : 2026-07-07
 
 ## Rôle
 
@@ -131,6 +131,7 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 - `114_profiles_rls_conversation_windows_security.sql`
 - `117_push_environment_security.sql`
 - `118_schema_drift_missing_columns.sql`
+- `119_splove_heart_intent.sql`
 
 ## Tables officielles (47)
 
@@ -155,7 +156,7 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 | features | 8 | category, created_at, description, id, is_active, key, label, updated_at |
 | in_app_notification_jobs | 7 | anchor_at, created_at, id, job_type, processed_at, run_at, user_id |
 | in_app_notifications | 10 | created_at, dedupe_key, exempt_daily_cap, id, kind, message, payload, read… |
-| likes | 6 | created_at, from_user, id, liked_id, liker_id, to_user |
+| likes | 7 | created_at, from_user, heart_intent, id, liked_id, liker_id, to_user |
 | matches | 7 | created_at, expires_at, id, initiator_user, status, user_a, user_b |
 | meetup_proposals | 13 | created_at, expires_at, id, location, match_id, message, proposer_id, receiver_id… |
 | messages | 10 | activity_proposal_id, body, conversation_id, created_at, id, message_type, metadata, payload… |
@@ -265,7 +266,7 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 
 ### likes
 
-`created_at`, `from_user`, `id`, `liked_id`, `liker_id`, `to_user`
+`created_at`, `from_user`, `heart_intent`, `id`, `liked_id`, `liker_id`, `to_user`
 
 ### matches
 

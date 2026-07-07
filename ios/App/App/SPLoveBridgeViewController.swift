@@ -24,6 +24,12 @@ final class SPLoveBridgeViewController: CAPBridgeViewController {
     private var registeredShellHandler = false
     private var oauthDeepLinkObserver: NSObjectProtocol?
 
+    override func capacitorDidLoad() {
+        super.capacitorDidLoad()
+        bridge?.registerPluginInstance(SploveIosGoogleOAuthPlugin())
+        NSLog("[OAUTH_IOS_NATIVE] SploveIosGoogleOAuth registered (registerPluginInstance)")
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         SPLoveBridgeViewController.shared = self
