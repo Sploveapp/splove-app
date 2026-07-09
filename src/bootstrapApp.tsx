@@ -16,6 +16,7 @@ import { probeSupabaseAuthHealth } from "./lib/supabaseDiagnostics";
 import {
   isWebOAuthSplashRequested,
   restoreWebOAuthSplashFromStorage,
+  shouldRestoreWebOAuthSplashFromStorage,
 } from "./lib/webOAuthSplash";
 import { showGoogleSignInOverlay } from "./lib/googleSignInOverlay";
 
@@ -24,7 +25,9 @@ console.log("[main bootstrap]", "profile-tab-fix-v2");
 initTheme();
 
 initCapacitorAuthBridge();
-restoreWebOAuthSplashFromStorage();
+if (shouldRestoreWebOAuthSplashFromStorage()) {
+  restoreWebOAuthSplashFromStorage();
+}
 if (isWebOAuthSplashRequested()) {
   showGoogleSignInOverlay();
 }

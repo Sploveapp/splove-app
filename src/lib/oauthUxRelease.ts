@@ -14,9 +14,9 @@ import { isNativeCapacitorApp } from "./authRedirect";
 import { scrubOAuthTokensFromNativeWindow } from "./scrubOAuthUrlFromWindow";
 import { notifyOAuthUxOverlayChanged } from "./oauthUxNotify";
 import {
-  dismissWebOAuthSplash,
   isWebOAuthSplashActive,
   isWebOAuthSplashRequested,
+  releaseWebOAuthSplashAfterProfileReady,
 } from "./webOAuthSplash";
 
 export type PostAuthUiRoute = "/move" | "/onboarding";
@@ -42,6 +42,7 @@ function detectRouteFromHash(): PostAuthUiRoute | null {
 
 function ensurePostAuthHashRoute(route: PostAuthUiRoute): void {
   if (typeof window === "undefined") return;
+
   const hashTarget = `#${route}`;
   scrubOAuthTokensFromNativeWindow();
 
@@ -52,8 +53,19 @@ function ensurePostAuthHashRoute(route: PostAuthUiRoute): void {
     } catch {
       /* WKWebView */
     }
+    if (window.location.hash !== hashTarget) {
+      window.location.hash = hashTarget;
+    }
+    return;
   }
 
+  // Web : remplace l’URL entière pour quitter /auth/callback (sinon masque OAuth bloqué).
+  const base = `${window.location.origin}${import.meta.env.BASE_URL}`;
+  const targetUrl = `${base}${hashTarget}`;
+  if (typeof window.location.replace === "function") {
+    window.location.replace(targetUrl);
+    return;
+  }
   if (window.location.hash !== hashTarget) {
     window.location.hash = hashTarget;
   }
@@ -75,7 +87,15 @@ export function releasePostAuthUi(trigger: string, route?: PostAuthUiRoute): voi
   clearOauthProcessingLock();
   clearAllOAuthSessionLocks();
   forceClearPostOAuthSplash();
-  dismissWebOAuthSplash(trigger);
+  if (!isNativeCapacitorApp()) {
+    const webReason =
+      trigger === "auth_redirect_move" || trigger === "auth_profile_ready"
+        ? "profile_ready_exit"
+        : trigger === "session_user_verified"
+          ? "session_ready"
+          : "profile_ready_exit";
+    releaseWebOAuthSplashAfterProfileReady(webReason);
+  }
   hideGoogleSignInOverlay(trigger);
   void hideSploveIosOAuthMask();
 

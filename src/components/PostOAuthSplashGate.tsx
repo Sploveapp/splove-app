@@ -24,6 +24,8 @@ import {
 import {
   isWebOAuthSplashActive,
   isWebOAuthSplashRequested,
+  logWebOAuthDebug,
+  releaseWebOAuthSplashAfterProfileReady,
   subscribeWebOAuthSplash,
 } from "../lib/webOAuthSplash";
 import { OAuthLoadingScreenOverlay } from "./SploveOAuthLoadingScreen";
@@ -66,10 +68,16 @@ function hasResidualOAuthLoadingLocks(): boolean {
   );
 }
 
+function isOnMoveRoute(pathname: string, hash: string): boolean {
+  return pathname === "/move" || hash.startsWith("#/move");
+}
+
 /** Flash post-OAuth Google uniquement — ne masque pas le splash natif au cold start. */
 export function PostOAuthSplashGate({ children }: Props) {
   const auth = useAuth();
   const location = useLocation();
+  const hash = location.hash || "";
+  const pathname = location.pathname || "/";
   const sessionVerified =
     auth.isAuthInitialized && Boolean(auth.session?.user?.id);
   const sessionLatch = useSyncExternalStore(
@@ -82,7 +90,11 @@ export function PostOAuthSplashGate({ children }: Props) {
     getPostAuthSplashRawVisible,
     () => false,
   );
-  const show = shouldShowOAuthLoadingScreen(rawShow, sessionVerified || sessionLatch);
+  const show = shouldShowOAuthLoadingScreen(
+    rawShow,
+    sessionVerified || sessionLatch,
+    { pathname, hash },
+  );
 
   useEffect(() => {
     logOAuthLoadingScreenGate(
@@ -97,7 +109,6 @@ export function PostOAuthSplashGate({ children }: Props) {
   }, [show, sessionVerified, sessionLatch, rawShow]);
 
   useEffect(() => {
-    const pathname = location.pathname || "/";
     const ctx = {
       hasSession: Boolean(auth.session?.user?.id),
       profileBound: auth.profile?.id === auth.session?.user?.id,
@@ -109,34 +120,50 @@ export function PostOAuthSplashGate({ children }: Props) {
     if (!ctx.hasSession && !sessionLatch) return;
     if (!ctx.isAuthInitialized && !sessionLatch) return;
 
-    if (pathname === "/move" && (show || rawShow || hasResidualOAuthLoadingLocks() || sessionLatch)) {
-      if (!isOAuthVisualMaskRequired()) {
-        forceReleaseOAuthLoadingOnMove("post_oauth_splash_move");
+    const onMove = isOnMoveRoute(pathname, hash);
+    const sessionReady = sessionVerified || sessionLatch;
+
+    if (onMove && sessionReady && ctx.profileBound) {
+      if (show || rawShow || hasResidualOAuthLoadingLocks()) {
+        const blockers = collectPostAuthBlockReasons();
+        if (blockers.length > 0) {
+          logWebOAuthDebug("post_auth_gate_blocked_on_move", {
+            show,
+            rawShow,
+            blockers,
+          });
+          releaseWebOAuthSplashAfterProfileReady("profile_ready_exit");
+        }
+        if (!isOAuthVisualMaskRequired({ pathname, hash })) {
+          forceReleaseOAuthLoadingOnMove("post_oauth_splash_move");
+        }
       }
       return;
     }
 
-    if (hasResidualOAuthLoadingLocks() && !isOAuthVisualMaskRequired()) {
+    if (hasResidualOAuthLoadingLocks() && !isOAuthVisualMaskRequired({ pathname, hash })) {
       releasePostAuthUi(
         "session_user_verified",
-        pathname === "/move" ? "/move" : undefined,
+        onMove ? "/move" : undefined,
       );
       return;
     }
 
     if (!ctx.profileBound) return;
 
-    if (pathname === "/move" && (show || shouldForceMoveRelease(ctx))) {
+    if (onMove && (show || shouldForceMoveRelease(ctx))) {
       releasePostAuthUi("auth_redirect_move", "/move");
     }
   }, [
     auth.session?.user?.id,
     auth.profile?.id,
     auth.isAuthInitialized,
-    location.pathname,
+    pathname,
+    hash,
     show,
     rawShow,
     sessionLatch,
+    sessionVerified,
   ]);
 
   return (

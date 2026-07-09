@@ -11,6 +11,17 @@ import {
   isWebOAuthSplashRequested,
 } from "./webOAuthSplash";
 
+function isOnMoveRouteForOAuthGate(pathname?: string, hash?: string): boolean {
+  const path = pathname ?? (typeof window !== "undefined" ? window.location.pathname : "/");
+  const h = hash ?? (typeof window !== "undefined" ? window.location.hash : "");
+  return path === "/move" || h.startsWith("#/move");
+}
+
+export type OAuthLoadingScreenContext = {
+  pathname?: string;
+  hash?: string;
+};
+
 /** Verrous / overlays qui peuvent afficher « Connexion sécurisée… ». */
 export function collectOAuthLoadingScreenBlockers(): string[] {
   const reasons: string[] = [];
@@ -30,11 +41,19 @@ export function collectOAuthLoadingScreenBlockers(): string[] {
 export function shouldShowOAuthLoadingScreen(
   rawVisible: boolean,
   authSessionVerified: boolean,
+  ctx?: OAuthLoadingScreenContext,
 ): boolean {
-  if (isOAuthVisualMaskRequired()) return true;
+  const onMove = isOnMoveRouteForOAuthGate(ctx?.pathname, ctx?.hash);
 
-  // Web : cycle de vie explicite — ne pas masquer avant dismissWebOAuthSplash.
-  if (isWebOAuthSplashRequested() || isWebOAuthSplashActive()) return true;
+  // Web Render : sur /move avec session confirmée, ne jamais bloquer l’UI.
+  if (authSessionVerified && onMove) return false;
+
+  if (isOAuthVisualMaskRequired(ctx)) return true;
+
+  if (isWebOAuthSplashRequested() || isWebOAuthSplashActive()) {
+    if (authSessionVerified && onMove) return false;
+    return true;
+  }
 
   if (!rawVisible) return false;
   if (isOAuthSessionVerifiedLatch()) return false;

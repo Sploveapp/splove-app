@@ -26,8 +26,8 @@ import { setOAuthSessionWithTimeout } from "../lib/supabaseSetSession";
 import { logOAuthRedirect, markOAuthSessionAt } from "../lib/postLoginPerf";
 import { dismissPostOAuthSplash } from "../lib/postOAuthSplash";
 import {
-  dismissWebOAuthSplash,
   logWebOAuthDebug,
+  releaseWebOAuthSplashAfterProfileReady,
   restoreWebOAuthSplashFromStorage,
 } from "../lib/webOAuthSplash";
 import { showGoogleSignInOverlay, hideGoogleSignInOverlay } from "../lib/googleSignInOverlay";
@@ -217,8 +217,8 @@ export default function AuthCallback() {
     releaseGoogleOAuthFlowLock();
     dismissPostOAuthSplash();
     logWebOAuthDebug("session_ready", { userId: redactUserId(sessionUserId) });
+    releaseWebOAuthSplashAfterProfileReady("session_ready");
     hideGoogleSignInOverlay("session_ready");
-    dismissWebOAuthSplash("session_ready");
   };
 
   const [debug, setDebug] = useState<CallbackDebug>(() => emptyDebug());
@@ -266,7 +266,7 @@ export default function AuthCallback() {
     releaseGoogleOAuthFlowLock();
     releaseOauthLockAndStorage();
     dismissPostOAuthSplash();
-    dismissWebOAuthSplash("oauth_error");
+    releaseWebOAuthSplashAfterProfileReady("profile_ready_exit");
     hideGoogleSignInOverlay("oauth_error");
     void closeCapacitorOAuthBrowser();
     stashAuthOAuthUserMessage(GOOGLE_OAUTH_USER_ERROR_MSG);
