@@ -1,6 +1,5 @@
 import { supabase } from "./supabase";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isNativeCapacitorApp } from "./authRedirect";
 import {
   buildProfilePhotoPublicUrl,
   normalizeProfilePhotoStoredRef,
@@ -8,17 +7,17 @@ import {
 import {
   profilePhotoObjectPathFromStoredValue,
   shouldPassThroughProfilePhotoDisplayUrl,
+  isProfilePhotosPublicStorageUrl,
 } from "./profilePhotoSignedUrl";
 import { photoUrlPrefix } from "./profilePhotoPipelineLog";
 import { PhotoFlowLog } from "./photoFlowLog";
 
-/** Sur iOS/Android, les URL publiques Storage échouent souvent en `<img>` WKWebView — on préfère signées. */
+/** Bucket `profile-photos` privé — ne jamais utiliser getPublicUrl comme src finale (web + natif). */
 export function skipSyncPublicProfilePhotoUrl(storedRef: string | null | undefined): boolean {
-  if (!isNativeCapacitorApp()) return false;
   const normalized = normalizeProfilePhotoStoredRef(storedRef, supabase);
   if (!normalized) return false;
   if (shouldPassThroughProfilePhotoDisplayUrl(normalized)) {
-    return !normalized.includes("/profile-photos/");
+    return false;
   }
   return profilePhotoObjectPathFromStoredValue(normalized) != null;
 }
@@ -138,7 +137,7 @@ export function buildSyncProfilePhotoDisplayCandidates(
   const seen = new Set<string>();
   const push = (url: string | null | undefined) => {
     const t = typeof url === "string" ? url.trim() : "";
-    if (!t || seen.has(t)) return;
+    if (!t || seen.has(t) || isProfilePhotosPublicStorageUrl(t)) return;
     seen.add(t);
     out.push(t);
   };
@@ -162,14 +161,14 @@ export function buildSyncProfilePhotoDisplaySrc(
   return buildSyncProfilePhotoDisplayCandidates(storedRef)[0] ?? null;
 }
 
-/** URL finale UI : résolution hook async, sinon fallback synchrone sur la référence BDD. */
+/** URL finale UI : résolution hook async uniquement — jamais d’URL publique profile-photos. */
 export function resolveProfilePhotoUiSrc(
-  storedRef: string | null | undefined,
+  _storedRef: string | null | undefined,
   resolvedSrc: string | null | undefined,
 ): string | null {
   const fromHook = typeof resolvedSrc === "string" ? resolvedSrc.trim() : "";
-  if (fromHook) return fromHook;
-  return buildSyncProfilePhotoDisplaySrc(storedRef);
+  if (fromHook && !isProfilePhotosPublicStorageUrl(fromHook)) return fromHook;
+  return null;
 }
 
 /** Log temporaire décision d’affichage (Profil / EditProfile / Discover). */

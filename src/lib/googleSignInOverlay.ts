@@ -6,6 +6,12 @@ import { notifyOAuthUxOverlayChanged } from "./oauthUxNotify";
 import { logOAuthMaskHide, logOAuthMaskShow } from "./oauthVisualMask";
 import { isOauthProcessingLocked } from "./oauthCallbackLock";
 import { isOAuthBrowserOpen } from "./oauthBrowserOpenState";
+import {
+  dismissWebOAuthSplash,
+  isWebOAuthSplashActive,
+  isWebOAuthSplashRequested,
+  logWebOAuthDebug,
+} from "./webOAuthSplash";
 
 const OVERLAY_ROOT_ID = "splove-google-oauth-overlay";
 const OVERLAY_Z_INDEX = 100_000;
@@ -19,11 +25,16 @@ function windowHasTechnicalOAuthUrlForOverlay(): boolean {
   return /supabase\.co|\/auth\/v1(?:\/|$|\?)|(?:^|[/?#])oauth|callback/i.test(probe);
 }
 
+function isWebOAuthOverlayFlow(): boolean {
+  return isWebOAuthSplashRequested() || isWebOAuthSplashActive();
+}
+
 function shouldDeferGoogleSignInOverlayHide(): boolean {
   return (
     isOauthProcessingLocked() ||
     isOAuthBrowserOpen() ||
-    windowHasTechnicalOAuthUrlForOverlay()
+    windowHasTechnicalOAuthUrlForOverlay() ||
+    isWebOAuthOverlayFlow()
   );
 }
 
@@ -174,11 +185,15 @@ export function awaitGoogleSignInOverlayPaint(): Promise<void> {
   });
 }
 
-/** Overlay SPLove — clic « Continuer avec Google » (Capacitor). */
+/** Overlay SPLove — clic « Continuer avec Google » (Capacitor ou web). */
 export function showGoogleSignInOverlay(): void {
-  if (!isNativeCapacitorApp()) return;
+  const native = isNativeCapacitorApp();
+  if (!native && !isWebOAuthOverlayFlow()) return;
   mountImperativeOverlay();
   logOAuthMaskShow("google_sign_in_overlay");
+  if (!native) {
+    logWebOAuthDebug("start", { overlay: "imperative_dom" });
+  }
   console.log("OAUTH_LOADING_SCREEN_SHOW", {
     gate: "googleSignInOverlay",
     reasons: ["imperative_dom_overlay"],
@@ -192,20 +207,26 @@ export function showGoogleSignInOverlay(): void {
 
 /** Retire l’overlay (succès routé, erreur, annulation). */
 export function hideGoogleSignInOverlay(reason?: string): void {
-  if (!isNativeCapacitorApp()) return;
+  const native = isNativeCapacitorApp();
+  if (!native && !isWebOAuthOverlayFlow() && !isGoogleSignInOverlayMounted()) return;
   if (shouldDeferGoogleSignInOverlayHide()) {
     logOAuthMaskShow("hide_deferred_google_sign_in_overlay", {
       reason,
       oauthProcessingLocked: isOauthProcessingLocked(),
       oauthBrowserOpen: isOAuthBrowserOpen(),
       technicalOAuthUrl: windowHasTechnicalOAuthUrlForOverlay(),
+      webOAuthSplash: isWebOAuthOverlayFlow(),
     });
     notifyOAuthUxOverlayChanged();
     return;
   }
   const wasMounted = isGoogleSignInOverlayMounted();
   unmountImperativeOverlay();
-  forceClearPostOAuthSplash();
+  if (native) {
+    forceClearPostOAuthSplash();
+  } else {
+    dismissWebOAuthSplash(reason ?? "google_sign_in_overlay");
+  }
   notifyOAuthUxOverlayChanged();
   if (wasMounted) {
     logOAuthMaskHide(reason ?? "google_sign_in_overlay");

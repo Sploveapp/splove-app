@@ -7,6 +7,8 @@ import { GOOGLE_OAUTH_USER_ERROR_MSG } from "../lib/googleOAuthFlow";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { showGoogleSignInOverlay, hideGoogleSignInOverlay, awaitGoogleSignInOverlayPaint } from "../lib/googleSignInOverlay";
 import { isIosGoogleOAuthBrowserFlow, showIosGoogleOAuthConnectingOverlay } from "../lib/iosGoogleOAuthDisplay";
+import { isNativeCapacitorApp } from "../lib/authRedirect";
+import { beginWebOAuthSplash } from "../lib/webOAuthSplash";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
 import { useAuth } from "../contexts/AuthContext";
 import { APP_BG, APP_TEXT_MUTED, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
@@ -316,6 +318,10 @@ export default function Auth() {
     setOauthLoading("google");
     if (isIosGoogleOAuthBrowserFlow()) {
       await showIosGoogleOAuthConnectingOverlay();
+    } else if (!isNativeCapacitorApp()) {
+      beginWebOAuthSplash();
+      showGoogleSignInOverlay();
+      await awaitGoogleSignInOverlayPaint();
     } else {
       showGoogleSignInOverlay();
       await awaitGoogleSignInOverlayPaint();

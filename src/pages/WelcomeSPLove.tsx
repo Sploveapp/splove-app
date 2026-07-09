@@ -4,6 +4,12 @@ import { Bike, CircleDot, Footprints, Mountain, Waves } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { beginPostOAuthSplash } from "../lib/postOAuthSplash";
 import {
+  showGoogleSignInOverlay,
+  awaitGoogleSignInOverlayPaint,
+} from "../lib/googleSignInOverlay";
+import { isNativeCapacitorApp } from "../lib/authRedirect";
+import { beginWebOAuthSplash } from "../lib/webOAuthSplash";
+import {
   isIosGoogleOAuthBrowserFlow,
   showIosGoogleOAuthConnectingOverlay,
 } from "../lib/iosGoogleOAuthDisplay";
@@ -190,6 +196,10 @@ export default function WelcomeSPLove() {
     setOauthLoading("google");
     if (isIosGoogleOAuthBrowserFlow()) {
       await showIosGoogleOAuthConnectingOverlay();
+    } else if (!isNativeCapacitorApp()) {
+      beginWebOAuthSplash();
+      showGoogleSignInOverlay();
+      await awaitGoogleSignInOverlayPaint();
     } else if (!isIosGoogleNativeEnabled()) {
       beginPostOAuthSplash();
     }

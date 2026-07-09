@@ -13,12 +13,21 @@ import { initTheme } from "./lib/theme";
 import { initCapacitorAuthBridge } from "./lib/capacitorOAuth";
 import { isNativeCapacitorApp } from "./lib/authRedirect";
 import { probeSupabaseAuthHealth } from "./lib/supabaseDiagnostics";
+import {
+  isWebOAuthSplashRequested,
+  restoreWebOAuthSplashFromStorage,
+} from "./lib/webOAuthSplash";
+import { showGoogleSignInOverlay } from "./lib/googleSignInOverlay";
 
 console.log("[main bootstrap]", "profile-tab-fix-v2");
 
 initTheme();
 
 initCapacitorAuthBridge();
+restoreWebOAuthSplashFromStorage();
+if (isWebOAuthSplashRequested()) {
+  showGoogleSignInOverlay();
+}
 if (isOauthProcessingLocked()) {
   console.log("[main bootstrap] oauth processing lock active");
 }

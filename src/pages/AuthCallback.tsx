@@ -25,6 +25,12 @@ import {
 import { setOAuthSessionWithTimeout } from "../lib/supabaseSetSession";
 import { logOAuthRedirect, markOAuthSessionAt } from "../lib/postLoginPerf";
 import { dismissPostOAuthSplash } from "../lib/postOAuthSplash";
+import {
+  dismissWebOAuthSplash,
+  logWebOAuthDebug,
+  restoreWebOAuthSplashFromStorage,
+} from "../lib/webOAuthSplash";
+import { showGoogleSignInOverlay, hideGoogleSignInOverlay } from "../lib/googleSignInOverlay";
 import { resolvePostOAuthPath } from "../lib/profileSelect";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { hideCapacitorSplashWhenReady } from "../lib/capacitorNativeSplash";
@@ -139,6 +145,8 @@ export default function AuthCallback() {
   }
 
   setOauthProcessingLock();
+  restoreWebOAuthSplashFromStorage();
+  showGoogleSignInOverlay();
   const oauthLockLoggedRef = useRef(false);
   if (!oauthLockLoggedRef.current) {
     oauthLockLoggedRef.current = true;
@@ -185,6 +193,7 @@ export default function AuthCallback() {
       return;
     }
     await ensureProfileRowForAuthUserId(sessionUserId);
+    console.log("AUTH_PROFILE_READY", { userId: redactUserId(sessionUserId) });
     const path = await resolvePostOAuthPath(supabase, sessionUserId);
     const navTarget = path === "/move" ? "/move" : path === "/onboarding" ? "/onboarding" : "/";
     logOAuthRedirectDestination("auth_callback_finalize", navTarget, {
@@ -207,6 +216,9 @@ export default function AuthCallback() {
     clearAllOAuthSessionLocks();
     releaseGoogleOAuthFlowLock();
     dismissPostOAuthSplash();
+    logWebOAuthDebug("session_ready", { userId: redactUserId(sessionUserId) });
+    hideGoogleSignInOverlay("session_ready");
+    dismissWebOAuthSplash("session_ready");
   };
 
   const [debug, setDebug] = useState<CallbackDebug>(() => emptyDebug());
@@ -218,6 +230,10 @@ export default function AuthCallback() {
 
   useEffect(() => {
     hideCapacitorSplashWhenReady();
+    logWebOAuthDebug("callback", {
+      search: mountLocationRef.current.search ? "(present)" : "(empty)",
+      hash: mountLocationRef.current.hash ? "(present)" : "(empty)",
+    });
   }, []);
 
   const finish = () => {
@@ -250,6 +266,8 @@ export default function AuthCallback() {
     releaseGoogleOAuthFlowLock();
     releaseOauthLockAndStorage();
     dismissPostOAuthSplash();
+    dismissWebOAuthSplash("oauth_error");
+    hideGoogleSignInOverlay("oauth_error");
     void closeCapacitorOAuthBrowser();
     stashAuthOAuthUserMessage(GOOGLE_OAUTH_USER_ERROR_MSG);
     replaceWithHashRoute("/auth", { force: true });

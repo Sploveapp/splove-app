@@ -4,6 +4,9 @@ import { normalizeProfilePhotoStoredRef } from "../lib/profilePhotoUpload";
 import {
   getProfilePhotoSignedUrl,
   shouldPassThroughProfilePhotoDisplayUrl,
+  filterProfilePhotoDisplayUrls,
+  profilePhotoObjectPathFromStoredValue,
+  isProfilePhotosPublicStorageUrl,
 } from "../lib/profilePhotoSignedUrl";
 import { photoUrlPrefix } from "../lib/profilePhotoPipelineLog";
 import { PhotoFlowLog } from "../lib/photoFlowLog";
@@ -239,37 +242,36 @@ export function secondaryProfilePhotoRefs(profile: ProfilePhotoFields | null | u
 
 function syncFallbackForRef(ref: string | null | undefined): string | null {
   if (!ref || skipSyncPublicProfilePhotoUrl(ref)) return null;
-  return buildSyncProfilePhotoDisplaySrc(ref);
+  const fallback = buildSyncProfilePhotoDisplaySrc(ref);
+  if (!fallback || isProfilePhotosPublicStorageUrl(fallback)) return null;
+  return fallback;
 }
 
-/** Résolution ref BDD → URLs `<img>` (tests de non-régression iOS signed URL). */
+/** Résolution ref BDD → URLs `<img>` (signed URL en premier — bucket privé). */
 export async function resolveProfilePhotoStoredRefDisplayUrls(storedRef: string): Promise<string[]> {
-  const sync = buildSyncProfilePhotoDisplayCandidates(storedRef);
   const normalized = normalizeProfilePhotoStoredRef(storedRef, supabase);
+  if (!normalized) return [];
 
-  if (!normalized) {
-    return sync;
-  }
-
-  // URL déjà affichable (avatar externe, blob, signed URL en BDD).
   if (shouldPassThroughProfilePhotoDisplayUrl(normalized)) {
-    return sync.length > 0 ? sync : [normalized];
+    return filterProfilePhotoDisplayUrls([normalized]);
   }
 
-  const out = [...sync];
-  const seen = new Set(out);
+  const out: string[] = [];
+  const seen = new Set<string>();
   const push = (url: string | null | undefined) => {
     const t = typeof url === "string" ? url.trim() : "";
-    if (!t || seen.has(t)) return;
+    if (!t || seen.has(t) || isProfilePhotosPublicStorageUrl(t)) return;
     seen.add(t);
     out.push(t);
   };
 
-  // iOS : sync vide (skipSyncPublic) — signed URL depuis la ref stockée (URL publique ou path).
-  push(await getProfilePhotoSignedUrl(supabase, normalized));
-  push(await getProfilePhotoSignedUrl(supabase, normalized, 3600));
+  push(await getProfilePhotoSignedUrl(supabase, storedRef));
+  push(await getProfilePhotoSignedUrl(supabase, storedRef, 3600));
+  if (normalized !== storedRef.trim()) {
+    push(await getProfilePhotoSignedUrl(supabase, normalized));
+  }
 
-  return out;
+  return filterProfilePhotoDisplayUrls(out);
 }
 
 /**
@@ -316,6 +318,22 @@ export function useProfilePhotoDisplaySrc(
       candidateCount: refsRef.current.length,
     });
     const candidates = await resolveProfilePhotoStoredRefDisplayUrls(ref);
+    const objectPath =
+      profilePhotoObjectPathFromStoredValue(ref) ??
+      profilePhotoObjectPathFromStoredValue(normalizeProfilePhotoStoredRef(ref, supabase));
+    logPhotoDebug("signed_url_ready", {
+      screen: ctx?.source ?? "profile.screen",
+      userId: ctx?.userId,
+      profileId: ctx?.profileId,
+      storedRef: ref,
+      isLoading: false,
+      isFailed: false,
+      extra: {
+        objectPath,
+        signedUrlPresent: candidates.length > 0,
+        firstCandidate: candidates[0] ?? null,
+      },
+    });
     if (candidates.length === 0) {
       PhotoFlowLog.noValidPhoto({
         context: ctx?.source ?? "profile.screen",
@@ -340,6 +358,16 @@ export function useProfilePhotoDisplaySrc(
       displayUrl: candidates[0] ?? null,
       candidateIndex: 0,
       candidateCount: candidates.length,
+    });
+    logPhotoDebug("display_url_ready", {
+      screen: ctx?.source ?? "profile.screen",
+      userId: ctx?.userId,
+      profileId: ctx?.profileId,
+      storedRef: ref,
+      displaySrc: candidates[0] ?? null,
+      isLoading: false,
+      isFailed: false,
+      extra: { candidateCount: candidates.length, signedUrl: true },
     });
     return true;
   }, []);
@@ -375,7 +403,7 @@ export function useProfilePhotoDisplaySrc(
     const firstStored = refs[0];
     const syncImmediate =
       firstStored && !skipSyncPublicProfilePhotoUrl(firstStored)
-        ? buildSyncProfilePhotoDisplayCandidates(firstStored)
+        ? filterProfilePhotoDisplayUrls(buildSyncProfilePhotoDisplayCandidates(firstStored))
         : [];
     if (syncImmediate.length > 0) {
       setRefIndex(0);
@@ -474,7 +502,12 @@ export function useProfilePhotoDisplaySrc(
   const syncFallback = syncFallbackForRef(activeRef);
   const candidateSrc =
     urlCandidates.length > 0 ? (urlCandidates[urlIndex] ?? null) : null;
-  const src = candidateSrc ?? syncFallback;
+  const src =
+    candidateSrc && !isProfilePhotosPublicStorageUrl(candidateSrc)
+      ? candidateSrc
+      : syncFallback && !isProfilePhotosPublicStorageUrl(syncFallback)
+        ? syncFallback
+        : null;
 
   const activeField = fieldForRef(logContext, activeRef);
 

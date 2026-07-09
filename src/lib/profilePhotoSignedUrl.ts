@@ -8,6 +8,18 @@ export const DEFAULT_PROFILE_PHOTO_SIGNED_TTL_SEC = 3600;
 
 const BUCKET_SLASH = `${PROFILE_PHOTOS_BUCKET}/`;
 
+/** URL publique Supabase `profile-photos` — ne jamais utiliser comme `img src`. */
+export function isProfilePhotosPublicStorageUrl(url: string | null | undefined): boolean {
+  const t = typeof url === "string" ? url.trim() : "";
+  if (!t) return false;
+  return t.includes("/profile-photos/") && t.includes("/object/public/");
+}
+
+/** Filtre les URL publiques profile-photos des candidates `<img>`. */
+export function filterProfilePhotoDisplayUrls(urls: string[]): string[] {
+  return urls.filter((u) => !isProfilePhotosPublicStorageUrl(u));
+}
+
 /**
  * Resolves a stored profile photo reference (public-style URL, object path, or `bucket/path`) to
  * the Storage object key used with `createSignedUrl`.
@@ -20,19 +32,28 @@ export function profilePhotoObjectPathFromStoredValue(
   const s = value.trim();
   if (!s) return null;
   if (s.startsWith("blob:") || s.startsWith("data:")) return null;
+
+  if (s.includes(`/${PROFILE_PHOTOS_BUCKET}/`) || s.startsWith(BUCKET_SLASH)) {
+    const fromBucket = profilePhotoStoragePathFromPublicUrl(s);
+    if (fromBucket) return fromBucket;
+  }
+
+  if (s.startsWith(BUCKET_SLASH)) {
+    return s.slice(BUCKET_SLASH.length) || null;
+  }
+
   if (s.startsWith("http://") || s.startsWith("https://")) {
-    if (s.includes("/object/sign/") && s.includes(BUCKET_SLASH)) {
-      return null;
-    }
     if (!s.includes(`/${PROFILE_PHOTOS_BUCKET}/`)) {
       return null;
     }
     return profilePhotoStoragePathFromPublicUrl(s);
   }
-  if (s.startsWith(BUCKET_SLASH)) {
-    return s.slice(BUCKET_SLASH.length) || null;
+
+  if (!s.startsWith("/") && !s.includes("://")) {
+    return s;
   }
-  return s;
+
+  return null;
 }
 
 /**
@@ -45,7 +66,7 @@ export function shouldPassThroughProfilePhotoDisplayUrl(s: string | null | undef
   if (!t) return false;
   if (t.startsWith("blob:") || t.startsWith("data:")) return true;
   if (t.startsWith("http://") || t.startsWith("https://")) {
-    if (t.includes("/object/sign/") && t.includes(BUCKET_SLASH)) return true;
+    // profile-photos (URL publique ou signée expirée) → toujours resigner via createSignedUrl
     if (t.includes(`/${PROFILE_PHOTOS_BUCKET}/`)) return false;
     return true;
   }

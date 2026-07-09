@@ -1,14 +1,12 @@
 import { CapacitorHttp } from "@capacitor/core";
 import { supabase } from "./supabase";
 import { buildIosCapacitorImageFetchUrlCandidates } from "./profilePhotoIosDisplayUrls";
-import {
-  buildProfilePhotoPublicUrl,
-  normalizeProfilePhotoStoredRef,
-} from "./profilePhotoUpload";
+import { normalizeProfilePhotoStoredRef } from "./profilePhotoUpload";
 import {
   getProfilePhotoSignedUrl,
   profilePhotoObjectPathFromStoredValue,
   shouldPassThroughProfilePhotoDisplayUrl,
+  isProfilePhotosPublicStorageUrl,
 } from "./profilePhotoSignedUrl";
 import { shouldUseIosCapacitorImageFallback } from "./capacitorImageDataUrl";
 import { photoUrlPrefix } from "./profilePhotoPipelineLog";
@@ -233,21 +231,17 @@ async function fetchIosMovePhotoBlobUrl(url: string): Promise<string | null> {
 }
 
 function buildMoveFetchCandidates(storedRef: string, signedUrl: string | null): string[] {
-  const normalized = normalizeProfilePhotoStoredRef(storedRef, supabase);
-  const objectPath = profilePhotoObjectPathFromStoredValue(normalized);
-  const publicUrl = objectPath ? buildProfilePhotoPublicUrl(supabase, objectPath) : null;
   const fromIosHelper = buildIosCapacitorImageFetchUrlCandidates(storedRef, signedUrl);
 
   const seen = new Set<string>();
   const out: string[] = [];
   const push = (value: string | null | undefined) => {
     const t = typeof value === "string" ? value.trim() : "";
-    if (!t || !t.startsWith("http") || seen.has(t)) return;
+    if (!t || !t.startsWith("http") || seen.has(t) || isProfilePhotosPublicStorageUrl(t)) return;
     seen.add(t);
     out.push(t);
   };
 
-  push(publicUrl);
   push(signedUrl);
   for (const candidate of fromIosHelper) push(candidate);
   return out;
@@ -271,21 +265,25 @@ export async function ensureMoveProfilePhotoDisplay(
   const inflight = inflightDisplay.get(key);
   if (inflight) return inflight;
 
-  const promise = withFetchSlot(async () => {
+    const promise = withFetchSlot(async () => {
+    const signed = await getMoveProfilePhotoSignedUrlCached(trimmed);
+    const objectPath = profilePhotoObjectPathFromStoredValue(trimmed);
+    console.log("[PHOTO_DEBUG] signed_url_ready", {
+      screen: _options?.logSource ?? "discover",
+      profileId: _options?.profileId ?? null,
+      storedRef: photoUrlPrefix(trimmed),
+      objectPath,
+      signedUrlPresent: Boolean(signed),
+    });
+
     if (!isIosNative()) {
-      const publicCandidates = buildMoveFetchCandidates(trimmed, null);
-      const directPublic = publicCandidates[0] ?? null;
-      if (directPublic) {
-        rememberDisplay(trimmed, directPublic, "https");
-        return directPublic;
+      if (signed) {
+        rememberDisplay(trimmed, signed, "https");
+        return signed;
       }
-      const signed = await getMoveProfilePhotoSignedUrlCached(trimmed);
-      if (!signed) return null;
-      rememberDisplay(trimmed, signed, "https");
-      return signed;
+      return null;
     }
 
-    const signed = await getMoveProfilePhotoSignedUrlCached(trimmed);
     const candidates = buildMoveFetchCandidates(trimmed, signed);
     for (const candidate of candidates) {
       const blobUrl = await fetchIosMovePhotoBlobUrl(candidate);

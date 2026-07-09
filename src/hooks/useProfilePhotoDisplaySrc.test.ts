@@ -9,6 +9,9 @@ vi.mock("../lib/profilePhotoSignedUrl", () => ({
   getProfilePhotoSignedUrl: (...args: unknown[]) => getProfilePhotoSignedUrl(...args),
   shouldPassThroughProfilePhotoDisplayUrl: (...args: unknown[]) =>
     shouldPassThroughProfilePhotoDisplayUrl(...args),
+  filterProfilePhotoDisplayUrls: (urls: string[]) => urls,
+  profilePhotoObjectPathFromStoredValue: () => "user-1/portrait-1.jpg",
+  isProfilePhotosPublicStorageUrl: () => false,
 }));
 
 vi.mock("../lib/profilePhotoDisplayUrl", () => ({
@@ -44,15 +47,14 @@ describe("resolveProfilePhotoStoredRefDisplayUrls", () => {
     getProfilePhotoSignedUrl.mockResolvedValue(null);
   });
 
-  it("iOS : sync vide + ref Storage → tente signed URL et retourne une URL affichable", async () => {
+  it("bucket privé : signed URL en premier (pas d’URL publique sync)", async () => {
     getProfilePhotoSignedUrl
       .mockResolvedValueOnce(SIGNED_DISPLAY_URL)
       .mockResolvedValueOnce(`${SIGNED_DISPLAY_URL}&v=2`);
 
     const urls = await resolveProfilePhotoStoredRefDisplayUrls(STORAGE_PUBLIC_REF);
 
-    expect(buildSyncProfilePhotoDisplayCandidates).toHaveBeenCalledWith(STORAGE_PUBLIC_REF);
-    expect(buildSyncProfilePhotoDisplayCandidates.mock.results[0]?.value).toEqual([]);
+    expect(buildSyncProfilePhotoDisplayCandidates).not.toHaveBeenCalled();
     expect(getProfilePhotoSignedUrl).toHaveBeenCalledTimes(2);
     expect(getProfilePhotoSignedUrl).toHaveBeenNthCalledWith(
       1,
@@ -69,14 +71,12 @@ describe("resolveProfilePhotoStoredRefDisplayUrls", () => {
     expect(urls[0]).toMatch(/\/object\/sign\/profile-photos\//);
   });
 
-  it("utilise l’URL synchrone directement quand elle est déjà disponible (web)", async () => {
-    const publicUrl = STORAGE_PUBLIC_REF;
-    buildSyncProfilePhotoDisplayCandidates.mockReturnValue([publicUrl]);
+  it("web : signed URL avant toute URL publique", async () => {
     getProfilePhotoSignedUrl.mockResolvedValue(SIGNED_DISPLAY_URL);
 
     const urls = await resolveProfilePhotoStoredRefDisplayUrls(STORAGE_PUBLIC_REF);
 
-    expect(urls[0]).toBe(publicUrl);
+    expect(urls[0]).toBe(SIGNED_DISPLAY_URL);
     expect(getProfilePhotoSignedUrl).toHaveBeenCalled();
   });
 

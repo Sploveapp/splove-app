@@ -10,6 +10,10 @@ import { logOAuthLoaderDiag } from "./oauthLoaderDiag";
 import { releasePostAuthUi } from "./oauthUxRelease";
 import { forceReleaseOAuthLoadingOnMove } from "./oauthLoadingScreenRelease";
 import {
+  isWebOAuthSplashActive,
+  isWebOAuthSplashRequested,
+} from "./webOAuthSplash";
+import {
   getOAuthUxOverlayEpoch,
   subscribeOAuthUxOverlay,
 } from "./oauthUxNotify";
@@ -47,6 +51,8 @@ function rawOAuthUxOverlayActive(): boolean {
     isOAuthBrowserOpen() ||
     isPostOAuthSplashRequested() ||
     isPostOAuthSplashActive() ||
+    isWebOAuthSplashRequested() ||
+    isWebOAuthSplashActive() ||
     isGoogleSignInOverlayMounted()
   );
 }
@@ -58,6 +64,8 @@ export function shouldFinalizePostAuthUi(): boolean {
     isOAuthBrowserOpen() ||
     isPostOAuthSplashRequested() ||
     isPostOAuthSplashActive() ||
+    isWebOAuthSplashRequested() ||
+    isWebOAuthSplashActive() ||
     isGoogleSignInOverlayMounted()
   );
 }

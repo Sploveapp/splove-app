@@ -10,9 +10,16 @@ const SIGNED_URL =
   "https://abc.supabase.co/storage/v1/object/sign/profile-photos/user-1/portrait_1.jpg?token=expired";
 const GOOGLE_AVATAR = "https://lh3.googleusercontent.com/a/avatar.jpg";
 
+const RELATIVE_PUBLIC_URL =
+  "/storage/v1/object/public/profile-photos/user-1/portrait_1.jpg";
+
 describe("profilePhotoObjectPathFromStoredValue", () => {
   it("extrait le path depuis une URL publique", () => {
     expect(profilePhotoObjectPathFromStoredValue(PUBLIC_URL)).toBe("user-1/portrait_1.jpg");
+  });
+
+  it("extrait le path depuis une URL publique relative", () => {
+    expect(profilePhotoObjectPathFromStoredValue(RELATIVE_PUBLIC_URL)).toBe("user-1/portrait_1.jpg");
   });
 
   it("extrait le path depuis une signed URL expirée (pas null)", () => {
@@ -27,8 +34,8 @@ describe("profilePhotoObjectPathFromStoredValue", () => {
 });
 
 describe("shouldPassThroughProfilePhotoDisplayUrl", () => {
-  it("passe les URL publiques Storage stables", () => {
-    expect(shouldPassThroughProfilePhotoDisplayUrl(PUBLIC_URL)).toBe(true);
+  it("ne passe pas les URL publiques Storage profile-photos (bucket privé)", () => {
+    expect(shouldPassThroughProfilePhotoDisplayUrl(PUBLIC_URL)).toBe(false);
   });
 
   it("ne passe pas les signed URLs expirables", () => {

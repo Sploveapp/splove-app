@@ -23,6 +23,11 @@ import {
   logGoogleSignInBrowserOpen,
   showGoogleSignInOverlay,
 } from "./googleSignInOverlay";
+import {
+  beginWebOAuthSplash,
+  dismissWebOAuthSplash,
+  logWebOAuthDebug,
+} from "./webOAuthSplash";
 import { forceReleaseOAuthUx } from "./oauthUxRelease";
 import { logPkceStorageKeys } from "./oauthPkceDiagnostics";
 import { isGoogleAccountsOAuthUrl } from "./oauthGoogleBrowserUrl";
@@ -512,9 +517,41 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
 
   console.log("GOOGLE_SIGNIN_START");
   const redirectTo = oauthRedirectUrl();
-  const { error } = await supabase.auth.signInWithOAuth({
+  logWebOAuthDebug("start", { redirectTo, branch: "web_skip_browser_redirect" });
+
+  beginWebOAuthSplash();
+  showGoogleSignInOverlay();
+  await awaitGoogleSignInOverlayPaint();
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
-    options: { redirectTo },
+    options: {
+      redirectTo,
+      skipBrowserRedirect: true,
+    },
   });
-  return { error: error ?? null };
+
+  if (error) {
+    dismissWebOAuthSplash("oauth_url_error");
+    hideGoogleSignInOverlay("oauth_url_error");
+    return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
+  }
+
+  const url = typeof data?.url === "string" ? data.url.trim() : "";
+  if (!url) {
+    dismissWebOAuthSplash("missing_oauth_url");
+    hideGoogleSignInOverlay("missing_oauth_url");
+    return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
+  }
+
+  let urlHost = "(invalid)";
+  try {
+    urlHost = new URL(url).hostname;
+  } catch {
+    urlHost = url.slice(0, 64);
+  }
+  logWebOAuthDebug("redirect", { urlHost });
+  logGoogleSignInBrowserOpen();
+  window.location.assign(url);
+  return { error: null };
 }

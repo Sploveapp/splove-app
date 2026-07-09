@@ -44,13 +44,22 @@ export function buildProfilePhotoPublicUrl(
   return supabase.storage.from(PROFILE_PHOTOS_BUCKET).getPublicUrl(objectPath).data.publicUrl;
 }
 
-/** Référence persistée : URL publique complète (pas seulement `userId/file.jpg`). */
+/** Référence persistée : URL publique canonique (ou path → URL publique). Signed URL → extrait le path objet. */
 export function normalizeProfilePhotoStoredRef(
   value: string | null | undefined,
   supabase?: SupabaseClient,
 ): string {
   const s = typeof value === "string" ? value.trim() : "";
   if (!s) return "";
+  if (s.startsWith("blob:") || s.startsWith("data:")) return s;
+
+  const objectPath = profilePhotoObjectPathFromStoredValue(s);
+  if (objectPath) {
+    return supabase
+      ? buildProfilePhotoPublicUrl(supabase, objectPath)
+      : `${PROFILE_PHOTOS_BUCKET}/${objectPath}`;
+  }
+
   if (s.startsWith("http://") || s.startsWith("https://")) return s;
   if (s.startsWith(`${PROFILE_PHOTOS_BUCKET}/`)) {
     const path = s.slice(`${PROFILE_PHOTOS_BUCKET}/`.length);
@@ -121,7 +130,6 @@ export async function resolveProfilePhotoDisplayCandidates(
     return [normalized];
   }
 
-  const objectPath = profilePhotoObjectPathFromStoredValue(normalized);
   const out: string[] = [];
   const seen = new Set<string>();
 
@@ -132,19 +140,10 @@ export async function resolveProfilePhotoDisplayCandidates(
     out.push(t);
   };
 
-  const signed = await getProfilePhotoSignedUrl(supabase, normalized);
-  push(signed);
-
-  const signedFresh = await getProfilePhotoSignedUrl(supabase, normalized, 3600);
-  push(signedFresh);
-
-  if (!isNativeCapacitorApp()) {
-    if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
-      push(normalized.split("?")[0] ?? normalized);
-    }
-    if (objectPath) {
-      push(buildProfilePhotoPublicUrl(supabase, objectPath));
-    }
+  push(await getProfilePhotoSignedUrl(supabase, storedRef));
+  push(await getProfilePhotoSignedUrl(supabase, storedRef, 3600));
+  if (normalized !== String(storedRef ?? "").trim()) {
+    push(await getProfilePhotoSignedUrl(supabase, normalized));
   }
 
   return out;

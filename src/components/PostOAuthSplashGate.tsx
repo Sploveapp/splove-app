@@ -21,6 +21,11 @@ import {
   isOAuthSessionVerifiedLatch,
   subscribeOAuthSessionVerifiedLatch,
 } from "../lib/oauthSessionVerifiedLatch";
+import {
+  isWebOAuthSplashActive,
+  isWebOAuthSplashRequested,
+  subscribeWebOAuthSplash,
+} from "../lib/webOAuthSplash";
 import { OAuthLoadingScreenOverlay } from "./SploveOAuthLoadingScreen";
 
 type Props = {
@@ -29,10 +34,12 @@ type Props = {
 
 function subscribePostAuthSplashVisible(listener: () => void): () => void {
   const unsubSplash = subscribePostOAuthSplash(listener);
+  const unsubWeb = subscribeWebOAuthSplash(listener);
   const unsubUx = subscribeOAuthUxOverlay(listener);
   const unsubLatch = subscribeOAuthSessionVerifiedLatch(listener);
   return () => {
     unsubSplash();
+    unsubWeb();
     unsubUx();
     unsubLatch();
   };
@@ -42,6 +49,8 @@ function getPostAuthSplashRawVisible(): boolean {
   return (
     isPostOAuthSplashRequested() ||
     isPostOAuthSplashActive() ||
+    isWebOAuthSplashRequested() ||
+    isWebOAuthSplashActive() ||
     isGoogleSignInOverlayMounted()
   );
 }
@@ -50,6 +59,8 @@ function hasResidualOAuthLoadingLocks(): boolean {
   return (
     isPostOAuthSplashRequested() ||
     isPostOAuthSplashActive() ||
+    isWebOAuthSplashRequested() ||
+    isWebOAuthSplashActive() ||
     isGoogleSignInOverlayMounted() ||
     isOauthProcessingLocked()
   );
@@ -140,6 +151,8 @@ function collectPostAuthBlockReasons(): string[] {
   const reasons: string[] = [];
   if (isPostOAuthSplashRequested()) reasons.push("postOAuthSplashRequested");
   if (isPostOAuthSplashActive()) reasons.push("postOAuthSplashActive");
+  if (isWebOAuthSplashRequested()) reasons.push("webOAuthSplashRequested");
+  if (isWebOAuthSplashActive()) reasons.push("webOAuthSplashActive");
   if (isGoogleSignInOverlayMounted()) reasons.push("googleSignInOverlayMounted");
   if (isOauthProcessingLocked()) reasons.push("oauthProcessingLocked");
   return reasons;
@@ -154,6 +167,8 @@ function shouldForceMoveRelease(ctx: {
     ctx.profileBound &&
     (isPostOAuthSplashRequested() ||
       isPostOAuthSplashActive() ||
+      isWebOAuthSplashRequested() ||
+      isWebOAuthSplashActive() ||
       isGoogleSignInOverlayMounted())
   );
 }

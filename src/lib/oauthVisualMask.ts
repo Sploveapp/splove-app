@@ -6,6 +6,10 @@ import {
 } from "./postOAuthSplash";
 import { isOAuthBrowserOpen } from "./oauthBrowserOpenState";
 import { notifyOAuthUxOverlayChanged } from "./oauthUxNotify";
+import {
+  isWebOAuthSplashActive,
+  isWebOAuthSplashRequested,
+} from "./webOAuthSplash";
 
 /** URL technique OAuth visible dans le WebView — jamais montrée à l’utilisateur. */
 const TECHNICAL_OAUTH_URL_RE =
@@ -76,6 +80,8 @@ export function isOAuthVisualMaskRequired(
     isOAuthBrowserOpen() ||
     isPostOAuthSplashRequested() ||
     isPostOAuthSplashActive() ||
+    isWebOAuthSplashRequested() ||
+    isWebOAuthSplashActive() ||
     isGoogleSignInOverlayMounted()
   ) {
     return true;

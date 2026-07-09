@@ -1,6 +1,6 @@
 const BUCKET_SEGMENT = "/profile-photos/";
 
-/** Extrait le chemin Storage (`userId/portrait-….jpg`) depuis l’URL publique du bucket `profile-photos`. */
+/** Extrait le chemin Storage (`userId/portrait-….jpg`) depuis une URL publique ou signée du bucket `profile-photos`. */
 export function profilePhotoStoragePathFromPublicUrl(publicUrl: string): string | null {
   const u = publicUrl.trim();
   if (!u) return null;

@@ -13,6 +13,11 @@ import { hideSploveIosOAuthMask } from "./sploveIosGoogleOAuth";
 import { isNativeCapacitorApp } from "./authRedirect";
 import { scrubOAuthTokensFromNativeWindow } from "./scrubOAuthUrlFromWindow";
 import { notifyOAuthUxOverlayChanged } from "./oauthUxNotify";
+import {
+  dismissWebOAuthSplash,
+  isWebOAuthSplashActive,
+  isWebOAuthSplashRequested,
+} from "./webOAuthSplash";
 
 export type PostAuthUiRoute = "/move" | "/onboarding";
 
@@ -21,6 +26,8 @@ function postAuthUiSnapshot(): Record<string, boolean> {
     oauthProcessingLocked: isOauthProcessingLocked(),
     postOAuthSplashRequested: isPostOAuthSplashRequested(),
     postOAuthSplashActive: isPostOAuthSplashActive(),
+    webOAuthSplashRequested: isWebOAuthSplashRequested(),
+    webOAuthSplashActive: isWebOAuthSplashActive(),
     googleSignInOverlayMounted: isGoogleSignInOverlayMounted(),
   };
 }
@@ -68,6 +75,7 @@ export function releasePostAuthUi(trigger: string, route?: PostAuthUiRoute): voi
   clearOauthProcessingLock();
   clearAllOAuthSessionLocks();
   forceClearPostOAuthSplash();
+  dismissWebOAuthSplash(trigger);
   hideGoogleSignInOverlay(trigger);
   void hideSploveIosOAuthMask();
 

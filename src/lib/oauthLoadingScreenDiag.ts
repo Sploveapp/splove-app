@@ -6,6 +6,10 @@ import {
 } from "./postOAuthSplash";
 import { isOAuthSessionVerifiedLatch } from "./oauthSessionVerifiedLatch";
 import { isOAuthVisualMaskRequired } from "./oauthVisualMask";
+import {
+  isWebOAuthSplashActive,
+  isWebOAuthSplashRequested,
+} from "./webOAuthSplash";
 
 /** Verrous / overlays qui peuvent afficher « Connexion sécurisée… ». */
 export function collectOAuthLoadingScreenBlockers(): string[] {
@@ -13,6 +17,8 @@ export function collectOAuthLoadingScreenBlockers(): string[] {
   if (isOauthProcessingLocked()) reasons.push("oauthProcessingLocked");
   if (isPostOAuthSplashRequested()) reasons.push("postOAuthSplashRequested");
   if (isPostOAuthSplashActive()) reasons.push("postOAuthSplashActive");
+  if (isWebOAuthSplashRequested()) reasons.push("webOAuthSplashRequested");
+  if (isWebOAuthSplashActive()) reasons.push("webOAuthSplashActive");
   if (isGoogleSignInOverlayMounted()) reasons.push("googleSignInOverlayMounted");
   return reasons;
 }
@@ -26,6 +32,10 @@ export function shouldShowOAuthLoadingScreen(
   authSessionVerified: boolean,
 ): boolean {
   if (isOAuthVisualMaskRequired()) return true;
+
+  // Web : cycle de vie explicite — ne pas masquer avant dismissWebOAuthSplash.
+  if (isWebOAuthSplashRequested() || isWebOAuthSplashActive()) return true;
+
   if (!rawVisible) return false;
   if (isOAuthSessionVerifiedLatch()) return false;
   if (authSessionVerified) return false;

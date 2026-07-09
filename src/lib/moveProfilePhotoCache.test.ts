@@ -51,7 +51,7 @@ describe("moveProfilePhotoCache", () => {
 
     expect(mod.getMoveProfilePhotoDisplaySync(ref)).toBeNull();
     const src = await mod.ensureMoveProfilePhotoDisplay(ref);
-    expect(src).toBe("https://cdn.example/public.jpg");
-    expect(mod.getMoveProfilePhotoDisplaySync(ref)).toBe("https://cdn.example/public.jpg");
+    expect(src).toBe("https://cdn.example/signed.jpg");
+    expect(mod.getMoveProfilePhotoDisplaySync(ref)).toBe("https://cdn.example/signed.jpg");
   });
 });
