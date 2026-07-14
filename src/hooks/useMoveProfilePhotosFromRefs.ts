@@ -12,6 +12,12 @@ import {
 } from "../lib/discoverProfilePhotoDiag";
 import { PhotoFlowLog } from "../lib/photoFlowLog";
 import { photoUrlPrefix } from "../lib/profilePhotoPipelineLog";
+import {
+  getIosPhotoDiagAuthUserId,
+  logIosPhotoDiag,
+  registerMoveProfilePhotoRowForDiag,
+} from "../lib/iosPhotoDiag";
+import { invalidateMoveProfilePhotoRefCaches } from "../lib/moveProfilePhotoCache";
 
 const PRIMARY_MOVE_PHOTO_FIELDS = [
   "portrait_url",
@@ -29,6 +35,7 @@ function trimUsableMovePhotoRef(value: unknown): string | null {
 export function buildMovePrimaryPhotoRefs(
   profile: ProfilePhotoUrlFields | null | undefined,
 ): { refs: string[]; fieldByRef: Record<string, string> } {
+  registerMoveProfilePhotoRowForDiag(profile as Parameters<typeof registerMoveProfilePhotoRowForDiag>[0]);
   const refs: string[] = [];
   const fieldByRef: Record<string, string> = {};
   const seen = new Set<string>();
@@ -88,6 +95,20 @@ export function useMoveProfilePhotosFromRefs(
   }, [refsKey, profileId]);
 
   useEffect(() => {
+    logIosPhotoDiag("profile_candidate", {
+      profileId,
+      logSource,
+      candidateIndex: refIndex,
+      candidateCount: refs.length,
+      storedRef: activeRef,
+      photoField: activeRef ? fieldByRef[activeRef] ?? null : null,
+      extra: {
+        candidateFields: refs.map((ref) => ({
+          field: fieldByRef[ref] ?? null,
+          ref: photoUrlPrefix(ref),
+        })),
+      },
+    });
     if (!shouldLogDiscoverProfilePhoto({ logSource, profile: { id: profileId ?? null } })) return;
     logDiscoverProfilePhotoDiag({
       phase: refs.length > 0 ? "candidates_ready" : "candidates_empty",
@@ -106,7 +127,8 @@ export function useMoveProfilePhotosFromRefs(
 
   const activeRef = refs[refIndex] ?? null;
   const photo = useMoveProfilePhotoDisplay(activeRef, profileId ?? null, logSource);
-  const stickyScope = `${profileId ?? "anon"}:${refsKey}:${refIndex}`;
+  const viewerUserId = getIosPhotoDiagAuthUserId();
+  const stickyScope = `${viewerUserId ?? "anon-viewer"}:${profileId ?? "anon"}:${refsKey}:${refIndex}`;
   const sticky = useStickyPhotoDisplaySrc(photo.displaySrc, stickyScope);
 
   useEffect(() => {
@@ -114,6 +136,15 @@ export function useMoveProfilePhotosFromRefs(
       return;
     }
     if (refIndex >= refs.length - 1) {
+      logIosPhotoDiag("all_candidates_failed", {
+        profileId,
+        logSource,
+        storedRef: activeRef,
+        photoField: fieldByRef[activeRef] ?? null,
+        candidateIndex: refIndex,
+        candidateCount: refs.length,
+        error: "url_resolution_failed",
+      });
       logDiscoverProfilePhotoDiag({
         phase: "all_candidates_failed",
         profileId,
@@ -138,6 +169,19 @@ export function useMoveProfilePhotosFromRefs(
     if (resolutionFailoverDoneRef.current) return;
     resolutionFailoverDoneRef.current = true;
     const nextRef = refs[refIndex + 1] ?? null;
+    invalidateMoveProfilePhotoRefCaches(activeRef, profileId, logSource);
+    logIosPhotoDiag("cache_invalidated", {
+      profileId,
+      logSource,
+      storedRef: activeRef,
+      photoField: fieldByRef[activeRef] ?? null,
+      error: "resolution_failed_try_next",
+      extra: {
+        candidateIndex: refIndex,
+        nextRef: photoUrlPrefix(nextRef),
+        nextField: nextRef ? fieldByRef[nextRef] ?? null : null,
+      },
+    });
     logDiscoverProfilePhotoDiag({
       phase: "resolution_failed_try_next",
       profileId,
@@ -160,8 +204,6 @@ export function useMoveProfilePhotosFromRefs(
     photo.isPending,
     photo.resolutionFailed,
     profileId,
-    logSource,
-    fieldByRef,
     refIndex,
     refs,
     sticky.resetSticky,
@@ -212,6 +254,7 @@ export function useMoveProfilePhotosFromRefs(
     }
     if (refIndex < refs.length - 1) {
       errorAttemptsRef.current += 1;
+      invalidateMoveProfilePhotoRefCaches(activeRef, profileId, logSource);
       logDiscoverProfilePhotoDiag({
         phase: "img_error_try_next",
         profileId,

@@ -23,6 +23,7 @@ import {
   mergeOptionalProfileFields,
   selectProfilesFirstMatch,
 } from "../lib/profileSelect";
+import { onMovePhotoAuthSessionChange } from "../lib/moveProfilePhotoSession";
 import {
   isRedundantSessionRefreshEvent,
   isRetryableNetworkError,
@@ -483,6 +484,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     profileLoadGenRef.current += 1;
     fetchProfileInFlightRef.current = false;
     lastLoadedUserIdRef.current = null;
+    onMovePhotoAuthSessionChange(null, sessionRef.current?.user?.id ?? null, "signOut");
     flushSync(() => {
       setUser(null);
       setSession(null);
@@ -580,6 +582,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.log("AUTH_NO_SESSION");
         }
         sessionRef.current = data.session;
+        onMovePhotoAuthSessionChange(
+          data.session?.user?.id ?? null,
+          null,
+          "INITIAL_SESSION",
+        );
         setSession(data.session);
         setUser(data.session?.user ?? null);
       } finally {
@@ -639,6 +646,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         console.log("[AuthContext] SIGNED_OUT");
         console.log("AUTH_NO_SESSION");
+        onMovePhotoAuthSessionChange(null, prevSession?.user?.id ?? null, "SIGNED_OUT");
         profileLoadGenRef.current += 1;
         fetchProfileInFlightRef.current = false;
         lastLoadedUserIdRef.current = null;
@@ -671,6 +679,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(nextSession);
       setUser(nextSession?.user ?? null);
       setError(null);
+      if (nextUid !== prevUid) {
+        onMovePhotoAuthSessionChange(nextUid, prevUid, event);
+      }
       if (nextUid && nextUid !== prevUid) {
         lastLoadedUserIdRef.current = null;
       }

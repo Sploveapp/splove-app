@@ -14,12 +14,13 @@ import {
   isOauthProcessingLocked,
   setOauthProcessingLock,
 } from "./oauthCallbackLock";
-import { GOOGLE_OAUTH_USER_ERROR_MSG, OAUTH_CALLBACK_INTERRUPTED_MSG } from "./googleOAuthFlow";
+import { GOOGLE_OAUTH_USER_ERROR_MSG, APPLE_OAUTH_USER_ERROR_MSG, OAUTH_CALLBACK_INTERRUPTED_MSG } from "./googleOAuthFlow";
 import { completeNativeOAuthReturn } from "./completeNativeOAuthReturn";
 import { stashAuthOAuthUserMessage } from "./authOAuthUserMessage";
 import {
   awaitGoogleSignInOverlayPaint,
   hideGoogleSignInOverlay,
+  isGoogleSignInOverlayMounted,
   logGoogleSignInBrowserOpen,
   showGoogleSignInOverlay,
 } from "./googleSignInOverlay";
@@ -52,12 +53,17 @@ export const GOOGLE_OAUTH_INTERRUPTED_MSG = GOOGLE_OAUTH_USER_ERROR_MSG;
 export const SPLOVE_OAUTH_BROWSER_CLOSED_EVENT = "splove-oauth-browser-closed";
 
 const OAUTH_CALLBACK_STORAGE_KEY = "splove_oauth_callback_url";
+/** Apple Browser OAuth : évite « Connexion sécurisée » bloqué si le callback ne termine pas. */
+const APPLE_OAUTH_BROWSER_SAFETY_MS = 90_000;
 
 let oauthBrowserOpen = false;
 let oauthBrowserClosedOnCallback = false;
 let lastProcessedOAuthCode: string | null = null;
 /** iOS : ASWebAuthenticationSession actif — pas de Browser.open / Browser.close. */
 let iosNativeOAuthSessionActive = false;
+/** Provider OAuth natif en cours — logs Apple ciblés sur callback partagé. */
+let activeNativeOAuthProvider: "google" | "apple" | null = null;
+let appleOAuthSafetyTimer: number | null = null;
 
 export function stashOAuthCallbackUrl(url: string): void {
   try {
@@ -102,8 +108,63 @@ export function resetOAuthBrowserWaitStateForTests(): void {
   oauthBrowserClosedOnCallback = false;
   lastProcessedOAuthCode = null;
   iosNativeOAuthSessionActive = false;
+  activeNativeOAuthProvider = null;
+  clearAppleOAuthSafetyTimer();
   clearOauthProcessingLock();
   resetOAuthBrowserOpenStateForTests();
+}
+
+function clearAppleOAuthSafetyTimer(): void {
+  if (appleOAuthSafetyTimer !== null) {
+    window.clearTimeout(appleOAuthSafetyTimer);
+    appleOAuthSafetyTimer = null;
+  }
+}
+
+function scheduleAppleOAuthSafetyTimeout(): void {
+  clearAppleOAuthSafetyTimer();
+  appleOAuthSafetyTimer = window.setTimeout(() => {
+    if (activeNativeOAuthProvider !== "apple") return;
+    if (
+      !oauthBrowserOpen &&
+      !isOauthProcessingLocked() &&
+      !isGoogleSignInOverlayMounted()
+    ) {
+      return;
+    }
+    console.log("[AppleOAuth] callback_error", { reason: "safety_timeout" });
+    failOAuthCallback("apple_safety_timeout");
+  }, APPLE_OAUTH_BROWSER_SAFETY_MS);
+}
+
+function forceDismissNativeOAuthConnectingUi(trigger: string): void {
+  hideIosGoogleOAuthConnectingOverlay(trigger, { force: true });
+  hideGoogleSignInOverlay(trigger, { force: true });
+}
+
+function logAppleOAuthCallbackReceived(url: string): void {
+  const trimmed = url.trim();
+  const params = parseOAuthCallbackParams(trimmed);
+  let protocol = "";
+  let host = "";
+  let pathname = "";
+  try {
+    const parsed = new URL(trimmed);
+    protocol = parsed.protocol.replace(/:$/, "");
+    host = parsed.hostname;
+    pathname = parsed.pathname;
+  } catch {
+    /* invalid deep link */
+  }
+  const hasError = /(?:^|[?&#])error=/i.test(trimmed);
+  console.log("[AppleOAuth] callback_received", {
+    protocol,
+    host,
+    pathname,
+    hasCode: params.hasCode,
+    hasAccessToken: params.hasAccessToken,
+    hasError,
+  });
 }
 
 export function isGoogleOAuthInFlight(): boolean {
@@ -135,20 +196,22 @@ async function closeOAuthBrowserOnceOnCallback(): Promise<void> {
   console.log("BROWSER_CLOSED_ON_CALLBACK");
 }
 
-function isNativeOAuthCallbackWithCode(url: string): boolean {
+function isNativeOAuthCallbackActionable(url: string): boolean {
   const trimmed = url.trim();
-  return isNativeOAuthCallbackUrl(trimmed) && trimmed.includes("code=");
-}
-
-function oauthCodeFromUrl(url: string): string | null {
-  return parseOAuthCallbackParams(url).code;
+  if (!isNativeOAuthCallbackUrl(trimmed)) return false;
+  const params = parseOAuthCallbackParams(trimmed);
+  return params.hasCode || params.hasAccessToken;
 }
 
 function failOAuthCallback(reason: string): void {
   console.log("OAUTH_CALLBACK_FAILED", { reason });
+  if (activeNativeOAuthProvider === "apple") {
+    console.log("[AppleOAuth] callback_error", { reason });
+    activeNativeOAuthProvider = null;
+    clearAppleOAuthSafetyTimer();
+  }
   stashAuthOAuthUserMessage(OAUTH_BROWSER_TIMEOUT_USER_MSG);
-  hideIosGoogleOAuthConnectingOverlay(reason);
-  hideGoogleSignInOverlay(reason);
+  forceDismissNativeOAuthConnectingUi(reason);
   forceReleaseOAuthUx(reason);
   window.location.hash = "#/auth";
 }
@@ -164,9 +227,14 @@ async function handleNativeOAuthCallback(
   options: NativeOAuthCallbackOptions = {},
 ): Promise<boolean> {
   const trimmed = deepLinkUrl.trim();
-  const code = oauthCodeFromUrl(trimmed);
-  if (!code) {
-    console.log("OAUTH_RETURN_SKIP", "missing_code");
+  const callbackParams = parseOAuthCallbackParams(trimmed);
+  const isAppleFlow = activeNativeOAuthProvider === "apple";
+
+  if (!callbackParams.hasCode && !callbackParams.hasAccessToken) {
+    if (isAppleFlow) {
+      console.log("[AppleOAuth] callback_error", { reason: "missing_code_or_token" });
+    }
+    console.log("OAUTH_RETURN_SKIP", "missing_code_or_token");
     return false;
   }
 
@@ -175,7 +243,8 @@ async function handleNativeOAuthCallback(
     return false;
   }
 
-  if (lastProcessedOAuthCode === code) {
+  const code = callbackParams.code;
+  if (code && lastProcessedOAuthCode === code) {
     console.log("OAUTH_RETURN_SKIP", "duplicate_code");
     return false;
   }
@@ -187,9 +256,13 @@ async function handleNativeOAuthCallback(
     console.log("APP_URL_OPEN_RECEIVED");
   }
 
-  lastProcessedOAuthCode = code;
+  if (code) {
+    lastProcessedOAuthCode = code;
+  }
   setOauthProcessingLock();
-  hideIosGoogleOAuthConnectingOverlay(fromNativePlugin ? "ios_native_callback" : "app_url_open");
+  if (isAppleFlow) {
+    logAppleOAuthCallbackReceived(trimmed);
+  }
 
   const skipBrowserClose = options.skipBrowserClose || fromNativePlugin;
   if (!skipBrowserClose) {
@@ -197,18 +270,38 @@ async function handleNativeOAuthCallback(
   }
 
   console.log("OAUTH_DEEP_LINK_RECEIVED", {
-    hasCode: true,
+    hasCode: callbackParams.hasCode,
+    hasAccessToken: callbackParams.hasAccessToken,
     urlLength: trimmed.length,
     via: fromNativePlugin ? "native_plugin" : "app_url_open",
   });
   stashOAuthCallbackUrl(trimmed);
 
+  let succeeded = false;
   try {
+    if (isAppleFlow && callbackParams.hasCode) {
+      console.log("[AppleOAuth] code_exchange_start");
+    }
     const ok = await completeNativeOAuthReturn(trimmed);
     if (!ok) {
       failOAuthCallback("callback_process_failed");
       return false;
     }
+    if (isAppleFlow) {
+      console.log("[AppleOAuth] code_exchange_success");
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+      if (sessionError || !session?.user?.id) {
+        failOAuthCallback("session_missing_after_exchange");
+        return false;
+      }
+      console.log("[AppleOAuth] session_ready");
+      activeNativeOAuthProvider = null;
+      clearAppleOAuthSafetyTimer();
+    }
+    succeeded = true;
     return true;
   } catch (e) {
     console.warn("OAUTH_CALLBACK_ERROR", e instanceof Error ? e.message : e);
@@ -217,13 +310,20 @@ async function handleNativeOAuthCallback(
   } finally {
     clearOauthProcessingLock();
     iosNativeOAuthSessionActive = false;
+    if (isAppleFlow) {
+      oauthBrowserOpen = false;
+      markOAuthBrowserOpen(false);
+      forceDismissNativeOAuthConnectingUi(
+        succeeded ? "apple_oauth_success" : "apple_oauth_settled",
+      );
+    }
   }
 }
 
 /** Traite splove://auth/callback — jamais via Browser.open. */
 export async function routeOAuthDeepLink(url: string): Promise<boolean> {
   const trimmed = url.trim();
-  if (!isNativeOAuthCallbackWithCode(trimmed)) return false;
+  if (!isNativeOAuthCallbackActionable(trimmed)) return false;
   console.log("OAUTH_DEEP_LINK_ROUTE", { via: "routeOAuthDeepLink" });
   await handleNativeOAuthCallback(trimmed);
   return true;
@@ -251,6 +351,130 @@ export function isOAuthBrowserOpenAllowedUrl(url: string): boolean {
   if (isGoogleAccountsOAuthUrl(trimmed)) return true;
   if (isSupabaseAuthHost(trimmed)) return true;
   return false;
+}
+
+function isAppleOAuthBrowserOpenAllowedUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed || isNativeOAuthCallbackUrl(trimmed)) return false;
+  if (isSupabaseAuthHost(trimmed) && /provider=apple/i.test(trimmed)) return true;
+  if (/appleid\.apple\.com/i.test(hostFromOAuthUrl(trimmed))) return true;
+  return false;
+}
+
+async function openAppleOAuthBrowser(url: string): Promise<{ error: Error | null }> {
+  const trimmed = url.trim();
+
+  if (await routeOAuthDeepLink(trimmed)) {
+    return { error: null };
+  }
+
+  if (!isAppleOAuthBrowserOpenAllowedUrl(trimmed)) {
+    console.log("[AppleOAuth] error", { reason: "url_not_allowed", host: hostFromOAuthUrl(trimmed) });
+    hideGoogleSignInOverlay("apple_browser_open_blocked");
+    hideIosGoogleOAuthConnectingOverlay("apple_browser_open_blocked");
+    return { error: new Error(APPLE_OAUTH_USER_ERROR_MSG) };
+  }
+
+  try {
+    oauthBrowserOpen = true;
+    markOAuthBrowserOpen(true);
+    await Browser.open({ url: trimmed, presentationStyle: "fullscreen" });
+    console.log("[AppleOAuth] browser_opened", { host: hostFromOAuthUrl(trimmed) });
+    scheduleAppleOAuthSafetyTimeout();
+    return { error: null };
+  } catch (e) {
+    oauthBrowserOpen = false;
+    const message = e instanceof Error ? e.message : String(e);
+    console.log("[AppleOAuth] error", { reason: "browser_open_failed", message });
+    hideGoogleSignInOverlay("apple_browser_open_error");
+    hideIosGoogleOAuthConnectingOverlay("apple_browser_open_error");
+    return { error: new Error(APPLE_OAUTH_USER_ERROR_MSG) };
+  }
+}
+
+export async function signInWithAppleOAuth(): Promise<{ error: Error | null }> {
+  console.log("[AppleOAuth] start");
+
+  if (isGoogleOAuthNativePlatform()) {
+    if (isOauthProcessingLocked()) {
+      console.log("[AppleOAuth] error", { reason: "oauth_callback_in_progress" });
+      return { error: new Error(OAUTH_BROWSER_TIMEOUT_USER_MSG) };
+    }
+
+    oauthBrowserClosedOnCallback = false;
+    lastProcessedOAuthCode = null;
+    activeNativeOAuthProvider = "apple";
+
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: "apple",
+      options: {
+        redirectTo: NATIVE_OAUTH_CALLBACK,
+        skipBrowserRedirect: true,
+      },
+    });
+
+    if (error) {
+      activeNativeOAuthProvider = null;
+      hideGoogleSignInOverlay("apple_oauth_url_error");
+      hideIosGoogleOAuthConnectingOverlay("apple_oauth_url_error");
+      console.log("[AppleOAuth] error", { reason: "signInWithOAuth_failed" });
+      return { error: new Error(APPLE_OAUTH_USER_ERROR_MSG) };
+    }
+
+    const url = typeof data?.url === "string" ? data.url.trim() : "";
+    if (!url) {
+      activeNativeOAuthProvider = null;
+      hideGoogleSignInOverlay("apple_missing_oauth_url");
+      hideIosGoogleOAuthConnectingOverlay("apple_missing_oauth_url");
+      console.log("[AppleOAuth] error", { reason: "missing_oauth_url" });
+      return { error: new Error(APPLE_OAUTH_USER_ERROR_MSG) };
+    }
+
+    if (isForbiddenOAuthRedirectTarget(url)) {
+      activeNativeOAuthProvider = null;
+      hideGoogleSignInOverlay("apple_forbidden_redirect");
+      hideIosGoogleOAuthConnectingOverlay("apple_forbidden_redirect");
+      console.log("[AppleOAuth] error", { reason: "forbidden_redirect" });
+      return { error: new Error(APPLE_OAUTH_USER_ERROR_MSG) };
+    }
+
+    console.log("[AppleOAuth] oauth_url_ready", { host: hostFromOAuthUrl(url) });
+    await logPkceStorageKeys("PKCE_KEYS_AFTER_SIGNIN");
+    return openAppleOAuthBrowser(url);
+  }
+
+  const redirectTo = oauthRedirectUrl();
+  beginWebOAuthSplash();
+  showGoogleSignInOverlay();
+  await awaitGoogleSignInOverlayPaint();
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: "apple",
+    options: {
+      redirectTo,
+      skipBrowserRedirect: true,
+    },
+  });
+
+  if (error) {
+    dismissWebOAuthSplash("apple_oauth_url_error");
+    hideGoogleSignInOverlay("apple_oauth_url_error");
+    console.log("[AppleOAuth] error", { reason: "signInWithOAuth_failed" });
+    return { error: new Error(APPLE_OAUTH_USER_ERROR_MSG) };
+  }
+
+  const url = typeof data?.url === "string" ? data.url.trim() : "";
+  if (!url) {
+    dismissWebOAuthSplash("apple_missing_oauth_url");
+    hideGoogleSignInOverlay("apple_missing_oauth_url");
+    console.log("[AppleOAuth] error", { reason: "missing_oauth_url" });
+    return { error: new Error(APPLE_OAUTH_USER_ERROR_MSG) };
+  }
+
+  console.log("[AppleOAuth] oauth_url_ready", { host: hostFromOAuthUrl(url) });
+  logWebOAuthDebug("redirect", { host: hostFromOAuthUrl(url), provider: "apple" });
+  window.location.assign(url);
+  return { error: null };
 }
 
 function failIosGoogleOAuthResolve(reason: string): { error: Error } {
@@ -438,8 +662,8 @@ export function initCapacitorAuthBridge(): void {
 
   void App.addListener("appUrlOpen", (event) => {
     const opened = event.url?.trim() ?? "";
-    if (!isNativeOAuthCallbackWithCode(opened)) return;
-    void handleNativeOAuthCallback(opened);
+    if (!isNativeOAuthCallbackActionable(opened)) return;
+    void handleNativeOAuthCallback(opened, { source: "app_url_open" });
   });
 
   void Browser.addListener("browserFinished", () => {

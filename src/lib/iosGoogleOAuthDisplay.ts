@@ -51,13 +51,18 @@ export async function showIosGoogleOAuthConnectingOverlay(): Promise<void> {
   console.log("IOS_GOOGLE_OAUTH_DISPLAY_SHOW");
 }
 
+type HideIosGoogleOAuthConnectingOverlayOptions = { force?: boolean };
+
 /**
  * Masque l’overlay uniquement quand l’URL n’est plus technique et les verrous OAuth sont levés.
  * APP_URL_OPEN / succès Google : différé tant que le splash doit rester visible.
  */
-export function hideIosGoogleOAuthConnectingOverlay(trigger: string): void {
+export function hideIosGoogleOAuthConnectingOverlay(
+  trigger: string,
+  options?: HideIosGoogleOAuthConnectingOverlayOptions,
+): void {
   if (!isIosGoogleOAuthBrowserFlow()) return;
-  if (shouldDeferIosOAuthMaskHide(trigger)) {
+  if (!options?.force && shouldDeferIosOAuthMaskHide(trigger)) {
     logOAuthMaskShow("hide_deferred", {
       trigger,
       oauthProcessingLocked: isOauthProcessingLocked(),

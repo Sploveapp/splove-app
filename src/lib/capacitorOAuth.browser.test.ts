@@ -60,6 +60,13 @@ describe("capacitorOAuth garde-fous Browser.open iOS", () => {
     expect(routed).toBe(true);
   });
 
+  it("routeOAuthDeepLink accepte access_token dans le fragment", async () => {
+    const routed = await routeOAuthDeepLink(
+      "splove://auth/callback#access_token=at-example&refresh_token=rt-example",
+    );
+    expect(routed).toBe(true);
+  });
+
   it("assertIosBrowserOpenBeforeOpen logue url/host/strategy pour Google", () => {
     const logs: unknown[][] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...args) => {

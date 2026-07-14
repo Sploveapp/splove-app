@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  describeMoveProfilePhotoCache,
   ensureMoveProfilePhotoDisplay,
   getMoveProfilePhotoDisplaySync,
-  invalidateMoveProfilePhotoDisplay,
+  invalidateMoveProfilePhotoRefCaches,
+  moveProfilePhotoDisplayCacheKey,
   subscribeMoveProfilePhotoDisplay,
 } from "../lib/moveProfilePhotoCache";
 import { classifyImgSrcForIosDebug, logPhotoIosDebug } from "../lib/photoIosDebug";
 import { logDiscoverProfilePhotoDiag } from "../lib/discoverProfilePhotoDiag";
+import { logIosPhotoDiag } from "../lib/iosPhotoDiag";
 import {
   profilePhotoObjectPathFromStoredValue,
   shouldPassThroughProfilePhotoDisplayUrl,
@@ -21,8 +24,7 @@ type MovePhotoDisplayState = {
 };
 
 /**
- * Affichage photo Move — cache signed URL + blob iOS, prefetch-friendly.
- * Ne régénère pas les URLs à chaque mount si déjà en cache module.
+ * Affichage photo Move — cache signed URL + data URL iOS, indexé par profile.id.
  */
 export function useMoveProfilePhotoDisplay(
   storedRef: string | null | undefined,
@@ -32,9 +34,11 @@ export function useMoveProfilePhotoDisplay(
   const ref = typeof storedRef === "string" && storedRef.trim() ? storedRef.trim() : null;
 
   const [displaySrc, setDisplaySrc] = useState<string | null>(() =>
-    ref ? getMoveProfilePhotoDisplaySync(ref) : null,
+    ref ? getMoveProfilePhotoDisplaySync(ref, profileId, logSource) : null,
   );
-  const [isPending, setIsPending] = useState(() => Boolean(ref && !getMoveProfilePhotoDisplaySync(ref)));
+  const [isPending, setIsPending] = useState(
+    () => Boolean(ref && !getMoveProfilePhotoDisplaySync(ref, profileId, logSource)),
+  );
   const [resolutionFailed, setResolutionFailed] = useState(false);
 
   useEffect(() => {
@@ -45,7 +49,8 @@ export function useMoveProfilePhotoDisplay(
       return;
     }
 
-    const cached = getMoveProfilePhotoDisplaySync(ref);
+    const cacheKey = moveProfilePhotoDisplayCacheKey(profileId, ref);
+    const cached = getMoveProfilePhotoDisplaySync(ref, profileId, logSource);
     if (cached) {
       setDisplaySrc(cached);
       setIsPending(false);
@@ -56,7 +61,7 @@ export function useMoveProfilePhotoDisplay(
     setIsPending(true);
     setResolutionFailed(false);
 
-    const unsub = subscribeMoveProfilePhotoDisplay(ref, (src) => {
+    const unsub = subscribeMoveProfilePhotoDisplay(ref, profileId, (src) => {
       if (!src) return;
       logPhotoIosDebug("final_img_src", {
         screen: logSource,
@@ -89,6 +94,7 @@ export function useMoveProfilePhotoDisplay(
           objectPath: profilePhotoObjectPathFromStoredValue(ref),
           passThrough: shouldPassThroughProfilePhotoDisplayUrl(ref),
           error: "ensureMoveProfilePhotoDisplay_returned_null",
+          extra: { cacheKey, cacheState: describeMoveProfilePhotoCache(ref, profileId) },
         });
         setResolutionFailed(true);
         setIsPending(false);
@@ -100,15 +106,32 @@ export function useMoveProfilePhotoDisplay(
 
   const onImageLoad = useCallback(() => {
     setResolutionFailed(false);
+    logIosPhotoDiag("img_onload", {
+      profileId,
+      logSource,
+      storedRef: ref,
+      displaySrc,
+      cacheKey: ref ? moveProfilePhotoDisplayCacheKey(profileId, ref) : null,
+      cacheState: ref ? describeMoveProfilePhotoCache(ref, profileId) : null,
+    });
     logPhotoIosDebug("img_onload", {
       screen: logSource,
       profileId: profileId ?? null,
       srcKind: classifyImgSrcForIosDebug(displaySrc),
     });
-  }, [displaySrc, logSource, profileId]);
+  }, [displaySrc, logSource, profileId, ref]);
 
   const onImageError = useCallback(() => {
     if (!ref) return;
+    logIosPhotoDiag("img_onerror", {
+      profileId,
+      logSource,
+      storedRef: ref,
+      displaySrc: displaySrc ?? null,
+      cacheKey: moveProfilePhotoDisplayCacheKey(profileId, ref),
+      cacheState: describeMoveProfilePhotoCache(ref, profileId),
+      error: "img_element_onerror",
+    });
     logDiscoverProfilePhotoDiag({
       phase: "move_hook_img_onerror",
       profileId,
@@ -124,7 +147,8 @@ export function useMoveProfilePhotoDisplay(
       srcKind: classifyImgSrcForIosDebug(displaySrc),
       storedRef: ref.slice(0, 96),
     });
-    invalidateMoveProfilePhotoDisplay(ref);
+    invalidateMoveProfilePhotoRefCaches(ref, profileId, logSource);
+    setDisplaySrc(null);
     setResolutionFailed(true);
     setIsPending(false);
   }, [ref, displaySrc, logSource, profileId]);

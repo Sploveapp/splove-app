@@ -203,7 +203,8 @@ export async function establishSupabaseSessionFromOAuthCallbackUrl(callbackUrl: 
     await logPkceStorageKeys("PKCE_KEYS_BEFORE_EXCHANGE");
     console.log("EXCHANGE_CODE_START", { codeLength: params.code.length });
 
-    const exchanged = await supabase.auth.exchangeCodeForSession(params.code);
+    const exchangeInput = isNativeOAuthCallbackUrl(callbackUrl) ? callbackUrl.trim() : params.code;
+    const exchanged = await supabase.auth.exchangeCodeForSession(exchangeInput);
     if (!exchanged.error && exchanged.data.session?.user?.id) {
       console.log("EXCHANGE_CODE_SUCCESS", {
         userId: exchanged.data.session.user.id,

@@ -205,11 +205,16 @@ export function showGoogleSignInOverlay(): void {
   devLog("GOOGLE_SIGNIN_OVERLAY_SHOW");
 }
 
+type HideGoogleSignInOverlayOptions = { force?: boolean };
+
 /** Retire l’overlay (succès routé, erreur, annulation). */
-export function hideGoogleSignInOverlay(reason?: string): void {
+export function hideGoogleSignInOverlay(
+  reason?: string,
+  options?: HideGoogleSignInOverlayOptions,
+): void {
   const native = isNativeCapacitorApp();
   if (!native && !isWebOAuthOverlayFlow() && !isGoogleSignInOverlayMounted()) return;
-  if (shouldDeferGoogleSignInOverlayHide()) {
+  if (!options?.force && shouldDeferGoogleSignInOverlayHide()) {
     logOAuthMaskShow("hide_deferred_google_sign_in_overlay", {
       reason,
       oauthProcessingLocked: isOauthProcessingLocked(),

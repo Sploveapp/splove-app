@@ -51,7 +51,7 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     const iosTargetSource = readSrc("lib/iosGoogleOAuthBrowserTarget.ts");
     expect(displaySource).toContain("showIosGoogleOAuthConnectingOverlay");
     expect(displaySource).toContain("hideIosGoogleOAuthConnectingOverlay");
-    expect(capSource).toContain('"ios_native_callback"');
+    expect(capSource).toContain('"native_plugin"');
     expect(capSource).toContain("IOS_NATIVE_OAUTH_PLUGIN_OPEN");
     expect(capSource).toContain("resolveIosGoogleOAuthBrowserTarget");
     expect(capSource).not.toContain("openIosGoogleOAuthAuthorize");
@@ -70,6 +70,12 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     expect(capSource).toContain("isIosOAuthBrowserOpenAllowedUrl");
     expect(capSource).toContain("IOS_OAUTH_RESOLVE_FAIL");
     expect(capSource).toContain("BROWSER_OPEN_GOOGLE");
+    expect(capSource).toContain("signInWithAppleOAuth");
+    expect(capSource).toContain("[AppleOAuth] start");
+    expect(capSource).toContain("[AppleOAuth] callback_received");
+    expect(capSource).toContain("[AppleOAuth] code_exchange_start");
+    expect(capSource).toContain("[AppleOAuth] session_ready");
+    expect(capSource).toContain("isNativeOAuthCallbackActionable");
     expect(capSource).toContain("routeOAuthDeepLink");
     expect(capSource).toContain("assertIosBrowserOpenBeforeOpen");
     expect(capSource).toContain("BROWSER_OPEN_START");
@@ -96,15 +102,22 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     expect(fnBlock).not.toMatch(/navigate\s*\(\s*["'`]\/oauth/);
   });
 
-  it("Auth : overlay iOS avant signInWithGoogleOAuth", () => {
+  it("Auth : overlay iOS avant signInWithGoogleOAuth et Apple OAuth branché", () => {
     const source = readSrc("pages/Auth.tsx");
     expect(source).toContain("showIosGoogleOAuthConnectingOverlay");
-    const fnBlock = source.slice(
+    expect(source).toContain("signInWithAppleOAuth");
+    expect(source).not.toContain("coming soon clicked");
+    const googleBlock = source.slice(
       source.indexOf("async function signInWithGoogle"),
-      source.indexOf("const handleAppleComingSoon"),
+      source.indexOf("async function signInWithApple"),
     );
-    expect(fnBlock).toContain("showIosGoogleOAuthConnectingOverlay");
-    expect(fnBlock).not.toMatch(/navigate\s*\(\s*["'`]\/oauth/);
+    expect(googleBlock).toContain("showIosGoogleOAuthConnectingOverlay");
+    expect(googleBlock).not.toMatch(/navigate\s*\(\s*["'`]\/oauth/);
+    const appleBlock = source.slice(
+      source.indexOf("async function signInWithApple"),
+      source.indexOf("async function handleSubmit"),
+    );
+    expect(appleBlock).toContain("signInWithAppleOAuth");
   });
 
   it("postGoogleAuthComplete : logs succès et route", () => {

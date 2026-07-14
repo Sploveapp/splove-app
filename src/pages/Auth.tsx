@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { Navigate, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { signInWithGoogleOAuth, subscribeGoogleOAuthBrowserTimeout, SPLOVE_OAUTH_BROWSER_CLOSED_EVENT } from "../lib/capacitorOAuth";
+import { signInWithGoogleOAuth, signInWithAppleOAuth, subscribeGoogleOAuthBrowserTimeout, SPLOVE_OAUTH_BROWSER_CLOSED_EVENT } from "../lib/capacitorOAuth";
 import { consumeAuthOAuthUserMessage } from "../lib/authOAuthUserMessage";
-import { GOOGLE_OAUTH_USER_ERROR_MSG } from "../lib/googleOAuthFlow";
+import { GOOGLE_OAUTH_USER_ERROR_MSG, APPLE_OAUTH_USER_ERROR_MSG } from "../lib/googleOAuthFlow";
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { showGoogleSignInOverlay, hideGoogleSignInOverlay, awaitGoogleSignInOverlayPaint } from "../lib/googleSignInOverlay";
-import { isIosGoogleOAuthBrowserFlow, showIosGoogleOAuthConnectingOverlay } from "../lib/iosGoogleOAuthDisplay";
+import { isIosGoogleOAuthBrowserFlow, showIosGoogleOAuthConnectingOverlay, hideIosGoogleOAuthConnectingOverlay } from "../lib/iosGoogleOAuthDisplay";
 import { isNativeCapacitorApp } from "../lib/authRedirect";
 import { beginWebOAuthSplash } from "../lib/webOAuthSplash";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
@@ -180,7 +180,6 @@ export default function Auth() {
   const [oauthLoading, setOauthLoading] = useState<"google" | "apple" | null>(null);
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
-  const [appleNotice, setAppleNotice] = useState(false);
 
   useEffect(() => {
     stashPendingReferralCodeFromSearch(searchParams.get("ref"));
@@ -340,18 +339,35 @@ export default function Auth() {
     }
   }
 
-  const handleAppleComingSoon = () => {
-    console.log("[AppleOAuth] coming soon clicked", {
-      source: "auth_screen",
-      timestamp: new Date().toISOString(),
-    });
-
-    setAppleNotice(true);
-
-    window.setTimeout(() => {
-      setAppleNotice(false);
-    }, 3500);
-  };
+  async function signInWithApple() {
+    if (oauthLoading) return;
+    setMessage(null);
+    setOauthLoading("apple");
+    if (isIosGoogleOAuthBrowserFlow()) {
+      await showIosGoogleOAuthConnectingOverlay();
+    } else if (!isNativeCapacitorApp()) {
+      beginWebOAuthSplash();
+      showGoogleSignInOverlay();
+      await awaitGoogleSignInOverlayPaint();
+    } else {
+      showGoogleSignInOverlay();
+      await awaitGoogleSignInOverlayPaint();
+    }
+    try {
+      const { error } = await signInWithAppleOAuth();
+      if (error) {
+        hideGoogleSignInOverlay("apple_sign_in_error");
+        hideIosGoogleOAuthConnectingOverlay("apple_sign_in_error");
+        setMessage({ type: "error", text: error.message || APPLE_OAUTH_USER_ERROR_MSG });
+        setOauthLoading(null);
+      }
+    } catch {
+      hideGoogleSignInOverlay("apple_sign_in_exception");
+      hideIosGoogleOAuthConnectingOverlay("apple_sign_in_exception");
+      setMessage({ type: "error", text: APPLE_OAUTH_USER_ERROR_MSG });
+      setOauthLoading(null);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -457,27 +473,13 @@ export default function Auth() {
             <>
               <button
                 type="button"
-                className="opacity-60 cursor-pointer spv-auth-tactile"
-                style={{
-                  ...btnOAuth,
-                  opacity: loading || oauthLoading ? 0.5 : 0.6,
-                }}
+                className="spv-auth-tactile"
+                style={btnOAuth}
                 disabled={authBootstrapping || !!oauthLoading || loading}
-                onClick={handleAppleComingSoon}
+                onClick={() => void signInWithApple()}
               >
-                {t("continue_with_apple")}
+                {oauthLoading === "apple" ? `${t("loading")}` : t("continue_with_apple")}
               </button>
-              {appleNotice && (
-                <div
-                  role="status"
-                  aria-live="polite"
-                  className="mt-3 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm text-white shadow-lg backdrop-blur"
-                >
-                  {t("auth_apple_coming_soon_line_1")}
-                  <br />
-                  <span className="text-white/70">{t("auth_apple_coming_soon_line_2")}</span>
-                </div>
-              )}
               <button
                 type="button"
                 className="spv-auth-tactile"
