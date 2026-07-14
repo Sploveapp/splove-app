@@ -1,10 +1,13 @@
 import { shouldUseIosCapacitorImageFallback } from "./capacitorImageDataUrl";
+import { classifyImgSrcForIosDebug, logPhotoIosDebug } from "./photoIosDebug";
 
 type IosPhotoImgHandlerOptions = {
   iosOnError: () => void;
   photoOnError: () => void;
   photoOnLoad: () => void;
   iosResolutionFailed: boolean;
+  displaySrc?: string | null;
+  screen?: string;
 };
 
 /**
@@ -15,8 +18,19 @@ export function buildIosAwareProfilePhotoImgHandlers(
   options: IosPhotoImgHandlerOptions,
 ): { onLoad: () => void; onError: () => void } {
   return {
-    onLoad: options.photoOnLoad,
+    onLoad: () => {
+      logPhotoIosDebug("img_onload", {
+        screen: options.screen ?? "profile",
+        srcKind: classifyImgSrcForIosDebug(options.displaySrc),
+      });
+      options.photoOnLoad();
+    },
     onError: () => {
+      logPhotoIosDebug("img_onerror", {
+        screen: options.screen ?? "profile",
+        srcKind: classifyImgSrcForIosDebug(options.displaySrc),
+        iosResolutionFailed: options.iosResolutionFailed,
+      });
       if (!shouldUseIosCapacitorImageFallback()) {
         options.photoOnError();
         return;

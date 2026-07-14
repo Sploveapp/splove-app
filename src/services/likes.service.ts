@@ -21,7 +21,7 @@ export type CreateLikeRpcResult = {
 
 /** Colonnes stables pour liste Likes / preview (pas de `select *`). */
 export const LIKES_PROFILE_BATCH_SELECT =
-  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, main_photo_url, portrait_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, height_cm, is_photo_verified, photo_status, identity_verified, veriff_status, profile_completed, is_active, is_paused, is_banned, deleted_at, profile_sports(sports(label, slug))";
+  "id, first_name, city, birth_date, preferred_age_min, preferred_age_max, portrait_url, main_photo_url, avatar_url, fullbody_url, gender, looking_for, sport_feeling, sport_phrase, height_cm, is_photo_verified, photo_status, identity_verified, veriff_status, profile_completed, is_active, is_paused, is_banned, deleted_at, profile_sports(sports(label, slug))";
 
 const PROFILE_SELECT = LIKES_PROFILE_BATCH_SELECT;
 
@@ -156,6 +156,7 @@ type IncomingLikeRow = {
   liker_id: string;
   liked_id: string;
   created_at: string;
+  play_type?: string | null;
 };
 
 type MatchRelationRow = {
@@ -165,6 +166,13 @@ type MatchRelationRow = {
   conversation_id?: string | null;
 };
 
+/** Colonne `play_type` absente (migration non appliquée). */
+function isMissingPlayTypeColumn(error: { message?: string; code?: string } | null): boolean {
+  if (!error) return false;
+  const msg = (error.message ?? "").toLowerCase();
+  return msg.includes("play_type") && (msg.includes("does not exist") || msg.includes("column"));
+}
+
 /** Likes reçus : `liked_id = moi` (schéma actuel) ou `to_user = moi` (legacy from_user/to_user). */
 async function fetchIncomingLikeRows(currentUserId: string): Promise<{
   rows: IncomingLikeRow[];
@@ -172,12 +180,29 @@ async function fetchIncomingLikeRows(currentUserId: string): Promise<{
 }> {
   const modern = await supabase
     .from("likes")
-    .select("id, liker_id, liked_id, created_at")
+    .select("id, liker_id, liked_id, created_at, play_type")
     .eq("liked_id", currentUserId)
     .order("created_at", { ascending: false });
 
   if (!modern.error && modern.data) {
     return { rows: modern.data as IncomingLikeRow[], error: null };
+  }
+
+  if (modern.error && isMissingPlayTypeColumn(modern.error)) {
+    const withoutPlay = await supabase
+      .from("likes")
+      .select("id, liker_id, liked_id, created_at")
+      .eq("liked_id", currentUserId)
+      .order("created_at", { ascending: false });
+    if (!withoutPlay.error && withoutPlay.data) {
+      return {
+        rows: (withoutPlay.data as Omit<IncomingLikeRow, "play_type">[]).map((r) => ({
+          ...r,
+          play_type: null,
+        })),
+        error: null,
+      };
+    }
   }
 
   const msg = modern.error?.message ?? "";

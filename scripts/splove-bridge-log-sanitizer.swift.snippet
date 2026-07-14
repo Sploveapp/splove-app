@@ -1,0 +1,21 @@
+// SPLove log redaction
+private func sploveSanitizeBridgeLog(_ input: String) -> String {
+    var s = String(input)
+    let keys = ["access_token", "refresh_token", "id_token", "provider_token", "provider_refresh_token", "authorization"]
+    for key in keys {
+        let pattern = "\"\(key)\"\\s*:\\s*\"[^\"]*\""
+        if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+            let range = NSRange(s.startIndex..<s.endIndex, in: s)
+            s = regex.stringByReplacingMatches(in: s, options: [], range: range, withTemplate: "\"\(key)\":\"[redacted]\"")
+        }
+    }
+    if let jwt = try? NSRegularExpression(pattern: "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+", options: []) {
+        let range = NSRange(s.startIndex..<s.endIndex, in: s)
+        s = jwt.stringByReplacingMatches(in: s, options: [], range: range, withTemplate: "[redacted-jwt]")
+    }
+    if let bearer = try? NSRegularExpression(pattern: "Bearer\\s+[A-Za-z0-9\\-._~+/]+=*", options: [.caseInsensitive]) {
+        let range = NSRange(s.startIndex..<s.endIndex, in: s)
+        s = bearer.stringByReplacingMatches(in: s, options: [], range: range, withTemplate: "Bearer [redacted]")
+    }
+    return s
+}

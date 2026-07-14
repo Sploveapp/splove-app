@@ -27,6 +27,10 @@ describe("fetchCapacitorImageDataUrl", () => {
     const { fetchCapacitorImageDataUrl } = await import("./capacitorImageDataUrl");
     const result = await fetchCapacitorImageDataUrl("https://cdn.example/photo.jpg");
     expect(result).toBe("data:image/jpeg;base64,YWJj");
+    expect(capacitorHttpGet).toHaveBeenCalledWith({
+      url: "https://cdn.example/photo.jpg",
+      responseType: "blob",
+    });
   });
 
   it("essaie les fallback URLs si la première échoue", async () => {

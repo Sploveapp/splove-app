@@ -1,25 +1,28 @@
-import { CapacitorHttp } from "@capacitor/core";
 import { supabase } from "./supabase";
 import { buildIosCapacitorImageFetchUrlCandidates } from "./profilePhotoIosDisplayUrls";
 import { normalizeProfilePhotoStoredRef } from "./profilePhotoUpload";
+import { pickPortraitFirstProfilePhotoStoredRef, type ProfilePhotoUrlFields } from "./profilePhotoDisplayUrl";
+import { classifyImgSrcForIosDebug, logPhotoIosDebug } from "./photoIosDebug";
+import { logDiscoverProfilePhotoDiag } from "./discoverProfilePhotoDiag";
 import {
   getProfilePhotoSignedUrl,
   profilePhotoObjectPathFromStoredValue,
   shouldPassThroughProfilePhotoDisplayUrl,
   isProfilePhotosPublicStorageUrl,
 } from "./profilePhotoSignedUrl";
-import { shouldUseIosCapacitorImageFallback } from "./capacitorImageDataUrl";
+import {
+  fetchCapacitorImageDataUrl,
+  shouldUseIosCapacitorImageFallback,
+} from "./capacitorImageDataUrl";
 import { photoUrlPrefix } from "./profilePhotoPipelineLog";
-import { pickPortraitFirstProfilePhotoStoredRef, type ProfilePhotoUrlFields } from "./profilePhotoDisplayUrl";
 
 const SIGNED_CACHE_TTL_MS = 50 * 60 * 1000;
 const SIGNED_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const DISPLAY_CACHE_MAX = 48;
-const FETCH_TIMEOUT_MS = 12_000;
 const MAX_CONCURRENT_FETCH = 3;
 
 type SignedEntry = { url: string; expiresAt: number };
-type DisplayEntry = { src: string; kind: "https" | "blob" };
+type DisplayEntry = { src: string; kind: "https" | "data" | "blob" };
 
 const signedUrlByRef = new Map<string, SignedEntry>();
 const displayByRef = new Map<string, DisplayEntry>();
@@ -135,6 +138,7 @@ function writeSignedCache(storedRef: string, url: string): void {
 /** Une seule signed URL par ref — cache module + déduplication inflight. */
 export async function getMoveProfilePhotoSignedUrlCached(
   storedRef: string,
+  context?: { profileId?: string | null; logSource?: string | null },
 ): Promise<string | null> {
   const trimmed = storedRef.trim();
   if (!trimmed) return null;
@@ -155,10 +159,33 @@ export async function getMoveProfilePhotoSignedUrlCached(
     }
 
     const objectPath = profilePhotoObjectPathFromStoredValue(normalized);
-    if (!objectPath) return null;
+    if (!objectPath) {
+      logDiscoverProfilePhotoDiag({
+        phase: "signed_url_no_object_path",
+        profileId: context?.profileId ?? null,
+        logSource: context?.logSource ?? null,
+        storedRef: trimmed,
+        error: "profilePhotoObjectPathFromStoredValue_null",
+      });
+      return null;
+    }
 
     const signed = await getProfilePhotoSignedUrl(supabase, normalized);
     if (signed) writeSignedCache(trimmed, signed);
+    if (!signed && !shouldPassThroughProfilePhotoDisplayUrl(normalized)) {
+      logDiscoverProfilePhotoDiag({
+        phase: "storage_create_signed_url_failed",
+        profileId: context?.profileId ?? null,
+        logSource: context?.logSource ?? null,
+        storedRef: trimmed,
+        objectPath,
+        error: "createSignedUrl_returned_null",
+        extra: {
+          bucket: "profile-photos",
+          hint: "Vérifier existence fichier Storage, permissions bucket, chemin objectPath",
+        },
+      });
+    }
     return signed;
   })();
 
@@ -167,66 +194,6 @@ export async function getMoveProfilePhotoSignedUrlCached(
     return await promise;
   } finally {
     inflightSigned.delete(key);
-  }
-}
-
-function contentTypeFromHeaders(headers: Record<string, unknown> | undefined): string {
-  if (!headers) return "image/jpeg";
-  const raw =
-    (headers["Content-Type"] as string | undefined) ??
-    (headers["content-type"] as string | undefined);
-  return (typeof raw === "string" ? raw.split(";")[0]?.trim() : "") || "image/jpeg";
-}
-
-function base64ToBytes(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-function blobUrlFromCapacitorBody(data: unknown, mime: string): string | null {
-  if (typeof data === "string") {
-    const trimmed = data.trim();
-    if (!trimmed || trimmed.startsWith("{") || trimmed.startsWith("<")) return null;
-    if (trimmed.startsWith("data:")) {
-      const comma = trimmed.indexOf(",");
-      if (comma < 0) return null;
-      const bytes = base64ToBytes(trimmed.slice(comma + 1));
-      return URL.createObjectURL(new Blob([bytes], { type: mime }));
-    }
-    const bytes = base64ToBytes(trimmed);
-    return URL.createObjectURL(new Blob([bytes], { type: mime }));
-  }
-  if (data instanceof ArrayBuffer && data.byteLength > 0) {
-    return URL.createObjectURL(new Blob([data], { type: mime }));
-  }
-  if (ArrayBuffer.isView(data) && data.byteLength > 0) {
-    const view = data as ArrayBufferView;
-    return URL.createObjectURL(
-      new Blob([new Uint8Array(view.buffer, view.byteOffset, view.byteLength)], { type: mime }),
-    );
-  }
-  return null;
-}
-
-async function fetchIosMovePhotoBlobUrl(url: string): Promise<string | null> {
-  const trimmed = url.trim();
-  if (!trimmed.startsWith("http")) return null;
-
-  try {
-    const response = await Promise.race([
-      CapacitorHttp.get({ url: trimmed }),
-      new Promise<never>((_, reject) => {
-        window.setTimeout(() => reject(new Error("move_photo_fetch_timeout")), FETCH_TIMEOUT_MS);
-      }),
-    ]);
-    const status = response.status ?? 0;
-    if (status < 200 || status >= 300) return null;
-    const mime = contentTypeFromHeaders(response.headers as Record<string, unknown> | undefined);
-    return blobUrlFromCapacitorBody(response.data, mime);
-  } catch {
-    return null;
   }
 }
 
@@ -266,8 +233,21 @@ export async function ensureMoveProfilePhotoDisplay(
   if (inflight) return inflight;
 
     const promise = withFetchSlot(async () => {
-    const signed = await getMoveProfilePhotoSignedUrlCached(trimmed);
+    const signed = await getMoveProfilePhotoSignedUrlCached(trimmed, {
+      profileId: _options?.profileId ?? null,
+      logSource: _options?.logSource ?? null,
+    });
     const objectPath = profilePhotoObjectPathFromStoredValue(trimmed);
+    logDiscoverProfilePhotoDiag({
+      phase: "signed_url_ready",
+      profileId: _options?.profileId ?? null,
+      logSource: _options?.logSource ?? null,
+      storedRef: trimmed,
+      objectPath,
+      displaySrc: signed,
+      passThrough: shouldPassThroughProfilePhotoDisplayUrl(trimmed),
+      extra: { signedUrlPresent: Boolean(signed) },
+    });
     console.log("[PHOTO_DEBUG] signed_url_ready", {
       screen: _options?.logSource ?? "discover",
       profileId: _options?.profileId ?? null,
@@ -281,23 +261,50 @@ export async function ensureMoveProfilePhotoDisplay(
         rememberDisplay(trimmed, signed, "https");
         return signed;
       }
+      logDiscoverProfilePhotoDiag({
+        phase: "web_display_unresolved",
+        profileId: _options?.profileId ?? null,
+        logSource: _options?.logSource ?? null,
+        storedRef: trimmed,
+        objectPath,
+        error: "no_signed_url_web",
+      });
       return null;
     }
 
     const candidates = buildMoveFetchCandidates(trimmed, signed);
-    for (const candidate of candidates) {
-      const blobUrl = await fetchIosMovePhotoBlobUrl(candidate);
-      if (!blobUrl) continue;
-      rememberDisplay(trimmed, blobUrl, "blob");
-      if (import.meta.env.DEV) {
-        console.log("[MovePhoto] display_ready", {
+    if (candidates.length > 0) {
+      const [primary, ...fallbacks] = candidates;
+      const dataUrl = await fetchCapacitorImageDataUrl(primary, fallbacks);
+      if (dataUrl) {
+        rememberDisplay(trimmed, dataUrl, "data");
+        logPhotoIosDebug("final_img_src", {
+          screen: _options?.logSource ?? "discover",
+          profileId: _options?.profileId ?? null,
+          srcKind: classifyImgSrcForIosDebug(dataUrl),
           storedRef: photoUrlPrefix(trimmed),
-          fetchedUrl: photoUrlPrefix(candidate),
-          prefetch: Boolean(_options?.prefetch),
         });
+        if (import.meta.env.DEV) {
+          console.log("[MovePhoto] display_ready", {
+            storedRef: photoUrlPrefix(trimmed),
+            fetchedUrl: photoUrlPrefix(primary),
+            prefetch: Boolean(_options?.prefetch),
+            srcKind: "data_url",
+          });
+        }
+        return dataUrl;
       }
-      return blobUrl;
     }
+    logDiscoverProfilePhotoDiag({
+      phase: "ios_fetch_failed",
+      profileId: _options?.profileId ?? null,
+      logSource: _options?.logSource ?? null,
+      storedRef: trimmed,
+      objectPath,
+      displaySrc: signed,
+      error: "ios_capacitor_fetch_exhausted",
+      extra: { candidateCount: candidates.length },
+    });
     notifyDisplayListeners(trimmed, null);
     return null;
   });

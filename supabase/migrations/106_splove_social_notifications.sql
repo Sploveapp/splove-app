@@ -102,7 +102,7 @@ BEGIN
       COALESCE(p_payload, '{}'::jsonb),
       btrim(p_dedupe_key)
     )
-    ON CONFLICT (user_id, dedupe_key)
+    ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL
     DO UPDATE SET
       kind = EXCLUDED.kind,
       payload = EXCLUDED.payload,

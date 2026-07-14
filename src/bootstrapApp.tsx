@@ -1,4 +1,5 @@
 import "./lib/installOAuthSafeConsole";
+import "./lib/installCapacitorBridgeLogSanitizer";
 import { isOauthProcessingLocked } from "./lib/oauthCallbackLock";
 import {
   Component,

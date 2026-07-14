@@ -1,4 +1,9 @@
 import type { InAppNotificationRow } from "../services/inAppNotifications.service";
+import {
+  SPLOVE_PLAY_META,
+  resolveSplovePlayType,
+  splovePlayNotificationLabel,
+} from "./splovePlay";
 
 export type SploveNotificationPayload = {
   route?: string;
@@ -12,12 +17,15 @@ export type SploveNotificationPayload = {
   place?: string;
   location?: string;
   scheduled_at?: string;
+  /** SPLove Play (`play_sent`). */
+  play_type?: string;
 };
 
 const SOCIAL_KINDS = new Set([
   "new_like",
   "new_match",
   "new_message",
+  "play_sent",
   "activity_proposed",
   "activity_accepted",
   "activity_counter",
@@ -40,6 +48,7 @@ export function parseNotificationPayload(raw: unknown): SploveNotificationPayloa
   if (typeof o.place === "string") out.place = o.place.trim();
   if (typeof o.location === "string") out.location = o.location.trim();
   if (typeof o.scheduled_at === "string") out.scheduled_at = o.scheduled_at;
+  if (typeof o.play_type === "string" && o.play_type.trim()) out.play_type = o.play_type.trim();
   return out;
 }
 
@@ -58,6 +67,8 @@ export function resolveNotificationRoute(
   if (payload.route) return payload.route.startsWith("/") ? payload.route : `/${payload.route}`;
   switch (kind) {
     case "new_like":
+      return "/likes-you";
+    case "play_sent":
       return "/likes-you";
     case "new_match":
       return payload.conversation_id ? `/match/${payload.conversation_id}` : "/messages";
@@ -86,6 +97,7 @@ export type NotificationPresentation = {
 
 const KIND_EMOJI: Record<string, string> = {
   new_like: "💛",
+  play_sent: "❤️",
   new_match: "❤️",
   new_message: "💬",
   activity_proposed: "⛰️",
@@ -109,6 +121,21 @@ export function presentNotification(
   const sport = payload.sport?.trim() || t("activity_default_sport");
   const place =
     payload.place?.trim() || payload.location?.trim() || t("place_to_define");
+
+  if (row.kind === "play_sent") {
+    const play = resolveSplovePlayType(payload.play_type);
+    const meta = SPLOVE_PLAY_META[play];
+    const intentLabel = splovePlayNotificationLabel(t, play);
+    return {
+      emoji: meta.emoji,
+      line: `${name} — ${intentLabel}`,
+      subtitle: `« ${t(meta.lineKey)} »`,
+      route,
+      isSocial: true,
+      actorId: payload.actor_id ?? null,
+      actorAvatarUrl: payload.actor_avatar?.trim() || null,
+    };
+  }
 
   const socialKey = `in_app_notif.social.${row.kind}`;
   const socialTemplate = t(socialKey);

@@ -89,6 +89,10 @@ import {
 import { OnboardingFlowLog } from "../lib/onboardingFlowLog";
 import { clearProfilePhotoResolutionCache } from "../hooks/useProfilePhotoSignedUrl";
 import {
+  countOnboardingPersistedPhotoSlots,
+  onboardingPhotosFullyPersisted,
+} from "../lib/onboardingPhotoSlots";
+import {
   type EnergyOptionKey,
   normalizeIntensityForOnboardingHydrate,
   type OnboardingVariant,
@@ -685,20 +689,8 @@ const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 const PHOTO_ACCEPT_MIMES = new Set(["image/jpeg", "image/png"]);
 const ONBOARDING_PHOTO_MAX_MB = Math.round(PHOTO_MAX_BYTES / (1024 * 1024));
 
-function onboardingPhotoSlotFilled(savedUrl: string, file: File | null): boolean {
-  return savedUrl.trim() !== "" || file != null;
-}
-
-function countOnboardingPhotoSlots(
-  portraitSavedUrl: string,
-  portraitFile: File | null,
-  bodySavedUrl: string,
-  bodyFile: File | null,
-): number {
-  let count = 0;
-  if (onboardingPhotoSlotFilled(portraitSavedUrl, portraitFile)) count += 1;
-  if (onboardingPhotoSlotFilled(bodySavedUrl, bodyFile)) count += 1;
-  return count;
+function countOnboardingPhotoSlots(portraitSavedUrl: string, bodySavedUrl: string): number {
+  return countOnboardingPersistedPhotoSlots(portraitSavedUrl, bodySavedUrl);
 }
 
 const ONBOARDING_SPORT_MATCH_OPTIONS: readonly {
@@ -1686,8 +1678,9 @@ export default function Onboarding() {
     selectedSportIds.length <= 3 &&
     selectedSportIds.every((id) => hasValidSportPracticeLevel(sportLevelsById[String(id)])) &&
     openToAdaptedPractice !== "" &&
-    (portraitSavedUrl.trim() !== "" || portraitFile != null) &&
-    (bodySavedUrl.trim() !== "" || bodyFile != null) &&
+    (portraitSavedUrl.trim() !== "") &&
+    (bodySavedUrl.trim() !== "") &&
+    photoUploadingKind === null &&
     confirm18 &&
     acceptTerms;
 
@@ -1713,8 +1706,8 @@ export default function Onboarding() {
     if (openToAdaptedPractice === "") {
       return t("onboarding_err_adapted_openness");
     }
-    if (portraitSavedUrl.trim() === "" && portraitFile == null) return t("onboarding_err_photos_both");
-    if (bodySavedUrl.trim() === "" && bodyFile == null) return t("onboarding_err_photos_both");
+    if (portraitSavedUrl.trim() === "") return t("onboarding_err_photos_both");
+    if (bodySavedUrl.trim() === "") return t("onboarding_err_photos_both");
     if (!confirm18) return t("onboarding_err_confirm_18");
     if (!acceptTerms) return t("onboarding_err_terms");
     return null;
@@ -2018,6 +2011,25 @@ export default function Onboarding() {
         error: errMsg,
       });
       logDetailedError("onboarding immediate photo upload", uploadErr, { kind });
+      if (kind === "portrait") {
+        setPortraitFile(null);
+        setPortraitSavedUrl("");
+        setPortraitDisplayResolved(null);
+        setPortraitLocalPreviewUrl((prev) => {
+          revokeObjectUrlSafe(prev);
+          return null;
+        });
+        setPortraitPreviewLoadFailed(false);
+      } else {
+        setBodyFile(null);
+        setBodySavedUrl("");
+        setBodyDisplayResolved(null);
+        setBodyLocalPreviewUrl((prev) => {
+          revokeObjectUrlSafe(prev);
+          return null;
+        });
+        setBodyPreviewLoadFailed(false);
+      }
       setPhotoStepError(t("photo_error"));
     } finally {
       setPhotoUploadingKind(null);
@@ -2139,12 +2151,7 @@ export default function Onboarding() {
         setPhotoStepError(t("onboarding_photo_upload_progress"));
         return false;
       }
-      const photoCount = countOnboardingPhotoSlots(
-        portraitSavedUrl,
-        portraitFile,
-        bodySavedUrl,
-        bodyFile,
-      );
+      const photoCount = countOnboardingPhotoSlots(portraitSavedUrl, bodySavedUrl);
       if (photoCount === 0) {
         setPhotoStepError(t("onboarding_photo_err_none"));
         return false;
@@ -2371,14 +2378,15 @@ export default function Onboarding() {
         return;
       }
     }
-    if ((portraitSavedUrl.trim() === "" && !portraitFile) || (bodySavedUrl.trim() === "" && !bodyFile)) {
+    if ((portraitSavedUrl.trim() === "" || bodySavedUrl.trim() === "") && photoUploadingKind !== null) {
       onboardingSubmitInFlightRef.current = false;
-      const submitPhotoCount = countOnboardingPhotoSlots(
-        portraitSavedUrl,
-        portraitFile,
-        bodySavedUrl,
-        bodyFile,
-      );
+      setPhotoStepError(t("onboarding_photo_upload_progress"));
+      setStep(9);
+      return;
+    }
+    if (!onboardingPhotosFullyPersisted(portraitSavedUrl, bodySavedUrl)) {
+      onboardingSubmitInFlightRef.current = false;
+      const submitPhotoCount = countOnboardingPhotoSlots(portraitSavedUrl, bodySavedUrl);
       setPhotoStepError(
         submitPhotoCount === 0
           ? t("onboarding_photo_err_none")
@@ -2910,6 +2918,8 @@ export default function Onboarding() {
       );
       if (completionWrite.error) {
         console.error("[Onboarding submit] ensureOnboardingCompletionInProfile failed", completionWrite.error);
+        setError(t("photo_error"));
+        return;
       }
 
       const validSportIds = Array.from(new Set(await resolveSelectedSportIdsForPersistence()));
@@ -4423,7 +4433,7 @@ export default function Onboarding() {
                 ) : (
                   <button
                     type="submit"
-                    disabled={loading || authLoading || hydratingDraft || !canSubmit}
+                    disabled={loading || authLoading || hydratingDraft || !canSubmit || photoUploadingKind !== null}
                     className="flex-1 rounded-2xl py-3.5 text-sm font-semibold shadow-md transition-transform active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70 sm:text-base"
                     style={{
                       background: !loading && !authLoading && user?.id ? BRAND_BG : CTA_DISABLED_BG,

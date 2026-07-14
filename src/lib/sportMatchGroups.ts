@@ -3,6 +3,12 @@
  * partager la même compatibilité (ex. Marche ↔ Randonnée, Fitness ↔ Musculation).
  */
 
+import {
+  normalizeSportPracticeLevel,
+  sportPracticeLevelI18nKey,
+  type SportPracticeLevel,
+} from "./sportPracticeLevel";
+
 const SLUG_TO_MATCH_GROUP: Record<string, string> = {
   marche: "walk-hike",
   randonnee: "walk-hike",
@@ -75,29 +81,40 @@ export function getProfileSportDisplayLabels(profile: {
   return out.sort((a, b) => a.localeCompare(b, "fr"));
 }
 
-export type DiscoverSportChip = { label: string; shared: boolean };
+export type DiscoverSportChip = {
+  label: string;
+  level: SportPracticeLevel | null;
+  levelKey: string | null;
+  shared: boolean;
+};
 
-/** Chips Discover : tous les sports avec indicateur si compatible avec mes clés. */
+/** Chips Discover : sports avec niveau réel + indicateur si compatible avec mes clés. */
 export function getDiscoverSportChips(profile: ProfileForSportChips, myMatchKeys: Set<string>): DiscoverSportChip[] {
-  const labels = getProfileSportDisplayLabels(profile);
   const list = profile.profile_sports ?? [];
-  const sharedByNormalizedLabel = new Map<string, boolean>();
+  const seen = new Set<string>();
+  const out: DiscoverSportChip[] = [];
   for (const ps of list) {
     const sp = ps.sports;
     if (!sp) continue;
     const display = ((sp.label ?? "").trim() || (sp.slug ?? "").trim() || "").trim();
     if (!display) continue;
-    const k = sportMatchKey(sp.slug ?? null, sp.label ?? null);
-    sharedByNormalizedLabel.set(display.toLowerCase(), myMatchKeys.has(k));
+    const dedupeKey = display.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const matchKey = sportMatchKey(sp.slug ?? null, sp.label ?? null);
+    const level = normalizeSportPracticeLevel(ps.level ?? null);
+    out.push({
+      label: display,
+      level,
+      levelKey: level ? sportPracticeLevelI18nKey(level) : null,
+      shared: myMatchKeys.has(matchKey),
+    });
   }
-  return labels.map((label) => ({
-    label,
-    shared: sharedByNormalizedLabel.get(label.toLowerCase()) === true,
-  }));
+  return out.sort((a, b) => a.label.localeCompare(b.label, "fr"));
 }
 
 type ProfileForSportChips = {
-  profile_sports?: { sports?: SportRow | null }[] | null;
+  profile_sports?: { level?: string | null; sports?: SportRow | null }[] | null;
 };
 
 export function getSharedSportLabelsForMatch(

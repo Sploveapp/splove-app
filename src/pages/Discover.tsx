@@ -73,6 +73,7 @@ import {
   type ProfilePhotoUrlFields,
 } from "../lib/profilePhotoDisplayUrl";
 import { logPhotoPublicProfileResolve } from "../lib/profilePhotoMainLog";
+import { resolveDiscoverSwipeGesture } from "../lib/discoverSwipeGesture";
 import { DiscoverProfileCard } from "../components/discover/DiscoverProfileCard";
 import { MoveProfileSkeleton } from "../components/discover/MoveProfileSkeleton";
 import { EmptyDiscoverState } from "../components/discover/EmptyDiscoverState";
@@ -173,6 +174,9 @@ import { coerceProfileHeightCm, formatHeightCmForDisplay } from "../lib/profileH
 import { deferSecondaryWork } from "../lib/deferSecondaryWork";
 import { usesNativeBottomNavigation, modalSheetHostClass, profileSheetClass } from "../lib/nativeBottomNav";
 import { clearOauthProcessingLock, isOauthProcessingLocked } from "../lib/oauthCallbackLock";
+import { DEFAULT_SPLOVE_PLAY, type SplovePlayType } from "../lib/splovePlay";
+import { useSplovePlayAccess } from "../hooks/useSplovePlayAccess";
+import type { SplovePlayAccess } from "../lib/splovePlayAccess";
 
 type Profile = {
   id: string;
@@ -211,6 +215,7 @@ type Profile = {
   sport_practice_type?: string | null;
   profile_sports?: {
     sport_id?: string | number | null;
+    level?: string | null;
     sports: { id?: string | number | null; label: string | null; slug?: string | null } | null;
   }[];
   profile_completed?: boolean | null;
@@ -1039,19 +1044,17 @@ const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
   );
 });
 
-const SWIPE_COMMIT_PX = 72;
-const TAP_MAX_PX = 15;
 const SWIPE_DAMP = 0.55;
 /** Colonnes stables sur `profiles` — pas de champs optionnels / premium (voir mergeOptionalProfileFields). */
 const DISCOVER_PROFILES_DETAIL_SELECT =
-  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, height_cm, portrait_url, fullbody_url, avatar_url, main_photo_url, city, latitude, longitude, profile_completed, is_photo_verified, photo_status, is_active_mode, sport_practice_type, profile_sports(sport_id, sports(id, label, slug))";
+  "id, first_name, birth_date, created_at, updated_at, last_active_at, gender, looking_for, intent, sport_feeling, sport_phrase, height_cm, portrait_url, fullbody_url, avatar_url, main_photo_url, city, latitude, longitude, profile_completed, onboarding_completed, onboarding_done, onboarding_sports_count, onboarding_sports_with_level_count, is_photo_verified, photo_status, is_active_mode, sport_practice_type, profile_sports(sport_id, level, sports(id, label, slug))";
 
 /** Profil viewer Discover : colonnes plates stables (sports via `profile_sports`, optionnels via merge). */
 const DISCOVER_VIEWER_ME_SELECT =
   "id, first_name, city, latitude, longitude, discovery_radius_km, birth_date, gender, looking_for, intent, profile_completed, onboarding_completed, onboarding_done, onboarding_sports_count, photo_status, portrait_url, fullbody_url, main_photo_url, sport_match_preference";
 
 const DISCOVER_CANDIDATE_HYDRATE_SELECT =
-  "id, birth_date, gender, looking_for, intent, height_cm, sport_match_preference, profile_sports(sport_id, sports(id, slug, label))";
+  "id, birth_date, gender, looking_for, intent, height_cm, sport_match_preference, onboarding_sports_count, onboarding_sports_with_level_count, profile_sports(sport_id, level, sports(id, slug, label))";
 
 /** Auth gate profile omet souvent les colonnes optionnelles — relecture ciblée si absent. */
 async function ensureViewerSportMatchPreferenceLoaded(
@@ -1198,7 +1201,7 @@ type DiscoverSwipeCardProps = {
   discoverMenuProfileId: string | null;
   setDiscoverMenuProfileId: Dispatch<SetStateAction<string | null>>;
   onPass: (id: string, decisionTimeMs?: number) => void;
-  onLike: (p: ProfileWithAffinity, decisionTimeMs?: number) => void;
+  onLike: (p: ProfileWithAffinity, decisionTimeMs?: number, playType?: SplovePlayType) => void;
   onOpenDetail: (p: ProfileWithAffinity) => void;
   onReport: (id: string) => void;
   onReportPhoto: (p: ProfileWithAffinity) => void;
@@ -1206,6 +1209,7 @@ type DiscoverSwipeCardProps = {
   restoredProfileId: string | null;
   /** Pile Discover — carte plein écran, focus émotionnel. */
   immersive?: boolean;
+  playAccess: SplovePlayAccess;
 };
 
 const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
@@ -1223,6 +1227,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   onBlock,
   restoredProfileId,
   immersive = false,
+  playAccess,
 }: DiscoverSwipeCardProps) {
   const photoState = useMoveProfilePrimaryPhoto(profile, "discover.swipe_card");
   const photoRaw = photoState.photoRaw;
@@ -1297,10 +1302,9 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
     startRef.current = null;
     setDragging(false);
 
-    const absX = Math.abs(totalDx);
-    const absY = Math.abs(totalDy);
+    const gesture = resolveDiscoverSwipeGesture(totalDx, totalDy);
 
-    if (absX < SWIPE_COMMIT_PX && absX <= TAP_MAX_PX && absY <= TAP_MAX_PX) {
+    if (gesture.kind === "tap") {
       setDx(0);
       swipeT0Ref.current = null;
       onOpenDetail(profile);
@@ -1316,7 +1320,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
       );
     })();
 
-    if (totalDx <= -SWIPE_COMMIT_PX) {
+    if (gesture.kind === "pass") {
       setDx(-Math.min(420, window.innerWidth));
       window.setTimeout(() => {
         setDx(0);
@@ -1324,7 +1328,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
       }, 190);
       return;
     }
-    if (totalDx >= SWIPE_COMMIT_PX) {
+    if (gesture.kind === "like_classic") {
       setDx(Math.min(420, window.innerWidth));
       window.setTimeout(() => {
         setDx(0);
@@ -1409,8 +1413,9 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
         onOpenDetail={() => onOpenDetail(profile)}
         onBlock={onBlock}
         onReportPhoto={() => onReportPhoto(profile)}
+        playAccess={playAccess}
         onPass={(decisionTimeMs) => onPass(profile.id, decisionTimeMs)}
-        onLike={(decisionTimeMs) => void onLike(profile, decisionTimeMs)}
+        onLike={(decisionTimeMs, playType) => void onLike(profile, decisionTimeMs, playType)}
         onReport={() => onReport(profile.id)}
         onPhotoError={movePhotoImgHandlers.onError}
         onPhotoLoad={movePhotoImgHandlers.onLoad}
@@ -1454,6 +1459,7 @@ export default function Discover() {
     isProfileLoading,
     refetchProfile,
   } = useAuth();
+  const playAccess = useSplovePlayAccess();
   const viewerMeetActive =
     Boolean(profile) &&
     (profile as { is_active_mode?: boolean | null }).is_active_mode === true;
@@ -2679,7 +2685,7 @@ export default function Discover() {
       }
 
       let raw: Profile[] = profilesFromRpc.filter((p) => hasFiniteDiscoverCoordinates(p));
-      if (!DISCOVER_BETA_SIMPLE_PIPELINE) {
+      {
         const before = raw;
         raw = raw.filter((p) => {
           const reasons = getDiscoverFeedIntegrityExclusionReasons(
@@ -2889,7 +2895,7 @@ export default function Discover() {
         }
       }
 
-      if (stage.length > 0 && !DISCOVER_BETA_SIMPLE_PIPELINE) {
+      if (stage.length > 0) {
         const hydrationIds = stage.map((p) => p.id).filter(Boolean);
         const { data: hydrationRows, error: hydrationErr } = await supabase
           .from("profiles")
@@ -3477,7 +3483,11 @@ export default function Discover() {
     });
   }
 
-  async function handleLike(profile: ProfileWithAffinity, decisionTimeMs = 0) {
+  async function handleLike(
+    profile: ProfileWithAffinity,
+    decisionTimeMs = 0,
+    playType: SplovePlayType = DEFAULT_SPLOVE_PLAY,
+  ) {
     if (!currentUserId) {
       console.error("[Discover] handleLike: no authenticated user");
       return;
@@ -3517,6 +3527,7 @@ export default function Discover() {
         setLikeActionError(null);
         const res = await supabase.rpc("create_like_and_get_result", {
           p_liked_id: profile.id,
+          ...(playType !== DEFAULT_SPLOVE_PLAY ? { p_play_type: playType } : {}),
         });
         data = res.data;
         rpcError = res.error;
@@ -4171,6 +4182,7 @@ export default function Discover() {
                       onReportPhoto={openReportPhotoFromDiscover}
                       onBlock={handleBlock}
                       restoredProfileId={restoredProfileId}
+                      playAccess={playAccess}
                       immersive
                     />
                   </div>

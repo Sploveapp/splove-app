@@ -5,6 +5,7 @@ import {
   isRemoteHttpImageUrl,
   shouldUseIosCapacitorImageFallback,
 } from "../lib/capacitorImageDataUrl";
+import { classifyImgSrcForIosDebug, logPhotoIosDebug } from "../lib/photoIosDebug";
 
 type Options = {
   /** signed URL, public URL, etc. — essayées dans l’ordre si la première échoue. */
@@ -116,6 +117,17 @@ export function useIosCapacitorImageDisplay(
     if (resolutionFailed) return null;
     return null;
   })();
+
+  useEffect(() => {
+    if (!iosEnabled || !displaySrc) return;
+    logPhotoIosDebug("final_img_src", {
+      screen: "ios_capacitor_image_display",
+      srcKind: classifyImgSrcForIosDebug(displaySrc),
+      usingDataUrl: Boolean(dataUrl),
+      isResolving,
+      resolutionFailed,
+    });
+  }, [iosEnabled, displaySrc, dataUrl, isResolving, resolutionFailed]);
 
   return {
     displaySrc,

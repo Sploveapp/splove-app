@@ -26,6 +26,7 @@ import {
   SploveUndoArrowIcon,
   type SploveIconRenderer,
 } from "./SplovePlusIcons";
+import { SPLOVE_PLAY_META, SPLOVE_PLAY_PREMIUM_TYPES } from "../../lib/splovePlay";
 
 export type SploveUiFeatureKey =
   | "visibility_boost"
@@ -698,6 +699,42 @@ export default function SplovePlusScreen() {
               : "Your chances improve when you take action."}
           </p>
         </header>
+
+        <section
+          aria-labelledby="splove-plus-plays-title"
+          className="rounded-2xl border border-white/10 bg-[#111118] p-4"
+        >
+          <h2 id="splove-plus-plays-title" className="text-xl font-bold uppercase tracking-[0.12em] text-white">
+            {t("splovePlay.plusProductTitle")}
+          </h2>
+          <p className="mt-2 text-[14px] leading-snug text-white/75">
+            {t("splovePlay.plusTagline")}
+          </p>
+          <ul className="mt-4 space-y-3">
+            {SPLOVE_PLAY_PREMIUM_TYPES.map((play) => {
+              const meta = SPLOVE_PLAY_META[play];
+              return (
+                <li key={play} className="text-[13px] leading-snug text-white/88">
+                  <p className="font-semibold text-white">{t(meta.titleKey)}</p>
+                  <p className="mt-0.5 text-white/72">{t(meta.lineKey)}</p>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-4 inline-flex rounded-full border border-[#ffb3bc]/40 bg-[#ff2433]/12 px-3 py-1 text-[11px] font-semibold text-[#ffd0d3]">
+            {t("splovePlay.plusIncludedInPlus")}
+          </p>
+          <p className="mt-4 text-2xl font-semibold leading-none text-white">
+            {t("splovePlay.plusPrice")}
+          </p>
+          <button
+            type="button"
+            onClick={openPackModal}
+            className="mt-4 w-full rounded-2xl bg-[#ff2433] py-3.5 text-sm font-semibold tracking-tight text-white shadow-[0_12px_28px_rgba(255,36,51,0.32)] transition-transform duration-150 ease-out active:scale-[0.98]"
+          >
+            {t("splovePlay.plusCta")}
+          </button>
+        </section>
 
         <section
           aria-labelledby="splove-plus-pack-title"

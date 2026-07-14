@@ -1,4 +1,5 @@
 import { isValidDiscoveryRadiusKm } from "../constants/discoverGeo";
+import { hasValidSportPracticeLevel } from "./sportPracticeLevel";
 
 /**
  * Contrat UX (référence produit, hors SQL) — champs typiquement exigés avant Discover / Move :
@@ -36,6 +37,8 @@ function isFiniteCoordinate(v: unknown): boolean {
 }
 
 const FIELD_TO_STEP: Record<string, number> = {
+  first_name: 1,
+  birth_date: 1,
   gender: 2,
   looking_for: 7,
   city: 4,
@@ -44,6 +47,7 @@ const FIELD_TO_STEP: Record<string, number> = {
   discovery_radius_km: 4,
   sport_match_preference: 6,
   profile_sports_rows: 5,
+  profile_sports_with_level: 5,
   portrait_or_main_photo: 9,
   fullbody_photo: 9,
   profile_completed: 11,
@@ -52,6 +56,8 @@ const FIELD_TO_STEP: Record<string, number> = {
 };
 
 const MISSING_FIELD_I18N: Record<string, string> = {
+  first_name: "onboarding_completion_field_first_name",
+  birth_date: "onboarding_completion_field_birth_date",
   gender: "onboarding_completion_field_gender",
   looking_for: "onboarding_completion_field_looking_for",
   city: "onboarding_completion_field_city",
@@ -60,6 +66,7 @@ const MISSING_FIELD_I18N: Record<string, string> = {
   discovery_radius_km: "onboarding_completion_field_radius",
   sport_match_preference: "onboarding_completion_field_sport_pref",
   profile_sports_rows: "onboarding_completion_field_sports",
+  profile_sports_with_level: "onboarding_completion_field_sport_level",
   portrait_or_main_photo: "onboarding_completion_field_photo",
   fullbody_photo: "onboarding_completion_field_photo_activity",
 };
@@ -81,6 +88,43 @@ function resolveSportsRowCount(
   return Number.isFinite(fromRow) && fromRow > 0 ? fromRow : 0;
 }
 
+function profileSportsRowsHaveValidLevels(profileRow: Record<string, unknown>): boolean {
+  const nested = profileRow.profile_sports;
+  if (!Array.isArray(nested) || nested.length === 0) return false;
+  return nested.every((row) => {
+    if (!row || typeof row !== "object") return false;
+    const level = (row as { level?: unknown }).level;
+    return hasValidSportPracticeLevel(typeof level === "string" ? level : null);
+  });
+}
+
+/** Au moins un sport avec niveau valide (compteurs BDD ou lignes jointes). */
+export function profileHasSportsWithValidLevels(
+  profileRow: Record<string, unknown>,
+  profileSportsRowCount = 0,
+): boolean {
+  const sportsCount = resolveSportsRowCount(profileRow, profileSportsRowCount);
+  if (sportsCount < 1) return false;
+
+  if (profileSportsRowsHaveValidLevels(profileRow)) return true;
+
+  const withLevel = Number(profileRow.onboarding_sports_with_level_count ?? 0);
+  const total = Number(profileRow.onboarding_sports_count ?? sportsCount);
+  return (
+    Number.isFinite(withLevel) &&
+    Number.isFinite(total) &&
+    withLevel >= 1 &&
+    total >= 1 &&
+    withLevel === total
+  );
+}
+
+function hasBirthDate(profileRow: Record<string, unknown>): boolean {
+  const raw = profileRow.birth_date;
+  if (typeof raw !== "string") return false;
+  return raw.trim().length > 0;
+}
+
 function auditResultFromGaps(missing: string[]): { ok: true } | { ok: false; missingFields: string[]; suggestedStep: number } {
   if (missing.length === 0) return { ok: true };
   const steps = missing.map((f) => FIELD_TO_STEP[f] ?? 11).filter(Number.isFinite);
@@ -96,6 +140,8 @@ export function collectProfileCriticalDataGaps(
   const missing: string[] = [];
   const sportsCount = resolveSportsRowCount(profileRow, profileSportsRowCount);
 
+  if (!hasTrimmedText(profileRow.first_name)) missing.push("first_name");
+  if (!hasBirthDate(profileRow)) missing.push("birth_date");
   if (!hasTrimmedText(profileRow.gender)) missing.push("gender");
   if (!hasTrimmedText(profileRow.looking_for)) missing.push("looking_for");
   if (!(typeof profileRow.city === "string" && profileRow.city.trim().length >= 2)) {
@@ -107,6 +153,9 @@ export function collectProfileCriticalDataGaps(
     missing.push("discovery_radius_km");
   }
   if (sportsCount < 1) missing.push("profile_sports_rows");
+  if (!profileHasSportsWithValidLevels(profileRow, profileSportsRowCount)) {
+    missing.push("profile_sports_with_level");
+  }
   if (!hasPortraitOrMainPhoto(profileRow)) missing.push("portrait_or_main_photo");
   if (!hasFullbodyPhoto(profileRow)) missing.push("fullbody_photo");
 
@@ -191,6 +240,9 @@ export function getDiscoverFeedIntegrityExclusionReasons(
 ): string[] {
   const reasons: string[] = [];
   for (const gap of collectProfileCriticalDataGaps(profileRow, profileSportsRowCount)) {
+    reasons.push(`missing_${gap}`);
+  }
+  for (const gap of collectOnboardingFlagGaps(profileRow)) {
     reasons.push(`missing_${gap}`);
   }
   if (profileRow.profile_completed === true && reasons.length > 0) {

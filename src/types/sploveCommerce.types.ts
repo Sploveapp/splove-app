@@ -5,6 +5,8 @@ export const SPLOVE_IAP_PRODUCT_IDS = {
   undo1: "splove_undo_1",
   secondChance1: "splove_second_chance_1",
   priorityMeet24h: "splove_priority_meet_24h",
+  /** Pack Play — achat unique (architecture IAP, non branché). */
+  playPack: "splove_play_pack",
 } as const;
 
 export type SploveIapProductId = (typeof SPLOVE_IAP_PRODUCT_IDS)[keyof typeof SPLOVE_IAP_PRODUCT_IDS];

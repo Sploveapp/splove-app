@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectProfilesFirstMatch } from "./profileSelect";
 import { OnboardingFlowLog } from "./onboardingFlowLog";
+import { profileRowHasCanonicalPhotos } from "./onboardingProfilePhotos";
 
 const ONBOARDING_COMPLETION_SELECT_TIERS = [
   "id, profile_completed, onboarding_completed, onboarding_done, accepted_terms_at, accepted_privacy_at, first_name, birth_date, gender, looking_for, portrait_url, fullbody_url, main_photo_url, onboarding_sports_count",
@@ -20,6 +21,19 @@ export async function ensureOnboardingCompletionInProfile(
   termsAcceptedAt: string,
   source: string,
 ): Promise<OnboardingCompletionWriteResult> {
+  const { data: photoRow, error: photoReadErr } = await client
+    .from("profiles")
+    .select("portrait_url, fullbody_url, main_photo_url, avatar_url")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (photoReadErr) {
+    return { row: null, error: photoReadErr };
+  }
+  if (!profileRowHasCanonicalPhotos((photoRow ?? null) as Record<string, unknown> | null)) {
+    return { row: null, error: { message: "photos_missing_for_completion" } };
+  }
+
   const payload: Record<string, unknown> = {
     id: userId,
     updated_at: new Date().toISOString(),

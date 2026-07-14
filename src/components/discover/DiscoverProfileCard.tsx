@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useRef,
   useState,
   type CSSProperties,
   type Dispatch,
@@ -16,30 +17,30 @@ import {
   IconHeartFilled,
   IconPass,
 } from "../ui/Icon";
-import { VerifiedBadge } from "../VerifiedBadge";
-import { isIdentityVerified } from "../../lib/profileVerification";
-import { hasSharedPlace } from "../../lib/sharedPlaceTeaser";
+import { DiscoverSportLevelRow } from "./DiscoverSportLevelDots";
 import {
-  filterDiscoverReasonsForDisplay,
-  intentLabelShort,
   softAreaHint,
 } from "../../lib/discoverCardCopy";
 import { buildDiscoverLocationLines } from "../../utils/geolocation";
 import { getDiscoverSportChips } from "../../lib/sportMatchGroups";
 import {
   getIRLPrompt,
-  getSharedSport,
-  shouldShowDiscoverActiveTodayBadge,
 } from "../../lib/discoverProfileCardHelpers";
-import { parseSportPracticePace, sportPracticePaceI18nKey } from "../../lib/sportPracticePace";
 import { useTranslation } from "../../i18n/useTranslation";
 import { formatHeightCmForDisplay } from "../../lib/profileHeightCm";
 import { formatCityDisplay } from "../../lib/formatCityDisplay";
 import { BLOCK_PROFILE_LINK_LABEL, REPORT_LINK_LABEL } from "../../constants/copy";
-import { SPLOVE_PROFILE_PHOTO_FALLBACK_SRC } from "../../lib/userMainPhoto";
 import { logPhotoDebug } from "../../hooks/useProfilePhotoDisplaySrc";
-import { SPLOVE_BOTTOM_CLEARANCE } from "../../constants/appBottomNavLayout";
-import { usesNativeBottomNavigation } from "../../lib/nativeBottomNav";
+import { classifyImgSrcForIosDebug, logPhotoIosDebug } from "../../lib/photoIosDebug";
+import { SplovePlayHeartPicker } from "./SplovePlayHeartPicker";
+import { SplovePlayIntroModal } from "./SplovePlayIntroModal";
+import type { SplovePlayAccess } from "../../lib/splovePlayAccess";
+import type { SplovePlayType } from "../../lib/splovePlay";
+import { useAuth } from "../../contexts/AuthContext";
+import {
+  hasDismissedSplovePlayIntro,
+  markSplovePlayIntroDismissed,
+} from "../../lib/splovePlayIntroStorage";
 
 export type DiscoverProfileCardModel = {
   id: string;
@@ -54,7 +55,7 @@ export type DiscoverProfileCardModel = {
   fullbody_url?: string | null;
   avatar_url?: string | null;
   main_photo_url?: string | null;
-  profile_sports?: { sports: { label: string | null; slug?: string | null } | null }[];
+  profile_sports?: { level?: string | null; sports: { label: string | null; slug?: string | null } | null }[];
   distanceKm?: number | null;
   /** Clés vivantes — alignées sur Discover.tsx */
   commonSportsCount: number;
@@ -92,8 +93,10 @@ export type DiscoverProfileCardProps = {
   onOpenDetail: () => void;
   onBlock: (id: string) => void | Promise<void>;
   onReportPhoto: () => void;
+  /** Droits Play (résolus une fois au niveau Discover). */
+  playAccess: SplovePlayAccess;
   onPass: (decisionTimeMs?: number) => void;
-  onLike: (decisionTimeMs?: number) => void | Promise<void>;
+  onLike: (decisionTimeMs?: number, playType?: SplovePlayType) => void | Promise<void>;
   onReport: () => void;
   /** Repli URL photo (public → signée) après échec `<img>`. */
   onPhotoError?: ReactEventHandler<HTMLImageElement>;
@@ -109,7 +112,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   mySportMatchKeys,
   photoUrl,
   photoPending = false,
-  showMeetingIntentBadge = true,
+  showMeetingIntentBadge: _showMeetingIntentBadge = true,
   discoverMenuProfileId,
   setDiscoverMenuProfileId,
   restoredProfileId,
@@ -119,9 +122,10 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   onSwipeZonePointerMove,
   onSwipeZonePointerUp,
   onSwipeZonePointerCancel,
-  onOpenDetail,
+  onOpenDetail: _onOpenDetail,
   onBlock,
   onReportPhoto,
+  playAccess,
   onPass,
   onLike,
   onReport,
@@ -130,13 +134,16 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   immersive = false,
 }: DiscoverProfileCardProps) {
   const { t } = useTranslation();
-  const nativeBottomNav = usesNativeBottomNavigation();
+  const { user } = useAuth();
+  const [heartPickerOpen, setHeartPickerOpen] = useState(false);
+  const [introOpen, setIntroOpen] = useState(false);
+  const [likeSending, setLikeSending] = useState(false);
+  const likePendingRef = useRef(false);
+  const playAnchorRef = useRef<HTMLButtonElement>(null);
+  const photoZoneRef = useRef<HTMLDivElement>(null);
+  const canUsePlayPicker = playAccess.canSendPremiumPlays;
+  const playPickerActive = heartPickerOpen && canUsePlayPicker;
   const age = useAge(profile.birth_date);
-  const showActiveTodayBadge = shouldShowDiscoverActiveTodayBadge(profile);
-  const sharedSportLabel = getSharedSport(profile, mySportMatchKeys);
-  const sharedSportBadge = sharedSportLabel != null && profile.commonSportsCount > 0;
-  const practicePaceKey = sportPracticePaceI18nKey(parseSportPracticePace(profile.sport_practice_type));
-  const showReadyToMoveBadge = profile.is_active_mode === true;
   const phraseTrim = (profile.sport_phrase ?? "").trim();
   const heightLine = formatHeightCmForDisplay(profile.height_cm ?? null);
   const profileCityPretty = formatCityDisplay(profile.city);
@@ -157,25 +164,112 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
     nearby: t("discover.nearby_area_hint"),
     twoSectors: t("discover.two_sectors_hint"),
   });
-  const discoverReasonsDisplay = filterDiscoverReasonsForDisplay(
-    profile.discover_reasons ?? [],
-    locLines.line1,
-  );
-  const intentShort = intentLabelShort(profile.intent, t);
-  const sportChips = getDiscoverSportChips(profile, mySportMatchKeys);
+  const sportChips = getDiscoverSportChips(profile, mySportMatchKeys).slice(0, 3);
   const strongAffinity = profile.commonSportsCount >= 2;
+  const distanceDisplay =
+    profile.distanceKm != null && Number.isFinite(profile.distanceKm)
+      ? locLines.line1
+      : locLines.line1 === t("discover.same_sector")
+        ? locLines.line1
+        : null;
+  const cityDisplay = locLines.line2 ?? profileCityPretty;
+  const shortBio = phraseTrim
+    ? phraseTrim.length > 120
+      ? `${phraseTrim.slice(0, 117)}…`
+      : phraseTrim
+    : irlLine;
+  const locationLine = (() => {
+    if (distanceDisplay && cityDisplay) return `📍 ${distanceDisplay} · ${cityDisplay}`;
+    if (distanceDisplay) return `📍 ${distanceDisplay}`;
+    if (cityDisplay) return `📍 ${cityDisplay}`;
+    if (areaHint) return areaHint;
+    return null;
+  })();
+  const descriptionLine = shortBio
+    ? shortBio.length > 140
+      ? `${shortBio.slice(0, 137)}…`
+      : shortBio
+    : null;
+  const hasDisplayPhoto = Boolean(photoUrl?.trim());
+  const hasStoredPhotoRef = Boolean(
+    profile.portrait_url?.trim() ||
+      profile.main_photo_url?.trim() ||
+      profile.avatar_url?.trim() ||
+      profile.fullbody_url?.trim(),
+  );
+  /** Profil avec ref photo mais URL pas encore résolue — évite le fallback prématuré. */
+  const awaitingPhotoResolve = !hasDisplayPhoto && (photoPending || hasStoredPhotoRef);
 
   const [tapFeedback, setTapFeedback] = useState<null | "pass" | "like">(null);
+
+  const triggerClassicLike = useCallback(() => {
+    if (likePendingRef.current) return;
+    likePendingRef.current = true;
+    setLikeSending(true);
+    setTapFeedback("like");
+    window.setTimeout(() => setTapFeedback(null), 320);
+    void Promise.resolve(onLike(0)).finally(() => {
+      likePendingRef.current = false;
+      setLikeSending(false);
+    });
+  }, [onLike]);
+
+  const dismissPlayIntro = useCallback(() => {
+    markSplovePlayIntroDismissed(user?.id);
+    setIntroOpen(false);
+  }, [user?.id]);
+
+  /** Bouton flottant sur la photo — Play uniquement (sans Like classique). */
+  const handleFloatingPlayClick = useCallback(() => {
+    if (likePendingRef.current) return;
+
+    if (canUsePlayPicker) {
+      setHeartPickerOpen((open) => !open);
+      return;
+    }
+
+    if (user?.id && !hasDismissedSplovePlayIntro(user.id)) {
+      setIntroOpen(true);
+    }
+  }, [canUsePlayPicker, user?.id]);
+
+  const closeHeartPicker = useCallback(() => {
+    setHeartPickerOpen(false);
+  }, []);
+
   const triggerPass = useCallback(() => {
     setTapFeedback("pass");
     window.setTimeout(() => setTapFeedback(null), 320);
     onPass(0);
   }, [onPass]);
-  const triggerLike = useCallback(() => {
-    setTapFeedback("like");
-    window.setTimeout(() => setTapFeedback(null), 320);
-    void onLike(0);
-  }, [onLike]);
+
+  const handlePlaySelect = useCallback(
+    (playType: SplovePlayType) => {
+      if (likePendingRef.current) return;
+      setHeartPickerOpen(false);
+      likePendingRef.current = true;
+      setLikeSending(true);
+      setTapFeedback("like");
+      window.setTimeout(() => setTapFeedback(null), 320);
+      void Promise.resolve(onLike(0, playType)).finally(() => {
+        likePendingRef.current = false;
+        setLikeSending(false);
+      });
+    },
+    [onLike],
+  );
+
+  const guardSwipeWhenPlayPicker = useCallback(
+    (handler: (e: PointerEvent<HTMLDivElement>) => void) =>
+      (e: PointerEvent<HTMLDivElement>) => {
+        if (playPickerActive) {
+          e.stopPropagation();
+          return;
+        }
+        handler(e);
+      },
+    [playPickerActive],
+  );
 
   const passPreview = dx < -18;
   const likePreview = dx > 18;
@@ -218,8 +312,24 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
     profile.first_name,
   ]);
 
+  useEffect(() => {
+    if (!photoUrl) return;
+    logPhotoIosDebug("final_img_src", {
+      screen: "Discover",
+      profileId: profile.id,
+      srcKind: classifyImgSrcForIosDebug(photoUrl),
+      phase: "card_mount",
+    });
+  }, [photoUrl, profile.id]);
+
   const handlePhotoLoad: ReactEventHandler<HTMLImageElement> = useCallback(
     (event) => {
+      logPhotoIosDebug("img_onload", {
+        screen: "Discover",
+        profileId: profile.id,
+        srcKind: classifyImgSrcForIosDebug(photoUrl || event.currentTarget.currentSrc),
+        naturalWidth: event.currentTarget.naturalWidth,
+      });
       logPhotoDebug("screen.img_onload", {
         screen: "Discover",
         profileId: profile.id,
@@ -255,6 +365,12 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
 
   const handlePhotoError: ReactEventHandler<HTMLImageElement> = useCallback(
     (event) => {
+      logPhotoIosDebug("img_onerror", {
+        screen: "Discover",
+        profileId: profile.id,
+        srcKind: classifyImgSrcForIosDebug(photoUrl || event.currentTarget.currentSrc),
+        imgSrcAttr: event.currentTarget.currentSrc?.slice(0, 120) ?? null,
+      });
       logPhotoDebug("screen.img_onerror", {
         screen: "Discover",
         profileId: profile.id,
@@ -292,354 +408,277 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   return (
     <>
       <div
-        className={
-          immersive
-            ? nativeBottomNav
-              ? "relative min-h-0 w-full flex-[1] basis-0 cursor-grab touch-none bg-zinc-950 active:cursor-grabbing"
-              : "relative min-h-[min(72dvh,620px)] w-full flex-[1] basis-0 cursor-grab touch-none bg-zinc-950 active:cursor-grabbing sm:min-h-[min(68dvh,640px)]"
-            : "relative min-h-[min(64vh,480px)] w-full flex-[1] basis-0 cursor-grab touch-none bg-zinc-950 active:cursor-grabbing sm:min-h-[min(58vh,520px)]"
-        }
-        style={swipeZoneStyle}
-        onPointerDown={onSwipeZonePointerDown}
-        onPointerMove={onSwipeZonePointerMove}
-        onPointerUp={onSwipeZonePointerUp}
-        onPointerCancel={onSwipeZonePointerCancel}
+        className="relative flex h-full min-h-0 w-full flex-1 flex-col bg-app-card cursor-grab active:cursor-grabbing"
+        style={{
+          ...swipeZoneStyle,
+          ...(playPickerActive ? { touchAction: "none" } : undefined),
+        }}
+        onPointerDown={guardSwipeWhenPlayPicker(onSwipeZonePointerDown)}
+        onPointerMove={guardSwipeWhenPlayPicker(onSwipeZonePointerMove)}
+        onPointerUp={guardSwipeWhenPlayPicker(onSwipeZonePointerUp)}
+        onPointerCancel={guardSwipeWhenPlayPicker(onSwipeZonePointerCancel)}
       >
-        {photoUrl ? (
-          <img
-            src={photoUrl}
-            alt={
-              profile.first_name
-                ? t("discover.profileCard_photoAlt", { name: profile.first_name })
-                : t("profile_photo")
-            }
-            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-            loading="eager"
-            decoding="async"
-            onLoad={handlePhotoLoad}
-            onError={handlePhotoError}
-          />
-        ) : photoPending ? (
-          <div
-            className="absolute inset-0 bg-zinc-900"
-            style={{ background: "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)" }}
-            aria-busy
-            aria-label={t("profile_photo")}
-          />
-        ) : (
-          <button
-            type="button"
-            className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-zinc-900"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenDetail();
-            }}
-          >
-            <img
-              src={SPLOVE_PROFILE_PHOTO_FALLBACK_SRC}
-              alt=""
-              aria-hidden
-              className="h-14 w-14 object-contain opacity-70"
-            />
-          </button>
-        )}
+        {/* ── 1. PHOTO ── */}
         <div
-          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/15 via-transparent to-black/[0.93]"
-          aria-hidden
-        />
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-[42%] bg-gradient-to-t from-black/85 via-black/40 to-transparent"
-          aria-hidden
-        />
-        <AnimatePresence>
-          {tapFeedback === "pass" ? (
-            <motion.div
-              key="tap-pass"
-              initial={{ opacity: 0, scale: 0.92 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 1.04 }}
-              transition={{ duration: 0.22 }}
-              className="pointer-events-none absolute inset-0 z-[15] flex items-center justify-center bg-rose-600/25"
-            >
-              <span className="rotate-[-12deg] rounded-xl border-4 border-white/90 px-4 py-2 text-xl font-black uppercase tracking-widest text-white drop-shadow-lg">
-                {t("discover.profileCard_passStamp")}
-              </span>
-            </motion.div>
-          ) : null}
-          {tapFeedback === "like" ? (
-            <motion.div
-              key="tap-like"
-              initial={{ opacity: 0, scale: 0.88 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 1.06 }}
-              transition={{ duration: 0.24 }}
-              className="pointer-events-none absolute inset-0 z-[15] flex items-center justify-center bg-[#FF1E2D]/16"
-            >
-              <motion.div
-                initial={{ scale: 0.5 }}
-                animate={{ scale: [0.92, 1.12, 1] }}
-                transition={{ duration: 0.35 }}
-                className="flex h-24 w-24 items-center justify-center rounded-full shadow-[0_0_40px_rgba(255,30,45,0.45)] ring-4 ring-white/90"
-                style={{ background: BRAND_BG }}
-              >
-                <IconHeartFilled size={44} color={TEXT_ON_BRAND} />
-              </motion.div>
-            </motion.div>
-          ) : null}
-        </AnimatePresence>
-
-        {swipeNopeOpacity > 0.04 ? (
-          <div
-            className="pointer-events-none absolute inset-0 z-[14] flex items-center justify-center bg-rose-500/20 transition-opacity duration-75"
-            style={{ opacity: swipeNopeOpacity }}
-            aria-hidden
-          >
-            <span className="rotate-[-14deg] text-2xl font-black uppercase tracking-widest text-white/95 drop-shadow-lg">
-              {t("discover.profileCard_swipePass")}
-            </span>
-          </div>
-        ) : null}
-        {swipeLikeOpacity > 0.04 ? (
-          <div
-            className="pointer-events-none absolute inset-0 z-[14] flex items-center justify-center bg-[#FF1E2D]/14 transition-opacity duration-75"
-            style={{ opacity: swipeLikeOpacity }}
-            aria-hidden
-          >
-            <span className="rotate-[12deg] text-2xl font-black uppercase tracking-widest text-white drop-shadow-[0_0_18px_rgba(255,30,45,0.75)]">
-              {t("discover.profileCard_swipeLike")}
-            </span>
-          </div>
-        ) : null}
-
-        {restoredProfileId === profile.id ? (
-          <div className="pointer-events-none absolute left-1/2 top-3 z-[18] -translate-x-1/2 rounded-full bg-emerald-600/95 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-md backdrop-blur-sm">
-            {t("discover_second_chance_badge")}
-          </div>
-        ) : null}
-        {strongAffinity ? (
-          <div
-            className={`pointer-events-none absolute left-3 z-[18] rounded-full bg-[#FF1E2D]/88 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-md backdrop-blur-sm ${
-              restoredProfileId === profile.id ? "top-12" : "top-3"
-            }`}
-          >
-            {t("discover.profileCard_multiSports")}
-          </div>
-        ) : null}
-
-        <div className="absolute right-2 top-2 z-[20]" data-discover-menu-root>
-          <button
-            type="button"
-            aria-haspopup="menu"
-            aria-expanded={discoverMenuProfileId === profile.id}
-            aria-label={t("more_actions")}
-            onPointerDown={(ev) => ev.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              setDiscoverMenuProfileId((id) => (id === profile.id ? null : profile.id));
-            }}
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-lg font-bold leading-none text-white backdrop-blur-sm ring-1 ring-white/25 hover:bg-black/55"
-          >
-            ⋯
-          </button>
-          {discoverMenuProfileId === profile.id ? (
-            <div
-              role="menu"
-              className="absolute right-0 mt-1 min-w-[10rem] overflow-hidden rounded-xl border border-app-border/90 bg-app-card py-1 shadow-lg"
-            >
-              <button
-                type="button"
-                role="menuitem"
-                className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium text-app-text hover:bg-app-border"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => void onBlock(profile.id)}
-              >
-                <IconBanSoft size={18} className="shrink-0 text-app-muted" />
-                {BLOCK_PROFILE_LINK_LABEL}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium text-app-text hover:bg-app-border"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => {
-                  setDiscoverMenuProfileId(null);
-                  onReportPhoto();
-                }}
-              >
-                {t("report_photo")}
-              </button>
-            </div>
-          ) : null}
-        </div>
-
-        <div
-          className={
-            immersive && nativeBottomNav
-              ? "pointer-events-none absolute inset-x-0 bottom-0 z-[10] pt-[max(6.25rem,22vh)]"
-              : "pointer-events-none absolute inset-x-0 bottom-0 z-[10] pb-[max(0.65rem,env(safe-area-inset-bottom))] pt-[max(9.25rem,30vh)]"
-          }
-          style={
-            immersive && nativeBottomNav
-              ? ({ paddingBottom: SPLOVE_BOTTOM_CLEARANCE } satisfies CSSProperties)
-              : undefined
-          }
+          ref={photoZoneRef}
+          className="relative w-full shrink-0 overflow-hidden rounded-t-[28px] bg-zinc-900 aspect-[4/3] max-h-[360px]"
         >
-          <div className="px-5">
-            {sharedSportLabel ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-[16px] font-bold leading-snug text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.75)] sm:text-[17px]">
-                  {t("discover.profileCard_commonSportLead", { sport: sharedSportLabel })}
-                </p>
-                {practicePaceKey ? (
-                  <span className="shrink-0 rounded-full bg-white/12 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white/92 ring-1 ring-[#FF1E2D]/35 backdrop-blur-sm">
-                    {t(practicePaceKey)}
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-            {sportChips.length > 0 ? (
-              <div className="mt-2.5 flex max-h-[5rem] flex-wrap gap-1.5 overflow-hidden">
-                {sportChips.map(({ label: sportLabel, shared }) => (
-                  <span
-                    key={sportLabel}
-                    className={
-                      shared
-                        ? "rounded-full bg-[#FF1E2D]/45 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-white ring-1 ring-white/25 backdrop-blur-sm"
-                        : "rounded-full bg-white/14 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-white/92 ring-1 ring-white/20 backdrop-blur-sm"
-                    }
-                  >
-                    {sportLabel}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="mt-3 flex flex-wrap gap-2 px-5">
-            {showActiveTodayBadge ? (
-              <span className="rounded-full bg-white/14 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white/95 ring-1 ring-white/25 backdrop-blur-sm">
-                {t("discover.profileCard_badgeActiveToday")}
-              </span>
-            ) : null}
-            {sharedSportBadge ? (
-              <span className="rounded-full bg-[#FF1E2D]/35 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white ring-1 ring-white/35 backdrop-blur-sm">
-                {t("discover.profileCard_badgeSharedSport")}
-              </span>
-            ) : null}
-            {showReadyToMoveBadge ? (
-              <span className="rounded-full bg-amber-400/25 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-50 ring-1 ring-amber-200/50 backdrop-blur-sm">
-                {t("discover.profileCard_badgeReadyToMove")}
-              </span>
-            ) : null}
-            {hasSharedPlace(profile) ? (
-              <span className="rounded-full bg-white/12 px-2 py-0.5 text-[9px] font-semibold tracking-wide text-white/95 ring-1 ring-amber-200/40 backdrop-blur-sm">
-                {t("discover.profileCard_sharedSpot")}
-              </span>
-            ) : null}
-            {isIdentityVerified(profile) ? (
-              <span className="pointer-events-none inline-flex">
-                <VerifiedBadge
-                  variant="compact"
-                  className="!bg-white/95 !normal-case !tracking-normal !text-zinc-900 !ring-zinc-400/35"
-                />
-              </span>
-            ) : null}
-          </div>
-
-          <div className="mt-3 px-5">
-            <div className="flex flex-wrap items-end gap-2.5">
-              <h2 className="text-[1.85rem] font-extrabold leading-[1.05] tracking-tight text-white drop-shadow-[0_2px_14px_rgba(0,0,0,0.65)] sm:text-[2.05rem]">
-                {profile.first_name ?? t("unnamed_profile")}
-                {age != null ? <span className="font-semibold text-white/88">, {age}</span> : null}
-                {heightLine ? (
-                  <span className="text-[0.92rem] font-semibold text-white/72 sm:text-[0.98rem]">
-                    {" "}
-                    · {heightLine}
-                  </span>
-                ) : null}
-              </h2>
-              {showMeetingIntentBadge && intentShort ? (
-                <span className="mb-0.5 rounded-full bg-white/12 px-2.5 py-1 text-[11px] font-medium leading-tight text-white/92 ring-1 ring-white/22">
-                  {intentShort}
-                </span>
-              ) : null}
+          {hasDisplayPhoto ? (
+            <img
+              src={photoUrl}
+              alt={
+                profile.first_name
+                  ? t("discover.profileCard_photoAlt", { name: profile.first_name })
+                  : t("profile_photo")
+              }
+              className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center"
+              loading="eager"
+              decoding="async"
+              onLoad={handlePhotoLoad}
+              onError={handlePhotoError}
+            />
+          ) : awaitingPhotoResolve ? (
+            <div
+              className="absolute inset-0 splove-skeleton-breathe bg-zinc-900"
+              style={{ background: "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)" }}
+              aria-busy
+              aria-label={t("profile_photo")}
+            />
+          ) : (
+            <div
+              className="absolute inset-0 flex items-center justify-center bg-zinc-900"
+              style={{ background: "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)" }}
+              aria-label={t("profile_photo")}
+            >
+              <span className="text-sm font-medium text-white/40">{t("profile_photo")}</span>
             </div>
-            {discoverReasonsDisplay.length > 0 ? (
-              <p className="mt-1.5 line-clamp-2 text-[10px] font-medium uppercase tracking-wide text-white/52">
-                {discoverReasonsDisplay.join(" · ")}
-              </p>
+          )}
+
+          <AnimatePresence>
+            {tapFeedback === "pass" ? (
+              <motion.div
+                key="tap-pass"
+                initial={{ opacity: 0, scale: 0.92 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 1.04 }}
+                transition={{ duration: 0.22 }}
+                className="pointer-events-none absolute inset-0 z-[15] flex items-center justify-center bg-rose-600/25"
+              >
+                <span className="rotate-[-12deg] rounded-xl border-4 border-white/90 px-4 py-2 text-xl font-black uppercase tracking-widest text-white drop-shadow-lg">
+                  {t("discover.profileCard_passStamp")}
+                </span>
+              </motion.div>
             ) : null}
-            {locLines.line1 || locLines.line2 ? (
-              <div className="mt-2 space-y-0.5">
-                {locLines.line1 ? (
-                  <p className="text-[13px] font-semibold text-white/90 drop-shadow-sm">{locLines.line1}</p>
-                ) : null}
-                {locLines.line2 ? (
-                  <p className="text-[12px] font-medium text-white/58 drop-shadow-sm">{locLines.line2}</p>
-                ) : null}
+            {tapFeedback === "like" ? (
+              <motion.div
+                key="tap-like"
+                initial={{ opacity: 0, scale: 0.88 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 1.06 }}
+                transition={{ duration: 0.24 }}
+                className="pointer-events-none absolute inset-0 z-[15] flex items-center justify-center bg-[#FF1E2D]/16"
+              >
+                <motion.div
+                  initial={{ scale: 0.5 }}
+                  animate={{ scale: [0.92, 1.12, 1] }}
+                  transition={{ duration: 0.35 }}
+                  className="flex h-24 w-24 items-center justify-center rounded-full shadow-[0_0_40px_rgba(255,30,45,0.45)] ring-4 ring-white/90"
+                  style={{ background: BRAND_BG }}
+                >
+                  <IconHeartFilled size={44} color={TEXT_ON_BRAND} />
+                </motion.div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+
+          {swipeNopeOpacity > 0.04 ? (
+            <div
+              className="pointer-events-none absolute inset-0 z-[14] flex items-center justify-center bg-rose-500/20 transition-opacity duration-75"
+              style={{ opacity: swipeNopeOpacity }}
+              aria-hidden
+            >
+              <span className="rotate-[-14deg] text-2xl font-black uppercase tracking-widest text-white/95 drop-shadow-lg">
+                {t("discover.profileCard_swipePass")}
+              </span>
+            </div>
+          ) : null}
+          {swipeLikeOpacity > 0.04 ? (
+            <div
+              className="pointer-events-none absolute inset-0 z-[14] flex items-center justify-center bg-[#FF1E2D]/14 transition-opacity duration-75"
+              style={{ opacity: swipeLikeOpacity }}
+              aria-hidden
+            >
+              <span className="rotate-[12deg] text-2xl font-black uppercase tracking-widest text-white drop-shadow-[0_0_18px_rgba(255,30,45,0.75)]">
+                {t("discover.profileCard_swipeLike")}
+              </span>
+            </div>
+          ) : null}
+
+          {restoredProfileId === profile.id ? (
+            <div className="pointer-events-none absolute left-1/2 top-3 z-[18] -translate-x-1/2 rounded-full bg-emerald-600/95 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-md backdrop-blur-sm">
+              {t("discover_second_chance_badge")}
+            </div>
+          ) : null}
+          {strongAffinity ? (
+            <div
+              className={`pointer-events-none absolute left-3 z-[18] rounded-full bg-[#FF1E2D]/88 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white shadow-md backdrop-blur-sm ${
+                restoredProfileId === profile.id ? "top-12" : "top-3"
+              }`}
+            >
+              {t("discover.profileCard_multiSports")}
+            </div>
+          ) : null}
+
+          <div className="absolute right-3 top-3 z-[20]" data-discover-menu-root>
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={discoverMenuProfileId === profile.id}
+              aria-label={t("more_actions")}
+              onPointerDown={(ev) => ev.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setDiscoverMenuProfileId((id) => (id === profile.id ? null : profile.id));
+              }}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-lg font-bold leading-none text-white backdrop-blur-sm ring-1 ring-white/25"
+            >
+              ⋯
+            </button>
+            {discoverMenuProfileId === profile.id ? (
+              <div
+                role="menu"
+                className="absolute right-0 mt-1 min-w-[10rem] overflow-hidden rounded-xl border border-app-border/90 bg-app-card py-1 shadow-lg"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium text-app-text hover:bg-app-border"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => void onBlock(profile.id)}
+                >
+                  <IconBanSoft size={18} className="shrink-0 text-app-muted" />
+                  {BLOCK_PROFILE_LINK_LABEL}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm font-medium text-app-text hover:bg-app-border"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    setDiscoverMenuProfileId(null);
+                    onReportPhoto();
+                  }}
+                >
+                  {t("report_photo")}
+                </button>
               </div>
-            ) : areaHint ? (
-              <p className="mt-2 text-[12px] font-medium text-white/75 drop-shadow-sm">{areaHint}</p>
-            ) : profileCityPretty ? (
-              <p className="mt-2 text-[12px] font-medium text-white/65 drop-shadow-sm">
-                {t("discover.zone_hint")} · {profileCityPretty}
-              </p>
             ) : null}
-            {phraseTrim ? (
-              <div className="mt-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-white/48">{t("discover.momentWish")}</p>
-                <p className="mt-0.5 line-clamp-2 text-[14px] font-medium leading-snug text-white drop-shadow-sm">
-                  {phraseTrim.length > 120 ? `${phraseTrim.slice(0, 117)}…` : phraseTrim}
-                </p>
-              </div>
-            ) : null}
-            <p className="mt-2 line-clamp-3 text-[14px] font-medium leading-snug text-white/95 drop-shadow-md sm:text-[15px]">
-              {irlLine}
-            </p>
           </div>
 
-          <div
-            className={`pointer-events-auto relative z-[19] flex items-center justify-center gap-14 px-6 sm:gap-16 sm:px-9 ${
-              immersive && nativeBottomNav ? "mt-3" : "mt-4 sm:mt-6"
-            }`}
-            style={
-              immersive && nativeBottomNav
-                ? ({ marginBottom: 30 } satisfies CSSProperties)
-                : undefined
-            }
-          >
-            <motion.button
-              type="button"
-              whileTap={{ scale: 0.88 }}
-              transition={{ type: "spring", stiffness: 520, damping: 28 }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                triggerPass();
-              }}
-              className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-white/35 bg-zinc-900/75 text-white shadow-lg backdrop-blur-md ring-1 ring-white/15"
-              aria-label={t("pass")}
-            >
-              <IconPass size={24} />
-            </motion.button>
-            <motion.button
-              type="button"
-              whileTap={{ scale: 0.88 }}
-              transition={{ type: "spring", stiffness: 460, damping: 24 }}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                triggerLike();
-              }}
-              className="flex h-[3.65rem] w-[3.65rem] shrink-0 items-center justify-center rounded-full shadow-[0_4px_24px_rgba(255,30,45,0.45)] ring-2 ring-white/40"
-              style={{ background: BRAND_BG }}
-              aria-label={t("like")}
-            >
-              <IconHeartFilled size={30} color={TEXT_ON_BRAND} />
-            </motion.button>
+          <div className="absolute inset-x-0 bottom-2 z-30 grid grid-cols-3 items-end px-5 pointer-events-none">
+            <div className="pointer-events-auto justify-self-start">
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.88 }}
+                transition={{ type: "spring", stiffness: 520, damping: 28 }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  triggerPass();
+                }}
+                className="flex h-[3.625rem] w-[3.625rem] shrink-0 items-center justify-center rounded-full border-2 border-white/35 bg-zinc-900/75 text-white shadow-lg backdrop-blur-md ring-1 ring-white/15"
+                aria-label={t("pass")}
+              >
+                <IconPass size={24} />
+              </motion.button>
+            </div>
+
+            <div className="pointer-events-auto justify-self-center">
+              <motion.button
+                ref={playAnchorRef}
+                type="button"
+                aria-label={t("splovePlay.openSheet")}
+                disabled={likeSending}
+                whileTap={{ scale: 0.88 }}
+                transition={{ type: "spring", stiffness: 520, damping: 28 }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleFloatingPlayClick();
+                }}
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full shadow-[0_4px_14px_rgba(175,82,222,0.5)] ring-1 ring-white/25 disabled:opacity-60"
+                style={{ background: "#AF52DE" }}
+              >
+                <IconHeartFilled size={18} color="#FFFFFF" />
+              </motion.button>
+            </div>
+
+            <div className="pointer-events-auto justify-self-end">
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.88 }}
+                transition={{ type: "spring", stiffness: 520, damping: 28 }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  triggerClassicLike();
+                }}
+                disabled={likeSending}
+                className="relative z-[20] flex h-[3.625rem] w-[3.625rem] shrink-0 items-center justify-center rounded-full shadow-[0_4px_24px_rgba(255,30,45,0.45)] ring-2 ring-white/40 disabled:opacity-60"
+                style={{ background: BRAND_BG }}
+                aria-label={t("like")}
+              >
+                <IconHeartFilled size={30} color={TEXT_ON_BRAND} />
+              </motion.button>
+            </div>
           </div>
+
+          <SplovePlayHeartPicker
+            open={playPickerActive}
+            disabled={likeSending}
+            anchorRef={playAnchorRef}
+            containerRef={photoZoneRef}
+            onClose={closeHeartPicker}
+            onSelect={handlePlaySelect}
+          />
         </div>
+
+        {/* ── 2. INFORMATIONS ── */}
+        <section className="w-full shrink-0 bg-app-card px-5 pt-4">
+          <h2 className="text-[1.3rem] font-extrabold leading-tight tracking-tight text-app-text">
+            {profile.first_name ?? t("unnamed_profile")}
+            {age != null ? <span className="font-semibold">, {age}</span> : null}
+            {heightLine ? (
+              <span className="text-[0.95rem] font-semibold text-app-muted"> · {heightLine}</span>
+            ) : null}
+          </h2>
+
+          {locationLine ? (
+            <p className="mt-2 text-[13px] font-medium leading-snug text-app-muted">{locationLine}</p>
+          ) : null}
+
+          {descriptionLine ? (
+            <p className="mt-2 text-[14px] font-medium leading-snug text-app-text">
+              &ldquo;{descriptionLine}&rdquo;
+            </p>
+          ) : null}
+        </section>
+
+        {/* ── 3. SPORTS ── */}
+        {sportChips.length > 0 ? (
+          <section className="w-full shrink-0 bg-app-card px-5 pt-4">
+            <div className="space-y-2.5">
+              {sportChips.map(({ label: sportLabel, level }) => (
+                <DiscoverSportLevelRow
+                  key={sportLabel}
+                  label={sportLabel}
+                  slug={slugForSportLabel(profile, sportLabel)}
+                  level={level}
+                />
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
 
       {!immersive ? (
@@ -653,9 +692,23 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
           </button>
         </div>
       ) : null}
+
+      <SplovePlayIntroModal open={introOpen} onDismiss={dismissPlayIntro} />
     </>
   );
 });
+
+function slugForSportLabel(profile: DiscoverProfileCardModel, label: string): string | null {
+  for (const ps of profile.profile_sports ?? []) {
+    const sp = ps.sports;
+    if (!sp) continue;
+    const display = ((sp.label ?? "").trim() || (sp.slug ?? "").trim()).trim();
+    if (display.toLowerCase() === label.toLowerCase()) {
+      return sp.slug ?? null;
+    }
+  }
+  return null;
+}
 
 function useAge(birth_date: string | null | undefined): number | null {
   if (!birth_date) return null;

@@ -36,6 +36,8 @@ export const FeatureKey = {
   secondChance: "second_chance",
   secondChanceReturn: "second_chance_return",
   undoSwipeReturn: "undo_swipe_return",
+  /** Pack Play — achat unique (monétisation future). */
+  playPack: "play_pack",
 } as const;
 
 export type FeatureKeyId = (typeof FeatureKey)[keyof typeof FeatureKey];

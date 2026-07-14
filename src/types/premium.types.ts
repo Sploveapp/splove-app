@@ -61,6 +61,8 @@ export type LikeReceived = {
   liker_id: string;
   liked_id: string;
   created_at: string;
+  /** SPLove Play reçu (`likes.play_type`). */
+  play_type?: string | null;
   is_match?: boolean;
   match_id?: string | null;
   conversation_id?: string | null;
@@ -76,6 +78,7 @@ export type ProfileInLikesYou = {
   preferred_age_max?: number | null;
   main_photo_url: string | null;
   portrait_url?: string | null;
+  avatar_url?: string | null;
   fullbody_url?: string | null;
   /** Aligné Discover / `isPreferenceCompatible`. */
   gender?: string | null;

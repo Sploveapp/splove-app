@@ -5,6 +5,12 @@ import {
   invalidateMoveProfilePhotoDisplay,
   subscribeMoveProfilePhotoDisplay,
 } from "../lib/moveProfilePhotoCache";
+import { classifyImgSrcForIosDebug, logPhotoIosDebug } from "../lib/photoIosDebug";
+import { logDiscoverProfilePhotoDiag } from "../lib/discoverProfilePhotoDiag";
+import {
+  profilePhotoObjectPathFromStoredValue,
+  shouldPassThroughProfilePhotoDisplayUrl,
+} from "../lib/profilePhotoSignedUrl";
 
 type MovePhotoDisplayState = {
   displaySrc: string | null;
@@ -52,6 +58,12 @@ export function useMoveProfilePhotoDisplay(
 
     const unsub = subscribeMoveProfilePhotoDisplay(ref, (src) => {
       if (!src) return;
+      logPhotoIosDebug("final_img_src", {
+        screen: logSource,
+        profileId: profileId ?? null,
+        srcKind: classifyImgSrcForIosDebug(src),
+        phase: "cache_notify",
+      });
       setDisplaySrc(src);
       setIsPending(false);
       setResolutionFailed(false);
@@ -61,7 +73,23 @@ export function useMoveProfilePhotoDisplay(
       profileId: profileId ?? null,
       logSource,
     }).then((src) => {
-      if (!src) {
+      if (src) {
+        logPhotoIosDebug("final_img_src", {
+          screen: logSource,
+          profileId: profileId ?? null,
+          srcKind: classifyImgSrcForIosDebug(src),
+          phase: "ensure_resolved",
+        });
+      } else {
+        logDiscoverProfilePhotoDiag({
+          phase: "ensure_display_failed",
+          profileId,
+          logSource,
+          storedRef: ref,
+          objectPath: profilePhotoObjectPathFromStoredValue(ref),
+          passThrough: shouldPassThroughProfilePhotoDisplayUrl(ref),
+          error: "ensureMoveProfilePhotoDisplay_returned_null",
+        });
         setResolutionFailed(true);
         setIsPending(false);
       }
@@ -72,14 +100,34 @@ export function useMoveProfilePhotoDisplay(
 
   const onImageLoad = useCallback(() => {
     setResolutionFailed(false);
-  }, []);
+    logPhotoIosDebug("img_onload", {
+      screen: logSource,
+      profileId: profileId ?? null,
+      srcKind: classifyImgSrcForIosDebug(displaySrc),
+    });
+  }, [displaySrc, logSource, profileId]);
 
   const onImageError = useCallback(() => {
     if (!ref) return;
+    logDiscoverProfilePhotoDiag({
+      phase: "move_hook_img_onerror",
+      profileId,
+      logSource,
+      storedRef: ref,
+      displaySrc: displaySrc ?? null,
+      error: "img_element_onerror_after_invalidate",
+      extra: { srcKind: classifyImgSrcForIosDebug(displaySrc) },
+    });
+    logPhotoIosDebug("img_onerror", {
+      screen: logSource,
+      profileId: profileId ?? null,
+      srcKind: classifyImgSrcForIosDebug(displaySrc),
+      storedRef: ref.slice(0, 96),
+    });
     invalidateMoveProfilePhotoDisplay(ref);
     setResolutionFailed(true);
     setIsPending(false);
-  }, [ref]);
+  }, [ref, displaySrc, logSource, profileId]);
 
   return {
     displaySrc,

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { useLikesReceived } from "../hooks/useLikesReceived";
@@ -13,7 +13,10 @@ import { APP_BORDER, APP_CARD, APP_TEXT, APP_TEXT_MUTED, BRAND_BG, TEXT_ON_BRAND
 import { supabase } from "../lib/supabase";
 import { insertBlock } from "../services/blocks.service";
 import { useTranslation } from "../i18n/useTranslation";
-import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import {
+  buildMovePrimaryPhotoRefs,
+  useMoveProfilePhotosFromRefs,
+} from "../hooks/useMoveProfilePhotosFromRefs";
 import { mergeOptionalProfileFields } from "../lib/profileSelect";
 import {
   fetchConversationIdForUserPair,
@@ -366,16 +369,32 @@ function LikesYouProfilePreviewModal({
   onBlock: () => void;
   t: (key: string, vars?: Record<string, string | number>) => string;
 }) {
-  const primaryRaw =
-    [profile.main_photo_url, profile.portrait_url, profile.fullbody_url]
-      .map((x) => (typeof x === "string" ? x.trim() : ""))
-      .find(Boolean) || null;
-  const secondaryRaw =
-    [profile.fullbody_url, profile.portrait_url, profile.main_photo_url]
-      .map((x) => (typeof x === "string" ? x.trim() : ""))
-      .find((x) => Boolean(x) && x !== primaryRaw) || null;
-  const primaryPhoto = useProfilePhotoSignedUrl(primaryRaw) ?? "";
-  const secondaryPhoto = useProfilePhotoSignedUrl(secondaryRaw) ?? "";
+  const primaryCandidates = useMemo(() => buildMovePrimaryPhotoRefs(profile), [
+    profile.id,
+    profile.portrait_url,
+    profile.main_photo_url,
+    profile.avatar_url,
+  ]);
+  const primaryPhotoState = useMoveProfilePhotosFromRefs(
+    primaryCandidates.refs,
+    primaryCandidates.fieldByRef,
+    profile.id,
+    "likes_you.preview.primary",
+  );
+  const secondaryCandidates = useMemo(() => {
+    const secondaryRaw = profile.fullbody_url?.trim() || null;
+    return secondaryRaw
+      ? { refs: [secondaryRaw], fieldByRef: { [secondaryRaw]: "fullbody_url" } }
+      : { refs: [], fieldByRef: {} };
+  }, [profile.fullbody_url]);
+  const secondaryPhotoState = useMoveProfilePhotosFromRefs(
+    secondaryCandidates.refs,
+    secondaryCandidates.fieldByRef,
+    profile.id,
+    "likes_you.preview.secondary",
+  );
+  const primaryPhoto = primaryPhotoState.displaySrc ?? "";
+  const secondaryPhoto = secondaryPhotoState.displaySrc ?? "";
   const sports = (profile.profile_sports ?? [])
     .map((ps) => ps.sports?.label ?? "")
     .filter((x): x is string => Boolean(x))
@@ -407,7 +426,13 @@ function LikesYouProfilePreviewModal({
         <div className="grid h-44 grid-cols-2 gap-0.5" style={{ background: APP_BORDER }}>
           <div className="relative min-h-0" style={{ background: APP_BORDER }}>
             {primaryPhoto ? (
-              <img src={primaryPhoto} alt="" className="absolute inset-0 h-full w-full object-cover" />
+              <img
+                src={primaryPhoto}
+                alt=""
+                className="absolute inset-0 h-full w-full object-cover"
+                onLoad={primaryPhotoState.onImageLoad}
+                onError={primaryPhotoState.onImageError}
+              />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center" style={{ background: APP_BORDER }}>
                 <IconProfileAvatarPlaceholder className="text-app-muted/80" size={56} />
@@ -416,7 +441,13 @@ function LikesYouProfilePreviewModal({
           </div>
           <div className="relative min-h-0" style={{ background: APP_BORDER }}>
             {secondaryPhoto ? (
-              <img src={secondaryPhoto} alt="" className="absolute inset-0 h-full w-full object-cover" />
+              <img
+                src={secondaryPhoto}
+                alt=""
+                className="absolute inset-0 h-full w-full object-cover"
+                onLoad={secondaryPhotoState.onImageLoad}
+                onError={secondaryPhotoState.onImageError}
+              />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center" style={{ background: APP_BORDER }}>
                 <span className="text-[11px] font-medium" style={{ color: APP_TEXT_MUTED }}>

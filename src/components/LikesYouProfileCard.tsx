@@ -19,7 +19,10 @@ import {
   IconProfileAvatarPlaceholder,
 } from "./ui/Icon";
 import { guidedProfileSentence } from "../lib/discoverCardCopy";
-import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import {
+  buildMovePrimaryPhotoRefs,
+  useMoveProfilePhotosFromRefs,
+} from "../hooks/useMoveProfilePhotosFromRefs";
 import { uniqueProfilePhotoRefsOrdered } from "../lib/profilePhotoSignedUrl";
 import { ProfilePhotoViewerModal } from "./ProfilePhotoViewerModal";
 import { formatHeightCmForDisplay } from "../lib/profileHeightCm";
@@ -78,11 +81,29 @@ export function LikesYouProfileCard({
     firstCommonSport: sports[0] ?? null,
     genericFallback: t("likes.guided_fallback"),
   });
-  const photoRaw = profile.main_photo_url?.trim() || null;
-  const photo = useProfilePhotoSignedUrl(photoRaw) ?? "";
+  const photoCandidates = useMemo(() => buildMovePrimaryPhotoRefs(profile), [
+    profile.id,
+    profile.portrait_url,
+    profile.main_photo_url,
+    profile.avatar_url,
+  ]);
+  const photoState = useMoveProfilePhotosFromRefs(
+    photoCandidates.refs,
+    photoCandidates.fieldByRef,
+    profile.id,
+    "likes_you.card",
+  );
+  const photoRaw = photoState.photoRaw;
+  const photo = photoState.displaySrc ?? "";
   const galleryRawRefs = useMemo(
     () => uniqueProfilePhotoRefsOrdered(profile),
-    [profile.id, profile.main_photo_url, profile.portrait_url, profile.fullbody_url],
+    [
+      profile.id,
+      profile.main_photo_url,
+      profile.portrait_url,
+      profile.avatar_url,
+      profile.fullbody_url,
+    ],
   );
   const [photoViewerOpen, setPhotoViewerOpen] = useState(false);
   const mainGalleryIndex = useMemo(() => {
@@ -124,6 +145,16 @@ export function LikesYouProfileCard({
             alt={photoAlt}
             className="h-full w-full cursor-pointer object-cover"
             onClick={() => setPhotoViewerOpen(true)}
+            onLoad={photoState.onImageLoad}
+            onError={photoState.onImageError}
+          />
+        ) : photoState.isPending && photoState.hasStoredRef ? (
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              background: "linear-gradient(165deg, #18181B 0%, #2A2A2E 100%)",
+            }}
           />
         ) : (
           <div

@@ -43,6 +43,7 @@ import {
   useProfilePhotoIosDisplayLayer,
 } from "../hooks/useProfilePhotoDisplaySrc";
 import { buildIosAwareProfilePhotoImgHandlers } from "../lib/profilePhotoIosImgHandlers";
+import { classifyImgSrcForIosDebug, logPhotoIosDebug } from "../lib/photoIosDebug";
 import { useBrokenProfilePhotoReuploadHint } from "../hooks/useBrokenProfilePhotoReuploadHint";
 import { snapshotProfilePhotoFields, photoUrlPrefix } from "../lib/profilePhotoPipelineLog";
 import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
@@ -98,7 +99,7 @@ function extractBootPhotoFields(row: Record<string, unknown>): ProfileBootPhotoF
 function buildProfileAvatarRefCandidates(
   fields: ProfileAvatarPhotoFields | null | undefined,
 ): { refs: string[]; fieldByRef: Record<string, string> } {
-  const fieldOrder = ["portrait_url", "main_photo_url"] as const;
+  const fieldOrder = ["portrait_url", "main_photo_url", "avatar_url"] as const;
   const refs: string[] = [];
   const fieldByRef: Record<string, string> = {};
   const seen = new Set<string>();
@@ -184,6 +185,16 @@ export default function Profile() {
   const avatarImgSrc = avatarSticky.displaySrc;
   const showAvatarImgStable = avatarIosLayer.mountImg && Boolean(avatarImgSrc);
   const showAvatarPlaceholder = avatarIosLayer.showLoadingPlaceholder;
+
+  useEffect(() => {
+    if (!showAvatarImgStable || !avatarImgSrc) return;
+    logPhotoIosDebug("final_img_src", {
+      screen: "Profile",
+      userId: user?.id?.slice(0, 8) ?? null,
+      srcKind: classifyImgSrcForIosDebug(avatarImgSrc),
+      iosUsingDataUrl: avatarIosLayer.ios.usingDataUrl,
+    });
+  }, [showAvatarImgStable, avatarImgSrc, user?.id, avatarIosLayer.ios.usingDataUrl]);
 
   const syncProfileForScreen = useCallback(async () => {
     if (!user?.id) return;
@@ -416,6 +427,8 @@ export default function Profile() {
         photoOnError: avatarPhoto.onImageError,
         photoOnLoad: avatarPhoto.onImageLoad,
         iosResolutionFailed: avatarIosLayer.ios.resolutionFailed,
+        displaySrc: avatarImgSrc,
+        screen: "Profile",
       })),
     );
     return {

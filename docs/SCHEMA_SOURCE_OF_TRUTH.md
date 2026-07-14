@@ -1,7 +1,7 @@
 # Schéma Supabase — source de vérité
 
 > Généré par `npm run schema:check` — ne pas éditer les sections « Inventaire » à la main.
-> Dernière vérification : 2026-07-09
+> Dernière vérification : 2026-07-14
 
 ## Rôle
 
@@ -132,6 +132,12 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 - `117_push_environment_security.sql`
 - `118_schema_drift_missing_columns.sql`
 - `119_splove_heart_intent.sql`
+- `120_splove_play_type.sql`
+- `121_matches_expires_at_like_rpc_fix.sql`
+- `122_splove_profile_first_name_repair.sql`
+- `123_in_app_notifications_repair.sql`
+- `124_splove_upsert_notification_on_conflict_fix.sql`
+- `125_discover_feed_profile_completeness.sql`
 
 ## Tables officielles (47)
 
@@ -156,7 +162,7 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 | features | 8 | category, created_at, description, id, is_active, key, label, updated_at |
 | in_app_notification_jobs | 7 | anchor_at, created_at, id, job_type, processed_at, run_at, user_id |
 | in_app_notifications | 10 | created_at, dedupe_key, exempt_daily_cap, id, kind, message, payload, read… |
-| likes | 7 | created_at, from_user, heart_intent, id, liked_id, liker_id, to_user |
+| likes | 8 | created_at, from_user, heart_intent, id, liked_id, liker_id, play_type, to_user |
 | matches | 7 | created_at, expires_at, id, initiator_user, status, user_a, user_b |
 | meetup_proposals | 13 | created_at, expires_at, id, location, match_id, message, proposer_id, receiver_id… |
 | messages | 10 | activity_proposal_id, body, conversation_id, created_at, id, message_type, metadata, payload… |
@@ -266,7 +272,7 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 
 ### likes
 
-`created_at`, `from_user`, `heart_intent`, `id`, `liked_id`, `liker_id`, `to_user`
+`created_at`, `from_user`, `heart_intent`, `id`, `liked_id`, `liker_id`, `play_type`, `to_user`
 
 ### matches
 
@@ -387,7 +393,7 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 | feed_profiles_ranked | view | id, passport_city, available_now_until, profile_completed, birth_date, gender, looking_for, intent, needs_adapted_activities, sport_time, sport_motivation, sport_phrase, is_photo_verified, photo_verification_status, photo_verification_provider, photo_verification_session_id, photo_verification_updated_at, main_photo_url, fullbody_url, portrait_url, avatar_url, created_at, pref_open_to_standard_activity, pref_open_to_adapted_activity, portrait_photo_status, body_photo_status, portrait_rejection_code, body_rejection_code, premier_moment, last_active_at, activity_proposals_count, last_reply_at, messages_count, boost_score, city, latitude, longitude, discovery_radius_km, location_updated_at, location_source, photo1_status, photo2_status, photo_moderation_overall, is_under_review, moderation_strikes_count, onboarding_completed, onboarding_done, practice_preferences, onboarding_sports_count, onboarding_sports_with_level_count, is_paused, is_active, sport_intensity, meet_vibe, planning_style, is_seed_demo, is_active_mode, referral_code, referred_by_user_id, rewind_credits, referral_plus_until, second_chance_credits, undo_swipe_credits, onboarding_variant, boost_credits, beta_splove_plus_unlocked, open_to_adapted_activities, height_cm, has_children, preferred_age_min, preferred_age_max, sport_match_preference, language, activity_photo_path, first_name, updated_at, sport_practice_type, meet_pref, sport_feeling, accepted_terms_at, accepted_privacy_at, photo2_path, portrait_path, fullbody_path, identity_verified, veriff_status, photo_status |
 | my_meetups | view | profiles.* |
 
-## RPC officielles (81)
+## RPC officielles (82)
 
 | Fonction | Frontend | Fichiers |
 | --- | --- | --- |
@@ -424,16 +430,16 @@ Appliquer **toutes** les migrations dans l'ordre lexicographic :
 | mark_all_in_app_notifications_read | oui | src/services/inAppNotifications.service.ts |
 | mark_conversation_messages_read | oui | src/pages/Chat.tsx |
 | match_has_blocked_pair | — |  |
+| matches_fill_expires_at | — |  |
 | matches_fill_initiator_user | — |  |
 | moderation_resolve_photo_result | oui | src/services/photoModerationAdmin.service.ts |
 | pass_profile | oui | src/pages/Discover.tsx |
 | patch_activity_proposal_source_message_payload | oui | src/lib/messages/activityProposalMutations.ts |
 | process_in_app_notification_jobs_for | — |  |
 | profile_distances_from_viewer | — |  |
-| profile_pair_is_blocked | — |  |
 
 
-_… et 41 autres fonctions (triggers, internes)._
+_… et 42 autres fonctions (triggers, internes)._
 
 ## Colonnes deprecated / legacy
 
@@ -518,7 +524,7 @@ _… et 41 autres fonctions (triggers, internes)._
 | feature_purchases | feature_key | src/services/features.service.ts |
 
 
-_… et 183 autres accès._
+_… et 184 autres accès._
 
 ## Allowlists (exceptions documentées)
 

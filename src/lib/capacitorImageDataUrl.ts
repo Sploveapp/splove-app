@@ -1,6 +1,7 @@
 import { Capacitor, CapacitorHttp } from "@capacitor/core";
 import { PhotoFlowLog } from "./photoFlowLog";
 import { photoUrlPrefix } from "./profilePhotoPipelineLog";
+import { logPhotoIosDebug } from "./photoIosDebug";
 
 const CACHE_MAX_ENTRIES = 32;
 const FETCH_TIMEOUT_MS = 25_000;
@@ -94,7 +95,7 @@ async function fetchOneRemoteImageDataUrl(url: string): Promise<string | null> {
 
   try {
     const response = await Promise.race([
-      CapacitorHttp.get({ url: trimmed }),
+      CapacitorHttp.get({ url: trimmed, responseType: "blob" }),
       new Promise<never>((_, reject) => {
         window.setTimeout(() => reject(new Error("CapacitorHttp image timeout")), FETCH_TIMEOUT_MS);
       }),
@@ -102,6 +103,18 @@ async function fetchOneRemoteImageDataUrl(url: string): Promise<string | null> {
 
     const status = response.status ?? 0;
     const mime = contentTypeFromHeaders(response.headers as Record<string, unknown> | undefined);
+
+    logPhotoIosDebug("fetch_status", {
+      status,
+      mime,
+      urlHost: (() => {
+        try {
+          return new URL(trimmed).hostname;
+        } catch {
+          return trimmed.slice(0, 48);
+        }
+      })(),
+    });
 
     if (status < 200 || status >= 300) {
       PhotoFlowLog.imageLoadError({
@@ -123,6 +136,12 @@ async function fetchOneRemoteImageDataUrl(url: string): Promise<string | null> {
       });
       return null;
     }
+
+    logPhotoIosDebug("blob_created", {
+      mime,
+      bytesEstimate: Math.max(0, Math.floor((dataUrl.length - dataUrl.indexOf(",")) * 0.75)),
+      srcKind: "data_url",
+    });
 
     PhotoFlowLog.profilePhotoResolved({
       screen: "ios.capacitor_http",

@@ -1,8 +1,10 @@
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import sploveMark from "../../assets/welcome/splove-mark.png";
 import type { MatchIntroVariant } from "../../lib/matchIntroVariant";
 import { matchIntroPrimaryOpensActivity, matchIntroShowsSecondary } from "../../lib/matchIntroVariant";
 import { useTranslation } from "../../i18n/useTranslation";
+import { modalSheetHostClass } from "../../lib/nativeBottomNav";
 
 export type MatchIntroModalProps = {
   open: boolean;
@@ -71,15 +73,15 @@ export function MatchIntroModal({
   onSecondary,
 }: MatchIntroModalProps) {
   const { t } = useTranslation();
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
   const keys = copyKeysForVariant(variant);
   const showSecondary = matchIntroShowsSecondary(variant);
   const primaryIsActivity = matchIntroPrimaryOpensActivity(variant);
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[90] flex items-end justify-center sm:items-center sm:px-4"
+      className={`fixed inset-0 z-[90] flex items-end justify-center sm:items-center sm:px-4 ${modalSheetHostClass()}`}
       role="dialog"
       aria-modal="true"
       aria-labelledby="match-intro-title"
@@ -90,7 +92,7 @@ export function MatchIntroModal({
         aria-label={t("close")}
         onClick={onClose}
       />
-      <div className="relative w-full max-w-md animate-[fadeIn_0.28s_ease-out] rounded-t-[26px] border border-white/[0.1] bg-app-card px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-5 shadow-[0_-12px_48px_rgba(0,0,0,0.45)] sm:rounded-2xl sm:pb-6">
+      <div className="relative w-full max-w-md animate-[fadeIn_0.28s_ease-out] rounded-t-[26px] border border-white/[0.1] bg-app-card px-5 pb-6 pt-5 shadow-[0_-12px_48px_rgba(0,0,0,0.45)] sm:rounded-2xl sm:pb-6">
         <button
           type="button"
           onClick={onClose}
@@ -145,6 +147,7 @@ export function MatchIntroModal({
           </p>
         ) : null}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
