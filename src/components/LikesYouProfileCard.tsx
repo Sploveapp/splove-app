@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import type { LikeReceived } from "../types/premium.types";
 import { useTranslation } from "../i18n/useTranslation";
 import { VerifiedBadge } from "./VerifiedBadge";
@@ -27,6 +27,7 @@ import { uniqueProfilePhotoRefsOrdered } from "../lib/profilePhotoSignedUrl";
 import { ProfilePhotoViewerModal } from "./ProfilePhotoViewerModal";
 import { formatHeightCmForDisplay } from "../lib/profileHeightCm";
 import { formatCityDisplay } from "../lib/formatCityDisplay";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
 
 function getSports(like: LikeReceived): string[] {
   const list = like.profile?.profile_sports ?? [];
@@ -57,6 +58,7 @@ export function LikesYouProfileCard({
   onReportPhoto,
   onBlock,
 }: Props) {
+  console.error("[TRACE EXECUTED] LikesYouProfileCard");
   const { t } = useTranslation();
   const profile = like.profile;
   if (!profile) return null;
@@ -126,6 +128,34 @@ export function LikesYouProfileCard({
     ? t("likes.photo_alt", { name: profile.first_name.trim() })
     : t("likes.profile_photo_alt");
 
+  useEffect(() => {
+    logPhotoComponent("LikesYouProfileCard.tsx");
+  }, []);
+
+  useEffect(() => {
+    logPhotoTrace({
+      screen: "LikesYou",
+      component: "LikesYouProfileCard.tsx",
+      userId: profile.id,
+      portrait_url: profile.portrait_url ?? null,
+      main_photo_url: profile.main_photo_url ?? null,
+      avatar_url: profile.avatar_url ?? null,
+      portraitDisplayResolved: photoState.displaySrc,
+      facePreviewSrc: photo ? "set" : "missing",
+      finalImgSrc: photo || null,
+      extra: { isPending: photoState.isPending, hasStoredRef: photoState.hasStoredRef },
+    });
+  }, [
+    profile.id,
+    profile.portrait_url,
+    profile.main_photo_url,
+    profile.avatar_url,
+    photo,
+    photoState.displaySrc,
+    photoState.isPending,
+    photoState.hasStoredRef,
+  ]);
+
   return (
     <>
     <div
@@ -145,8 +175,34 @@ export function LikesYouProfileCard({
             alt={photoAlt}
             className="h-full w-full cursor-pointer object-cover"
             onClick={() => setPhotoViewerOpen(true)}
-            onLoad={photoState.onImageLoad}
-            onError={photoState.onImageError}
+            onLoad={(e) => {
+              logPhotoTraceImgEvent(
+                "onLoad",
+                {
+                  screen: "LikesYou",
+                  component: "LikesYouProfileCard.tsx",
+                  userId: profile.id,
+                  slot: "primary",
+                  srcReceived: photo,
+                },
+                e.currentTarget,
+              );
+              photoState.onImageLoad();
+            }}
+            onError={(e) => {
+              logPhotoTraceImgEvent(
+                "onError",
+                {
+                  screen: "LikesYou",
+                  component: "LikesYouProfileCard.tsx",
+                  userId: profile.id,
+                  slot: "primary",
+                  srcReceived: photo,
+                },
+                e.currentTarget,
+              );
+              photoState.onImageError();
+            }}
           />
         ) : photoState.isPending && photoState.hasStoredRef ? (
           <div

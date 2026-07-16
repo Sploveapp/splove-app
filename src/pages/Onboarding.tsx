@@ -77,6 +77,7 @@ import {
   uploadProfilePhoto,
 } from "../lib/profilePhotoUpload";
 import { SPLovePhotoLog } from "../lib/profilePhotoPipelineLog";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
 import { PhotoFlowLog, PHOTO_FLOW_READBACK_SELECT } from "../lib/photoFlowLog";
 import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
 import { buildOnboardingPhotoUpsertPayload } from "../lib/onboardingProfilePhotos";
@@ -117,14 +118,60 @@ function isSafePhotoPreviewSrc(src: string | null | undefined): boolean {
   return true;
 }
 
+function isDirectHttpPhotoPreviewSrc(src: string | null | undefined): boolean {
+  const value = typeof src === "string" ? src.trim() : "";
+  return value.startsWith("http://") || value.startsWith("https://");
+}
+
+/**
+ * Preview onboarding : local/file d’abord, puis URL HTTP(S) directe (jamais « missing »
+ * si une URL publique valide existe), puis résolution signée en dernier recours.
+ * Exporté pour tests de régression ciblés sur le chemin réellement exécuté.
+ */
+export function pickOnboardingFacePreviewSrc(args: {
+  localPersisted: string | null;
+  fileObjectUrl: string | null;
+  remoteResolved: string | null;
+  portraitSavedUrl: string | null | undefined;
+  profilePortraitUrl?: string | null;
+  profileMainPhotoUrl?: string | null;
+  profileAvatarUrl?: string | null;
+}): string | null {
+  for (const candidate of [args.localPersisted, args.fileObjectUrl]) {
+    if (isSafePhotoPreviewSrc(candidate)) return candidate;
+  }
+
+  const directFaceUrl =
+    [
+      args.portraitSavedUrl,
+      args.profilePortraitUrl,
+      args.profileMainPhotoUrl,
+      args.profileAvatarUrl,
+    ]
+      .map((c) => (typeof c === "string" ? c.trim() : ""))
+      .find((c) => isDirectHttpPhotoPreviewSrc(c) && !c.includes("[redacted")) ?? null;
+
+  if (directFaceUrl) return directFaceUrl;
+
+  if (isSafePhotoPreviewSrc(args.remoteResolved)) return args.remoteResolved!.trim();
+  return null;
+}
+
 function pickOnboardingPhotoPreviewSrc(
   localPersisted: string | null,
   fileObjectUrl: string | null,
   remoteResolved: string | null,
+  savedHttpUrl: string | null = null,
 ): string | null {
-  for (const candidate of [localPersisted, fileObjectUrl, remoteResolved]) {
+  // Activity slot : même priorité — HTTPS sauvée avant « missing ».
+  for (const candidate of [localPersisted, fileObjectUrl]) {
     if (isSafePhotoPreviewSrc(candidate)) return candidate;
   }
+  if (isDirectHttpPhotoPreviewSrc(savedHttpUrl) && isSafePhotoPreviewSrc(savedHttpUrl)) {
+    return savedHttpUrl!.trim();
+  }
+  if (isSafePhotoPreviewSrc(remoteResolved)) return remoteResolved!.trim();
+  if (isSafePhotoPreviewSrc(savedHttpUrl)) return savedHttpUrl!.trim();
   return null;
 }
 
@@ -755,6 +802,7 @@ const inputClassName =
 const labelClassName = "mb-2 block text-sm font-semibold text-app-text tracking-tight";
 
 export default function Onboarding() {
+  console.error("[TRACE EXECUTED] Onboarding.tsx");
   const { t, language, setLanguage } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -784,6 +832,7 @@ export default function Onboarding() {
   const bodyInputRef = useRef<HTMLInputElement>(null);
   /** Évite la redirection /auth pendant le submit final (race `user` / getSession). */
   const onboardingSubmitInFlightRef = useRef(false);
+  const applePhotosFocusAppliedRef = useRef(false);
 
   const [firstName, setFirstName] = useState("");
   /** Affichage libre JJ/MM/AAAA (saisie continue). */
@@ -826,10 +875,73 @@ export default function Onboarding() {
   const [bodyLocalPreviewUrl, setBodyLocalPreviewUrl] = useState<string | null>(null);
   const [portraitSavedUrl, setPortraitSavedUrl] = useState("");
   const [bodySavedUrl, setBodySavedUrl] = useState("");
-  const [portraitDisplayResolved, setPortraitDisplayResolved] = useState<string | null>(null);
-  const [bodyDisplayResolved, setBodyDisplayResolved] = useState<string | null>(null);
+  const [portraitDisplayResolved, setPortraitDisplayResolvedState] = useState<string | null>(null);
+  const [bodyDisplayResolved, setBodyDisplayResolvedState] = useState<string | null>(null);
   const [portraitPreviewLoadFailed, setPortraitPreviewLoadFailed] = useState(false);
   const [bodyPreviewLoadFailed, setBodyPreviewLoadFailed] = useState(false);
+
+  /** Empêche d’effacer une preview HTTPS valide (ex. resolve async → null / empty). */
+  const writePortraitDisplayResolved = (
+    next: string | null,
+    origin: string,
+    opts?: { allowClear?: boolean },
+  ) => {
+    setPortraitDisplayResolvedState((prev) => {
+      const nextTrim = typeof next === "string" ? next.trim() : "";
+      const prevTrim = typeof prev === "string" ? prev.trim() : "";
+      const clearingHttps =
+        !nextTrim && isDirectHttpPhotoPreviewSrc(prevTrim) && opts?.allowClear !== true;
+      if (clearingHttps) {
+        console.log("[PROFILE_PHOTO_RUNTIME] state_overwrite_blocked", {
+          field: "portraitDisplayResolved",
+          old: prevTrim || null,
+          attempted: next,
+          origin,
+          reason: "would_clear_https",
+        });
+        return prev;
+      }
+      if (prevTrim === nextTrim) return prev;
+      console.log("[PROFILE_PHOTO_RUNTIME] state_write", {
+        field: "portraitDisplayResolved",
+        old: prevTrim || null,
+        new: nextTrim || null,
+        origin,
+      });
+      return nextTrim || null;
+    });
+  };
+
+  const writeBodyDisplayResolved = (
+    next: string | null,
+    origin: string,
+    opts?: { allowClear?: boolean },
+  ) => {
+    setBodyDisplayResolvedState((prev) => {
+      const nextTrim = typeof next === "string" ? next.trim() : "";
+      const prevTrim = typeof prev === "string" ? prev.trim() : "";
+      const clearingHttps =
+        !nextTrim && isDirectHttpPhotoPreviewSrc(prevTrim) && opts?.allowClear !== true;
+      if (clearingHttps) {
+        console.log("[PROFILE_PHOTO_RUNTIME] state_overwrite_blocked", {
+          field: "bodyDisplayResolved",
+          old: prevTrim || null,
+          attempted: next,
+          origin,
+          reason: "would_clear_https",
+        });
+        return prev;
+      }
+      if (prevTrim === nextTrim) return prev;
+      console.log("[PROFILE_PHOTO_RUNTIME] state_write", {
+        field: "bodyDisplayResolved",
+        old: prevTrim || null,
+        new: nextTrim || null,
+        origin,
+      });
+      return nextTrim || null;
+    });
+  };
   const [photoUploadingKind, setPhotoUploadingKind] = useState<null | "portrait" | "body">(null);
   const [practicePreferences, setPracticePreferences] = useState<string[]>([]);
   const [adaptedAmenagements, setAdaptedAmenagements] = useState<AdaptedPracticeAmenagements>("");
@@ -1282,21 +1394,52 @@ export default function Onboarding() {
         const activityRef = normalizeProfilePhotoStoredRef(firstBodyRef, supabase);
         setPortraitSavedUrl(faceRef);
         setBodySavedUrl(activityRef);
-        void resolveProfilePhotoDisplayUrl(supabase, faceRef).then((url) => {
+        if (faceRef.startsWith("http://") || faceRef.startsWith("https://")) {
+          console.log("[PROFILE_PHOTO_RUNTIME] direct_url_selected", {
+            origin: "hydrateDraft",
+            url: faceRef,
+            field: "portrait_url",
+          });
+          writePortraitDisplayResolved(faceRef, "hydrateDraft.direct_https");
+        }
+        if (activityRef.startsWith("http://") || activityRef.startsWith("https://")) {
+          writeBodyDisplayResolved(activityRef, "hydrateDraft.direct_https");
+        }
+        console.log("[PROFILE_PHOTO_RUNTIME] resolver_started", {
+          origin: "hydrateDraft",
+          slot: "portrait",
+          storedRef: faceRef || null,
+        });
+        void resolveProfilePhotoDisplayUrl(supabase, faceRef, {
+          userId,
+          slot: "portrait",
+        }).then((url) => {
           if (!cancelled) {
-            setPortraitDisplayResolved(url);
+            if (url?.trim()) {
+              writePortraitDisplayResolved(url, "hydrateDraft.resolveProfilePhotoDisplayUrl");
+            }
             console.log("[profilePhoto] hydrate facePhotoUrl", {
               facePhotoUrl: faceRef || null,
-              displayOk: Boolean(url),
+              displayOk: Boolean(url || faceRef),
             });
           }
         });
-        void resolveProfilePhotoDisplayUrl(supabase, activityRef).then((url) => {
+        console.log("[PROFILE_PHOTO_RUNTIME] resolver_started", {
+          origin: "hydrateDraft",
+          slot: "activity",
+          storedRef: activityRef || null,
+        });
+        void resolveProfilePhotoDisplayUrl(supabase, activityRef, {
+          userId,
+          slot: "activity",
+        }).then((url) => {
           if (!cancelled) {
-            setBodyDisplayResolved(url);
+            if (url?.trim()) {
+              writeBodyDisplayResolved(url, "hydrateDraft.resolveProfilePhotoDisplayUrl");
+            }
             console.log("[profilePhoto] hydrate activityPhotoUrl", {
               activityPhotoUrl: activityRef || null,
-              displayOk: Boolean(url),
+              displayOk: Boolean(url || activityRef),
             });
           }
         });
@@ -1362,6 +1505,36 @@ export default function Onboarding() {
       cancelled = true;
     };
   }, [user?.id, authLoading, isProfileComplete, setLanguage]);
+
+  /** iOS Apple natif : ouvre l’étape photo existante si focus=photos et aucune photo enregistrée. */
+  useEffect(() => {
+    if (searchParams.get("focus") !== "photos") return;
+    if (applePhotosFocusAppliedRef.current) return;
+    if (!user?.id || authLoading || isProfileLoading || isProfileComplete) return;
+
+    const row = (profile ?? null) as Record<string, unknown> | null;
+    const portraitFromProfile =
+      (typeof row?.portrait_url === "string" ? row.portrait_url.trim() : "") ||
+      (typeof row?.main_photo_url === "string" ? row.main_photo_url.trim() : "");
+    const portraitFromDraft = portraitSavedUrl.trim();
+    if (portraitFromProfile || portraitFromDraft) {
+      applePhotosFocusAppliedRef.current = true;
+      return;
+    }
+
+    if (!hydratedDraftRef.current) return;
+
+    applePhotosFocusAppliedRef.current = true;
+    setStep(9);
+  }, [
+    searchParams,
+    user?.id,
+    authLoading,
+    isProfileLoading,
+    isProfileComplete,
+    profile,
+    portraitSavedUrl,
+  ]);
 
   useEffect(() => {
     console.log("[Onboarding] authLoading / user", {
@@ -1482,52 +1655,154 @@ export default function Onboarding() {
     [bodyFile]
   );
   useEffect(() => {
+    console.log("[PROFILE_PHOTO_RUNTIME] component_file", {
+      file: "src/pages/Onboarding.tsx",
+      export: "Onboarding",
+    });
+  }, []);
+
+  useEffect(() => {
     if (portraitFile || !portraitSavedUrl.trim()) return;
     let cancelled = false;
-    void resolveProfilePhotoDisplayUrl(supabase, portraitSavedUrl).then((url) => {
-      if (!cancelled && isSafePhotoPreviewSrc(url)) {
-        setPortraitDisplayResolved(url);
-        console.log("PHOTO_PREVIEW_REMOTE_OK", {
-          slot: "face",
-          facePhotoUrl: portraitSavedUrl,
-        });
+    const saved = portraitSavedUrl.trim();
+
+    // URL HTTP(S) déjà en BDD : affichage immédiat — ne jamais laisser facePreviewSrc = missing.
+    if (isDirectHttpPhotoPreviewSrc(saved)) {
+      console.log("[PROFILE_PHOTO_RUNTIME] direct_url_selected", {
+        origin: "effect.portraitSavedUrl",
+        url: saved,
+        field: "portraitSavedUrl",
+      });
+      writePortraitDisplayResolved(saved, "effect.portraitSavedUrl.direct_https");
+    }
+
+    console.log("[PROFILE_PHOTO_RUNTIME] resolver_started", {
+      origin: "effect.portraitSavedUrl",
+      slot: "portrait",
+      storedRef: saved,
+    });
+    void resolveProfilePhotoDisplayUrl(supabase, saved, {
+      userId: user?.id ?? null,
+      slot: "portrait",
+    }).then((url) => {
+      if (cancelled || !isSafePhotoPreviewSrc(url)) return;
+      // Ne jamais laisser le resolver écraser une HTTPS directe déjà affichable.
+      if (isDirectHttpPhotoPreviewSrc(saved)) {
+        writePortraitDisplayResolved(saved, "effect.portraitSavedUrl.resolve_keep_direct");
+      } else {
+        writePortraitDisplayResolved(url, "effect.portraitSavedUrl.resolveProfilePhotoDisplayUrl");
       }
+      console.log("PHOTO_PREVIEW_REMOTE_OK", {
+        slot: "face",
+        facePhotoUrl: saved,
+      });
     });
     return () => {
       cancelled = true;
     };
-  }, [portraitSavedUrl, portraitFile]);
+  }, [portraitSavedUrl, portraitFile, user?.id]);
 
   useEffect(() => {
     if (bodyFile || !bodySavedUrl.trim()) return;
     let cancelled = false;
-    void resolveProfilePhotoDisplayUrl(supabase, bodySavedUrl).then((url) => {
-      if (!cancelled && isSafePhotoPreviewSrc(url)) {
-        setBodyDisplayResolved(url);
-        console.log("PHOTO_PREVIEW_REMOTE_OK", {
-          slot: "activity",
-          activityPhotoUrl: bodySavedUrl,
-        });
+    const saved = bodySavedUrl.trim();
+
+    if (isDirectHttpPhotoPreviewSrc(saved)) {
+      console.log("[PROFILE_PHOTO_RUNTIME] direct_url_selected", {
+        origin: "effect.bodySavedUrl",
+        url: saved,
+        field: "bodySavedUrl",
+      });
+      writeBodyDisplayResolved(saved, "effect.bodySavedUrl.direct_https");
+    }
+
+    console.log("[PROFILE_PHOTO_RUNTIME] resolver_started", {
+      origin: "effect.bodySavedUrl",
+      slot: "activity",
+      storedRef: saved,
+    });
+    void resolveProfilePhotoDisplayUrl(supabase, saved, {
+      userId: user?.id ?? null,
+      slot: "activity",
+    }).then((url) => {
+      if (cancelled || !isSafePhotoPreviewSrc(url)) return;
+      if (isDirectHttpPhotoPreviewSrc(saved)) {
+        writeBodyDisplayResolved(saved, "effect.bodySavedUrl.resolve_keep_direct");
+      } else {
+        writeBodyDisplayResolved(url, "effect.bodySavedUrl.resolveProfilePhotoDisplayUrl");
       }
+      console.log("PHOTO_PREVIEW_REMOTE_OK", {
+        slot: "activity",
+        activityPhotoUrl: saved,
+      });
     });
     return () => {
       cancelled = true;
     };
-  }, [bodySavedUrl, bodyFile]);
+  }, [bodySavedUrl, bodyFile, user?.id]);
 
-  const portraitDisplayUrl = useMemo(
-    () =>
-      pickOnboardingPhotoPreviewSrc(
-        portraitLocalPreviewUrl,
-        portraitPreviewUrl,
-        portraitDisplayResolved,
-      ),
-    [portraitLocalPreviewUrl, portraitPreviewUrl, portraitDisplayResolved],
-  );
+  const profileRow = profile as Record<string, unknown> | null | undefined;
+  const directFaceUrl = useMemo(() => {
+    return (
+      [
+        portraitSavedUrl,
+        typeof profileRow?.portrait_url === "string" ? profileRow.portrait_url : null,
+        typeof profileRow?.main_photo_url === "string" ? profileRow.main_photo_url : null,
+        typeof profileRow?.avatar_url === "string" ? profileRow.avatar_url : null,
+      ]
+        .map((c) => (typeof c === "string" ? c.trim() : ""))
+        .find((c) => isDirectHttpPhotoPreviewSrc(c) && !c.includes("[redacted")) ?? null
+    );
+  }, [
+    portraitSavedUrl,
+    profileRow?.portrait_url,
+    profileRow?.main_photo_url,
+    profileRow?.avatar_url,
+  ]);
+
+  useEffect(() => {
+    if (!directFaceUrl) return;
+    console.log("[PROFILE_PHOTO_RUNTIME] direct_url_selected", {
+      origin: "useMemo.directFaceUrl",
+      url: directFaceUrl,
+    });
+  }, [directFaceUrl]);
+
+  const portraitDisplayUrl = useMemo(() => {
+    const src = pickOnboardingFacePreviewSrc({
+      localPersisted: portraitLocalPreviewUrl,
+      fileObjectUrl: portraitPreviewUrl,
+      remoteResolved: portraitDisplayResolved,
+      portraitSavedUrl,
+      profilePortraitUrl:
+        typeof profileRow?.portrait_url === "string" ? profileRow.portrait_url : null,
+      profileMainPhotoUrl:
+        typeof profileRow?.main_photo_url === "string" ? profileRow.main_photo_url : null,
+      profileAvatarUrl:
+        typeof profileRow?.avatar_url === "string" ? profileRow.avatar_url : null,
+    });
+    // Garde-fou : si une URL HTTPS directe existe, preview ne peut pas rester missing.
+    if (!src && directFaceUrl) return directFaceUrl;
+    return src;
+  }, [
+    portraitLocalPreviewUrl,
+    portraitPreviewUrl,
+    portraitDisplayResolved,
+    portraitSavedUrl,
+    profileRow?.portrait_url,
+    profileRow?.main_photo_url,
+    profileRow?.avatar_url,
+    directFaceUrl,
+  ]);
   const bodyDisplayUrl = useMemo(
     () =>
-      pickOnboardingPhotoPreviewSrc(bodyLocalPreviewUrl, bodyPreviewUrl, bodyDisplayResolved),
-    [bodyLocalPreviewUrl, bodyPreviewUrl, bodyDisplayResolved],
+      pickOnboardingPhotoPreviewSrc(
+        bodyLocalPreviewUrl,
+        bodyPreviewUrl,
+        bodyDisplayResolved,
+        isDirectHttpPhotoPreviewSrc(bodySavedUrl) ? bodySavedUrl.trim() : null,
+      ),
+    [bodyLocalPreviewUrl, bodyPreviewUrl, bodyDisplayResolved, bodySavedUrl],
   );
 
   useEffect(() => {
@@ -1556,8 +1831,46 @@ export default function Onboarding() {
       activityPhotoUrl: bodySavedUrl.trim() || null,
       facePreviewSrc: portraitDisplayUrl ? "set" : "missing",
       activityPreviewSrc: bodyDisplayUrl ? "set" : "missing",
+      directFaceUrl: directFaceUrl || null,
+      portraitDisplayResolved: portraitDisplayResolved || null,
     });
-  }, [portraitSavedUrl, bodySavedUrl, portraitDisplayUrl, bodyDisplayUrl]);
+    logPhotoComponent("Onboarding.tsx");
+    logPhotoTrace({
+      screen: "Onboarding",
+      component: "Onboarding.tsx",
+      userId: user?.id ?? null,
+      portrait_url:
+        typeof (profile as Record<string, unknown> | null | undefined)?.portrait_url === "string"
+          ? String((profile as Record<string, unknown>).portrait_url)
+          : portraitSavedUrl.trim() || null,
+      main_photo_url:
+        typeof (profile as Record<string, unknown> | null | undefined)?.main_photo_url === "string"
+          ? String((profile as Record<string, unknown>).main_photo_url)
+          : null,
+      avatar_url:
+        typeof (profile as Record<string, unknown> | null | undefined)?.avatar_url === "string"
+          ? String((profile as Record<string, unknown>).avatar_url)
+          : null,
+      portraitDisplayResolved: portraitDisplayResolved,
+      facePreviewSrc: portraitDisplayUrl ? "set" : "missing",
+      finalImgSrc: portraitDisplayUrl,
+      extra: {
+        bodyDisplayUrl,
+        portraitSavedUrl: portraitSavedUrl.trim() || null,
+        bodySavedUrl: bodySavedUrl.trim() || null,
+        directFaceUrl,
+      },
+    });
+  }, [
+    portraitSavedUrl,
+    bodySavedUrl,
+    portraitDisplayUrl,
+    bodyDisplayUrl,
+    directFaceUrl,
+    portraitDisplayResolved,
+    user?.id,
+    profile,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -1964,7 +2277,7 @@ export default function Onboarding() {
       if (kind === "portrait") {
         setPortraitSavedUrl(uploaded.storedRef);
         if (isSafePhotoPreviewSrc(uploaded.displayUrl)) {
-          setPortraitDisplayResolved(uploaded.displayUrl);
+          writePortraitDisplayResolved(uploaded.displayUrl, "assignPhotoFile.upload.displayUrl");
           console.log("PHOTO_PREVIEW_REMOTE_OK", {
             slot: "face",
             facePhotoUrl: uploaded.publicUrl,
@@ -1979,7 +2292,7 @@ export default function Onboarding() {
       } else {
         setBodySavedUrl(uploaded.storedRef);
         if (isSafePhotoPreviewSrc(uploaded.displayUrl)) {
-          setBodyDisplayResolved(uploaded.displayUrl);
+          writeBodyDisplayResolved(uploaded.displayUrl, "assignPhotoFile.upload.displayUrl");
           console.log("PHOTO_PREVIEW_REMOTE_OK", {
             slot: "activity",
             activityPhotoUrl: uploaded.publicUrl,
@@ -2014,7 +2327,7 @@ export default function Onboarding() {
       if (kind === "portrait") {
         setPortraitFile(null);
         setPortraitSavedUrl("");
-        setPortraitDisplayResolved(null);
+        writePortraitDisplayResolved(null, "assignPhotoFile.upload_error.clear", { allowClear: true });
         setPortraitLocalPreviewUrl((prev) => {
           revokeObjectUrlSafe(prev);
           return null;
@@ -2023,7 +2336,7 @@ export default function Onboarding() {
       } else {
         setBodyFile(null);
         setBodySavedUrl("");
-        setBodyDisplayResolved(null);
+        writeBodyDisplayResolved(null, "assignPhotoFile.upload_error.clear", { allowClear: true });
         setBodyLocalPreviewUrl((prev) => {
           revokeObjectUrlSafe(prev);
           return null;
@@ -2437,7 +2750,7 @@ export default function Onboarding() {
           );
           portraitUrl = uploadedPortrait.storedRef;
           setPortraitSavedUrl(portraitUrl);
-          setPortraitDisplayResolved(uploadedPortrait.displayUrl);
+          writePortraitDisplayResolved(uploadedPortrait.displayUrl, "handleSubmit.upload.portrait");
           console.log("[profilePhoto] facePhotoUrl", { facePhotoUrl: portraitUrl });
         }
         if (bodyFile) {
@@ -2445,7 +2758,7 @@ export default function Onboarding() {
           const uploadedBody = await uploadProfilePhoto(supabase, authUserId, bodyFile, "activity");
           fullbodyUrl = uploadedBody.storedRef;
           setBodySavedUrl(fullbodyUrl);
-          setBodyDisplayResolved(uploadedBody.displayUrl);
+          writeBodyDisplayResolved(uploadedBody.displayUrl, "handleSubmit.upload.activity");
           console.log("[profilePhoto] activityPhotoUrl", { activityPhotoUrl: fullbodyUrl });
         }
         if (!portraitUrl.trim() || !fullbodyUrl.trim()) {
@@ -4167,7 +4480,18 @@ export default function Onboarding() {
                             src={portraitDisplayUrl}
                             alt={t("onboarding_photo_face_preview")}
                             className="aspect-[3/4] w-full max-w-[280px] mx-auto object-cover"
-                            onLoad={() => {
+                            onLoad={(e) => {
+                              logPhotoTraceImgEvent(
+                                "onLoad",
+                                {
+                                  screen: "Onboarding",
+                                  component: "Onboarding.tsx",
+                                  userId: user?.id ?? null,
+                                  slot: "face",
+                                  srcReceived: portraitDisplayUrl,
+                                },
+                                e.currentTarget,
+                              );
                               if (portraitDisplayUrl.startsWith("blob:")) {
                                 console.log("PHOTO_PREVIEW_LOCAL_OK", { slot: "face", phase: "render" });
                                 return;
@@ -4178,7 +4502,18 @@ export default function Onboarding() {
                                 phase: "render",
                               });
                             }}
-                            onError={() => {
+                            onError={(e) => {
+                              logPhotoTraceImgEvent(
+                                "onError",
+                                {
+                                  screen: "Onboarding",
+                                  component: "Onboarding.tsx",
+                                  userId: user?.id ?? null,
+                                  slot: "face",
+                                  srcReceived: portraitDisplayUrl,
+                                },
+                                e.currentTarget,
+                              );
                               console.warn("PHOTO_PREVIEW_ERROR_FULL", {
                                 slot: "face",
                                 src: portraitDisplayUrl,
@@ -4242,7 +4577,18 @@ export default function Onboarding() {
                             src={bodyDisplayUrl}
                             alt={t("onboarding_photo_activity_preview")}
                             className="aspect-[3/4] w-full max-w-[280px] mx-auto object-cover"
-                            onLoad={() => {
+                            onLoad={(e) => {
+                              logPhotoTraceImgEvent(
+                                "onLoad",
+                                {
+                                  screen: "Onboarding",
+                                  component: "Onboarding.tsx",
+                                  userId: user?.id ?? null,
+                                  slot: "activity",
+                                  srcReceived: bodyDisplayUrl,
+                                },
+                                e.currentTarget,
+                              );
                               if (bodyDisplayUrl.startsWith("blob:")) {
                                 console.log("PHOTO_PREVIEW_LOCAL_OK", { slot: "activity", phase: "render" });
                                 return;
@@ -4253,7 +4599,18 @@ export default function Onboarding() {
                                 phase: "render",
                               });
                             }}
-                            onError={() => {
+                            onError={(e) => {
+                              logPhotoTraceImgEvent(
+                                "onError",
+                                {
+                                  screen: "Onboarding",
+                                  component: "Onboarding.tsx",
+                                  userId: user?.id ?? null,
+                                  slot: "activity",
+                                  srcReceived: bodyDisplayUrl,
+                                },
+                                e.currentTarget,
+                              );
                               console.warn("PHOTO_PREVIEW_ERROR_FULL", {
                                 slot: "activity",
                                 src: bodyDisplayUrl,

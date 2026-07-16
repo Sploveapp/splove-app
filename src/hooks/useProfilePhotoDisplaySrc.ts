@@ -208,10 +208,10 @@ function collectOrderedRefs(
   return out;
 }
 
-/** main_photo_url → portrait_url → avatar_url (fullbody = slot secondaire uniquement) */
+/** portrait_url → main_photo_url → avatar_url (fullbody = slot secondaire uniquement) */
 const PRIMARY_PHOTO_FIELD_ORDER: Array<keyof ProfilePhotoFields> = [
-  "main_photo_url",
   "portrait_url",
+  "main_photo_url",
   "avatar_url",
 ];
 
@@ -249,7 +249,10 @@ function syncFallbackForRef(ref: string | null | undefined): string | null {
 
 /** Résolution ref BDD → URLs `<img>` (signed URL en premier — bucket privé). */
 export async function resolveProfilePhotoStoredRefDisplayUrls(storedRef: string): Promise<string[]> {
-  const normalized = normalizeProfilePhotoStoredRef(storedRef, supabase);
+  const raw = typeof storedRef === "string" ? storedRef.trim() : "";
+  if (!raw) return [];
+
+  const normalized = normalizeProfilePhotoStoredRef(raw, supabase);
   if (!normalized) return [];
 
   if (shouldPassThroughProfilePhotoDisplayUrl(normalized)) {
@@ -265,13 +268,23 @@ export async function resolveProfilePhotoStoredRefDisplayUrls(storedRef: string)
     out.push(t);
   };
 
-  push(await getProfilePhotoSignedUrl(supabase, storedRef));
-  push(await getProfilePhotoSignedUrl(supabase, storedRef, 3600));
-  if (normalized !== storedRef.trim()) {
+  push(await getProfilePhotoSignedUrl(supabase, raw));
+  push(await getProfilePhotoSignedUrl(supabase, raw, 3600));
+  if (normalized !== raw) {
     push(await getProfilePhotoSignedUrl(supabase, normalized));
   }
 
-  return filterProfilePhotoDisplayUrls(out);
+  const filtered = filterProfilePhotoDisplayUrls(out);
+  if (filtered.length > 0) return filtered;
+
+  // Dernier recours : URL HTTP(S) déjà en BDD (évite fallback SPLove / no_candidates).
+  if (raw.startsWith("http://") || raw.startsWith("https://")) {
+    console.log("[PROFILE_PHOTO_FIX] direct_url_used", { field: "stored_ref" });
+    console.log("[PROFILE_PHOTO_FIX] preview_ready", { sourceKind: "direct_https" });
+    return [raw];
+  }
+
+  return [];
 }
 
 /**
@@ -405,7 +418,22 @@ export function useProfilePhotoDisplaySrc(
       firstStored && !skipSyncPublicProfilePhotoUrl(firstStored)
         ? filterProfilePhotoDisplayUrls(buildSyncProfilePhotoDisplayCandidates(firstStored))
         : [];
-    if (syncImmediate.length > 0) {
+    // URL HTTP(S) déjà en BDD : affichage immédiat (évite fallback pendant la résolution signée).
+    if (
+      syncImmediate.length === 0 &&
+      firstStored &&
+      (firstStored.startsWith("http://") || firstStored.startsWith("https://"))
+    ) {
+      console.log("[PROFILE_PHOTO_FIX] direct_url_used", {
+        field: fieldForRef(ctx, firstStored) ?? "stored_ref",
+      });
+      console.log("[PROFILE_PHOTO_FIX] preview_ready", { sourceKind: "direct_https" });
+      setRefIndex(0);
+      setUrlCandidates([firstStored]);
+      setUrlIndex(0);
+      setIsLoading(true);
+      setIsFailed(false);
+    } else if (syncImmediate.length > 0) {
       setRefIndex(0);
       setUrlCandidates(syncImmediate);
       setUrlIndex(0);
@@ -446,7 +474,11 @@ export function useProfilePhotoDisplaySrc(
     }
 
     const gen = ++genRef.current;
-    if (syncImmediate.length === 0) {
+    const hasDirectHttpsSticky =
+      syncImmediate.length === 0 &&
+      Boolean(firstStored) &&
+      (firstStored.startsWith("http://") || firstStored.startsWith("https://"));
+    if (syncImmediate.length === 0 && !hasDirectHttpsSticky) {
       setIsLoading(true);
       setUrlCandidates([]);
     }

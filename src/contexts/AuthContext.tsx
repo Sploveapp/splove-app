@@ -148,6 +148,35 @@ function profileRowToProfile(row: AppProfile): Profile {
   } as Profile;
 }
 
+/** Audit temporaire identité auth.users ↔ public.profiles — diagnostic only. */
+function logSelfProfileAudit(
+  source: string,
+  authUserId: string,
+  row: Record<string, unknown> | null | undefined,
+  queryError: string | null,
+  extra?: Record<string, unknown>,
+): void {
+  const fetchedId = typeof row?.id === "string" ? row.id : null;
+  console.error("[SELF_PROFILE_AUDIT] source", source);
+  console.error("[SELF_PROFILE_AUDIT] auth_user_id", authUserId);
+  console.error("[SELF_PROFILE_AUDIT] fetched_profile_id", fetchedId);
+  console.error("[SELF_PROFILE_AUDIT] ids_match", Boolean(fetchedId && fetchedId === authUserId));
+  console.error(
+    "[SELF_PROFILE_AUDIT] portrait_url",
+    typeof row?.portrait_url === "string" ? row.portrait_url : null,
+  );
+  console.error(
+    "[SELF_PROFILE_AUDIT] main_photo_url",
+    typeof row?.main_photo_url === "string" ? row.main_photo_url : null,
+  );
+  console.error(
+    "[SELF_PROFILE_AUDIT] avatar_url",
+    typeof row?.avatar_url === "string" ? row.avatar_url : null,
+  );
+  console.error("[SELF_PROFILE_AUDIT] profile_query_error", queryError);
+  if (extra) console.error("[SELF_PROFILE_AUDIT] extra", extra);
+}
+
 /**
  * Lecture `profiles` en cascade (tiers) : schéma Render partiel → pas de 400 bloquant,
  * la décision auth repose sur un noyau présent dans les paliers bas (flags + id).
@@ -161,13 +190,43 @@ async function fetchProfileCore(
 
   let { data, usedSelect, lastError } = await runTiers();
 
+  logSelfProfileAudit(
+    `${logLabel} before_ensure`,
+    userId,
+    data,
+    lastError?.message ?? (data ? null : "no_row"),
+    { usedSelectSample: usedSelect?.slice(0, 80) ?? null, ensureCalled: false },
+  );
+
   if (!data) {
     const created = await ensureProfileRowForAuthUserId(userId);
+    console.error("[SELF_PROFILE_AUDIT] ensureProfileRowForAuthUserId", {
+      auth_user_id: userId,
+      returned: created,
+    });
     if (created) {
       const again = await runTiers();
       data = again.data;
       usedSelect = again.usedSelect;
       lastError = again.lastError;
+      logSelfProfileAudit(
+        `${logLabel} after_ensure`,
+        userId,
+        data,
+        lastError?.message ?? (data ? null : "no_row_after_ensure"),
+        {
+          usedSelectSample: usedSelect?.slice(0, 80) ?? null,
+          ensureReturned: created,
+        },
+      );
+    } else {
+      logSelfProfileAudit(
+        `${logLabel} ensure_failed`,
+        userId,
+        null,
+        lastError?.message ?? "ensure_returned_false",
+        { ensureReturned: created },
+      );
     }
   }
 
@@ -206,12 +265,15 @@ async function fetchProfileCore(
       });
     }
     console.warn("[AuthContext] fetchProfile: unexpected profile row shape");
+    logSelfProfileAudit(`${logLabel} invalid_row_shape`, userId, data, "invalid_row_shape");
     return null;
   }
 
   const normalized =
     normalizeProfileRowCanonicalPhotos(data as Record<string, unknown>, supabase) ??
     (data as Record<string, unknown>);
+
+  logSelfProfileAudit(`${logLabel} success`, userId, normalized, null);
 
   return profileRowToProfile(normalized as AppProfile);
 }
@@ -344,11 +406,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               ) as AppProfile,
             ),
           );
+          console.error("[SELF_PROFILE_AUDIT] loadProfile_committed", {
+            auth_user_id: userId,
+            fetched_profile_id: fast.id,
+            ids_match: fast.id === userId,
+            prev_profile_id: (profileRef.current as { id?: string } | null)?.id ?? null,
+          });
           console.log("AUTH_PROFILE_READY", { userId: fast.id.slice(0, 8) });
           void tryExitOAuthLoadingAfterProfileReady(
             fast as unknown as Record<string, unknown>,
             userId,
           );
+        } else {
+          console.error("[SELF_PROFILE_AUDIT] loadProfile_no_row", {
+            auth_user_id: userId,
+            fetched_profile_id: null,
+            ids_match: false,
+          });
         }
         if (!DISCOVER_BETA_SIMPLE_PIPELINE && fast?.id) {
           deferSecondaryWork(() => {

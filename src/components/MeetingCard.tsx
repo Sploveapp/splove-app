@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
 
 export type MeetingCardTab = "respond" | "upcoming" | "past";
 
@@ -38,12 +40,52 @@ function PartnerAvatar({
 }) {
   const initial = (name.trim().charAt(0) || "?").toUpperCase();
   const displayUrl = useProfilePhotoSignedUrl(url);
+
+  useEffect(() => {
+    logPhotoComponent("MeetingCard.tsx/PartnerAvatar");
+    logPhotoTrace({
+      screen: "MesRencontres",
+      component: "MeetingCard.tsx/PartnerAvatar",
+      userId: null,
+      portrait_url: null,
+      main_photo_url: url,
+      avatar_url: null,
+      portraitDisplayResolved: displayUrl,
+      facePreviewSrc: displayUrl ? "set" : "missing",
+      finalImgSrc: displayUrl,
+    });
+  }, [url, displayUrl]);
+
   if (url && url.length > 0) {
     return displayUrl ? (
       <img
         src={displayUrl}
         alt=""
         className="h-14 w-14 shrink-0 rounded-2xl object-cover ring-1 ring-zinc-200"
+        onLoad={(e) => {
+          logPhotoTraceImgEvent(
+            "onLoad",
+            {
+              screen: "MesRencontres",
+              component: "MeetingCard.tsx/PartnerAvatar",
+              slot: "partner",
+              srcReceived: displayUrl,
+            },
+            e.currentTarget,
+          );
+        }}
+        onError={(e) => {
+          logPhotoTraceImgEvent(
+            "onError",
+            {
+              screen: "MesRencontres",
+              component: "MeetingCard.tsx/PartnerAvatar",
+              slot: "partner",
+              srcReceived: displayUrl,
+            },
+            e.currentTarget,
+          );
+        }}
       />
     ) : (
       <div

@@ -38,6 +38,7 @@ vi.mock("./completeNativeOAuthReturn", () => ({
 vi.mock("./sploveIosGoogleOAuth", () => ({
   isSploveIosGoogleOAuthAvailable: vi.fn(async () => false),
   openSploveIosGoogleOAuthSession: vi.fn(),
+  signInWithAppleNative: vi.fn(),
 }));
 
 describe("capacitorOAuth garde-fous Browser.open iOS", () => {

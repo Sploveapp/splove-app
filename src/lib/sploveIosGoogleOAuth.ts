@@ -18,9 +18,18 @@ export type SploveIosGoogleOAuthOpenResult = {
   url?: string;
 };
 
+export type SploveIosAppleNativeSignInResult = {
+  identityToken: string;
+  rawNonce: string;
+  email?: string;
+  givenName?: string;
+  familyName?: string;
+};
+
 export interface SploveIosGoogleOAuthPlugin {
   isAvailable(): Promise<{ available: boolean }>;
   openGoogleOAuth(options: { url: string }): Promise<SploveIosGoogleOAuthOpenResult>;
+  signInWithApple(): Promise<SploveIosAppleNativeSignInResult>;
   showConnectingMask(): Promise<void>;
   showFinalizingMask(): Promise<void>;
   hideOAuthMask(): Promise<void>;
@@ -47,6 +56,11 @@ export async function openSploveIosGoogleOAuthSession(
   url: string,
 ): Promise<SploveIosGoogleOAuthOpenResult> {
   return SploveIosGoogleOAuth.openGoogleOAuth({ url: url.trim() });
+}
+
+/** Sign in with Apple natif (ASAuthorization) — identityToken + rawNonce. */
+export async function signInWithAppleNative(): Promise<SploveIosAppleNativeSignInResult> {
+  return SploveIosGoogleOAuth.signInWithApple();
 }
 
 export async function showSploveIosOAuthConnectingMask(): Promise<void> {

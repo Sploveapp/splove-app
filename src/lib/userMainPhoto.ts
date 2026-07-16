@@ -15,8 +15,8 @@ export const SPLOVE_PROFILE_PHOTO_FALLBACK_SRC: string = sploveMark;
  * Pas de `profile_photo_url` ni `photos[0]` dans le schéma Supabase actuel.
  */
 export const USER_MAIN_PHOTO_PRIMARY_FIELD_ORDER = [
-  "main_photo_url",
   "portrait_url",
+  "main_photo_url",
   "avatar_url",
 ] as const;
 

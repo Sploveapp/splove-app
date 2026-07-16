@@ -10,6 +10,7 @@ import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
 import { INBOX_REFRESH_EVENT } from "../constants";
 import { countPendingSecondChancesForUser } from "../services/secondChance.service";
 import { formatBadge } from "../lib/formatBadge";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
 
 type InboxRow = {
   conversationId: string;
@@ -30,6 +31,22 @@ function MessageThreadRowItem(props: {
   const { row, t, navigate } = props;
   const otherPhotoDisplay = useProfilePhotoSignedUrl(row.otherPhoto);
   const hasUnread = row.unreadCount > 0;
+
+  useEffect(() => {
+    logPhotoComponent("Messages.tsx/MessageThreadRowItem");
+    logPhotoTrace({
+      screen: "Messages",
+      component: "Messages.tsx/MessageThreadRowItem",
+      userId: row.otherUserId,
+      portrait_url: null,
+      main_photo_url: row.otherPhoto,
+      avatar_url: null,
+      portraitDisplayResolved: otherPhotoDisplay,
+      facePreviewSrc: otherPhotoDisplay ? "set" : "missing",
+      finalImgSrc: otherPhotoDisplay,
+      extra: { otherPhotoRaw: row.otherPhoto },
+    });
+  }, [row.otherUserId, row.otherPhoto, otherPhotoDisplay]);
 
   return (
     <li>
@@ -55,6 +72,32 @@ function MessageThreadRowItem(props: {
               className={`h-[3.25rem] w-[3.25rem] rounded-full object-cover ring-2 ${
                 hasUnread ? "ring-white/15" : "ring-app-border/80"
               }`}
+              onLoad={(e) => {
+                logPhotoTraceImgEvent(
+                  "onLoad",
+                  {
+                    screen: "Messages",
+                    component: "Messages.tsx/MessageThreadRowItem",
+                    userId: row.otherUserId,
+                    slot: "inbox_avatar",
+                    srcReceived: otherPhotoDisplay,
+                  },
+                  e.currentTarget,
+                );
+              }}
+              onError={(e) => {
+                logPhotoTraceImgEvent(
+                  "onError",
+                  {
+                    screen: "Messages",
+                    component: "Messages.tsx/MessageThreadRowItem",
+                    userId: row.otherUserId,
+                    slot: "inbox_avatar",
+                    srcReceived: otherPhotoDisplay,
+                  },
+                  e.currentTarget,
+                );
+              }}
             />
           ) : (
             <div

@@ -1,6 +1,8 @@
 import { NAV_BADGE_NOTIFICATION } from "../../constants/theme";
+import { useEffect } from "react";
 import { useProfilePhotoSignedUrl } from "../../hooks/useProfilePhotoSignedUrl";
 import type { NotificationPresentation } from "../../lib/sploveNotifications";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../../lib/photoTraceLog";
 
 type Props = {
   presentation: NotificationPresentation;
@@ -11,6 +13,21 @@ type Props = {
 
 export function NotificationListItem({ presentation, relativeTime, unread, onOpen }: Props) {
   const avatarUrl = useProfilePhotoSignedUrl(presentation.actorAvatarUrl);
+
+  useEffect(() => {
+    logPhotoComponent("NotificationListItem.tsx");
+    logPhotoTrace({
+      screen: "Notifications",
+      component: "NotificationListItem.tsx",
+      userId: null,
+      portrait_url: null,
+      main_photo_url: presentation.actorAvatarUrl,
+      avatar_url: presentation.actorAvatarUrl,
+      portraitDisplayResolved: avatarUrl,
+      facePreviewSrc: avatarUrl ? "set" : "missing",
+      finalImgSrc: avatarUrl,
+    });
+  }, [presentation.actorAvatarUrl, avatarUrl]);
 
   return (
     <li>
@@ -29,6 +46,30 @@ export function NotificationListItem({ presentation, relativeTime, unread, onOpe
               src={avatarUrl}
               alt=""
               className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-white/10"
+              onLoad={(e) => {
+                logPhotoTraceImgEvent(
+                  "onLoad",
+                  {
+                    screen: "Notifications",
+                    component: "NotificationListItem.tsx",
+                    slot: "actor_avatar",
+                    srcReceived: avatarUrl,
+                  },
+                  e.currentTarget,
+                );
+              }}
+              onError={(e) => {
+                logPhotoTraceImgEvent(
+                  "onError",
+                  {
+                    screen: "Notifications",
+                    component: "NotificationListItem.tsx",
+                    slot: "actor_avatar",
+                    srcReceived: avatarUrl,
+                  },
+                  e.currentTarget,
+                );
+              }}
             />
           ) : (
             <span

@@ -4,6 +4,7 @@ import { useTranslation } from "../i18n/useTranslation";
 import { SPLOVE_BOTTOM_CLEARANCE } from "../constants/appBottomNavLayout";
 import type { ProfilePhotoUrlFields } from "../lib/profilePhotoDisplayUrl";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
 
 type Props = {
   isOpen: boolean;
@@ -63,6 +64,19 @@ export function ProfilePhotoViewerModal({ isOpen, onClose, rawRefs, initialIndex
 
   useEffect(() => {
     if (!isOpen || !rawCurrent) return;
+    logPhotoComponent("ProfilePhotoViewerModal.tsx");
+    logPhotoTrace({
+      screen: "PhotoViewer",
+      component: "ProfilePhotoViewerModal.tsx",
+      userId: null,
+      portrait_url: profilePhotoFields?.portrait_url ?? null,
+      main_photo_url: profilePhotoFields?.main_photo_url ?? null,
+      avatar_url: profilePhotoFields?.avatar_url ?? null,
+      portraitDisplayResolved: displayUrl,
+      facePreviewSrc: displayUrl ? "set" : "missing",
+      finalImgSrc: displayUrl,
+      extra: { rawRef: rawCurrent, index },
+    });
     PhotoRenderLog.displaySrc({
       screen: "PhotoViewer",
       displaySrc: displayUrl,
@@ -145,8 +159,32 @@ export function ProfilePhotoViewerModal({ isOpen, onClose, rawRefs, initialIndex
             alt={alt}
             className="max-h-[min(100dvh,100vh)] max-w-full object-contain"
             onClick={(e) => e.stopPropagation()}
-            onLoad={photoViewerImgHandlers.onLoad}
-            onError={photoViewerImgHandlers.onError}
+            onLoad={(e) => {
+              logPhotoTraceImgEvent(
+                "onLoad",
+                {
+                  screen: "PhotoViewer",
+                  component: "ProfilePhotoViewerModal.tsx",
+                  slot: "viewer",
+                  srcReceived: displayUrl,
+                },
+                e.currentTarget,
+              );
+              photoViewerImgHandlers.onLoad();
+            }}
+            onError={(e) => {
+              logPhotoTraceImgEvent(
+                "onError",
+                {
+                  screen: "PhotoViewer",
+                  component: "ProfilePhotoViewerModal.tsx",
+                  slot: "viewer",
+                  srcReceived: displayUrl,
+                },
+                e.currentTarget,
+              );
+              photoViewerImgHandlers.onError();
+            }}
           />
         ) : (
           <div className="text-sm text-white/50">{t("loading")}</div>

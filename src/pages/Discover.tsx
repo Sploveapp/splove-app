@@ -80,6 +80,7 @@ import { EmptyDiscoverState } from "../components/discover/EmptyDiscoverState";
 import { SplovePinIcon } from "../components/splovePlus/SplovePlusIcons";
 import { ProfilePhotoViewerModal } from "../components/ProfilePhotoViewerModal";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
 import { useDiscoverUndoNavRegistration } from "../contexts/DiscoverUndoNavContext";
 import { IS_BETA_UNDO_FREE } from "../constants/discoverUndo";
 import {
@@ -1001,6 +1002,31 @@ const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
   const photoState = useMoveProfilePrimaryPhoto(profile, "discover.stack_silhouette");
   const photoUrl = photoState.displaySrc ?? "";
   const isBack = layer === "back";
+
+  useEffect(() => {
+    logPhotoComponent("Discover.tsx/DiscoverStackSilhouette");
+    logPhotoTrace({
+      screen: "Discover",
+      component: "Discover.tsx/DiscoverStackSilhouette",
+      userId: profile.id,
+      portrait_url: profile.portrait_url ?? null,
+      main_photo_url: profile.main_photo_url ?? null,
+      avatar_url: profile.avatar_url ?? null,
+      portraitDisplayResolved: photoState.displaySrc,
+      facePreviewSrc: photoUrl ? "set" : "missing",
+      finalImgSrc: photoUrl || null,
+      extra: { layer },
+    });
+  }, [
+    profile.id,
+    profile.portrait_url,
+    profile.main_photo_url,
+    profile.avatar_url,
+    photoUrl,
+    photoState.displaySrc,
+    layer,
+  ]);
+
   if (!hasFiniteDiscoverCoordinates(profile)) {
     if (import.meta.env.DEV) {
       console.warn("[Discover GPS] DiscoverStackSilhouette_guard", {
@@ -1028,7 +1054,38 @@ const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
       <div className="flex h-full flex-col overflow-hidden rounded-[26px] bg-zinc-950 shadow-[0_24px_55px_rgba(0,0,0,0.5)] ring-1 ring-white/[0.06]">
         <div className="relative min-h-0 flex-1 overflow-hidden">
           {photoUrl ? (
-            <img src={photoUrl} alt="" className="h-full w-full object-cover" onError={photoState.onImageError} />
+            <img
+              src={photoUrl}
+              alt=""
+              className="h-full w-full object-cover"
+              onLoad={(e) => {
+                logPhotoTraceImgEvent(
+                  "onLoad",
+                  {
+                    screen: "Discover",
+                    component: "Discover.tsx/DiscoverStackSilhouette",
+                    userId: profile.id,
+                    slot: "silhouette",
+                    srcReceived: photoUrl,
+                  },
+                  e.currentTarget,
+                );
+              }}
+              onError={(e) => {
+                logPhotoTraceImgEvent(
+                  "onError",
+                  {
+                    screen: "Discover",
+                    component: "Discover.tsx/DiscoverStackSilhouette",
+                    userId: profile.id,
+                    slot: "silhouette",
+                    srcReceived: photoUrl,
+                  },
+                  e.currentTarget,
+                );
+                photoState.onImageError();
+              }}
+            />
           ) : photoState.isPending ? (
             <div className="h-full min-h-[240px] bg-zinc-900" aria-busy />
           ) : (

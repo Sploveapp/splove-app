@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getUserMainPhoto, getUserMainPhotoRefCandidates, getUserMainPhotoUrl } from "./userMainPhoto";
 
 describe("getUserMainPhoto", () => {
-  it("priorise main_photo_url puis portrait_url puis avatar_url", () => {
+  it("priorise portrait_url puis main_photo_url puis avatar_url", () => {
     expect(
       getUserMainPhoto({
         id: "u1",
@@ -12,8 +12,8 @@ describe("getUserMainPhoto", () => {
       }),
     ).toMatchObject({
       userId: "u1",
-      storedRef: "https://x.co/main.jpg",
-      sourceField: "main_photo_url",
+      storedRef: "https://x.co/portrait.jpg",
+      sourceField: "portrait_url",
     });
 
     expect(
@@ -72,7 +72,7 @@ describe("getUserMainPhotoRefCandidates", () => {
       avatar_url: "https://x.co/other.jpg",
     });
     expect(refs).toEqual(["https://x.co/same.jpg", "https://x.co/other.jpg"]);
-    expect(fieldByRef["https://x.co/same.jpg"]).toBe("main_photo_url");
+    expect(fieldByRef["https://x.co/same.jpg"]).toBe("portrait_url");
     expect(fieldByRef["https://x.co/other.jpg"]).toBe("avatar_url");
   });
 

@@ -33,6 +33,7 @@ import {
 import { normalizeProfileRowCanonicalPhotos } from "../lib/onboardingProfilePhotos";
 import { PhotoFlowLog, photoFlowFieldsFromRow } from "../lib/photoFlowLog";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
 import { buildIosAwareProfilePhotoImgHandlers } from "../lib/profilePhotoIosImgHandlers";
 import { invalidateProfilePhotoDisplayCaches } from "../lib/profilePhotoDisplayInvalidate";
 import { coerceProfileHeightCm, parseHeightCmOptionalInput } from "../lib/profileHeightCm";
@@ -239,6 +240,7 @@ function parseLookingFor(raw: unknown): LookingForValue[] {
 }
 
 export default function EditProfile() {
+  console.error("[TRACE EXECUTED] EditProfile.tsx");
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { user, profile, refetchProfile, commitProfileRow } = useAuth();
@@ -331,6 +333,40 @@ export default function EditProfile() {
 
   const showPrimaryImg = primaryIosLayer.mountImg && Boolean(primaryImgSrc);
   const showSecondaryImg = secondaryIosLayer.mountImg && Boolean(secondaryImgSrc);
+
+  useEffect(() => {
+    logPhotoComponent("EditProfile.tsx");
+  }, []);
+
+  useEffect(() => {
+    logPhotoTrace({
+      screen: "Modifier mon profil",
+      component: "EditProfile.tsx",
+      userId: user?.id ?? null,
+      portrait_url: profile?.portrait_url ?? portraitUrl ?? null,
+      main_photo_url: typeof profile?.main_photo_url === "string" ? profile.main_photo_url : null,
+      avatar_url: typeof profile?.avatar_url === "string" ? profile.avatar_url : null,
+      portraitDisplayResolved: primaryPhoto.src,
+      facePreviewSrc: primaryImgSrc ? "set" : "missing",
+      finalImgSrc: primaryImgSrc,
+      extra: {
+        showPrimaryImg,
+        showSecondaryImg,
+        secondaryFinalImgSrc: secondaryImgSrc,
+      },
+    });
+  }, [
+    user?.id,
+    profile?.portrait_url,
+    profile?.main_photo_url,
+    profile?.avatar_url,
+    portraitUrl,
+    primaryPhoto.src,
+    primaryImgSrc,
+    secondaryImgSrc,
+    showPrimaryImg,
+    showSecondaryImg,
+  ]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -1220,8 +1256,34 @@ export default function EditProfile() {
                   key={`primary-${primaryPhoto.activeRef ?? primaryStoredRef ?? "none"}-${primaryPhoto.urlIndex}-${primaryIosLayer.ios.usingDataUrl ? "data" : "remote"}`}
                   src={primaryImgSrc ?? undefined}
                   alt={t("photos.primary")}
-                  onLoad={editPrimaryImgHandlers.onLoad}
-                  onError={editPrimaryImgHandlers.onError}
+                  onLoad={(e) => {
+                    logPhotoTraceImgEvent(
+                      "onLoad",
+                      {
+                        screen: "Modifier mon profil",
+                        component: "EditProfile.tsx",
+                        userId: user?.id ?? null,
+                        slot: "primary",
+                        srcReceived: primaryImgSrc,
+                      },
+                      e.currentTarget,
+                    );
+                    editPrimaryImgHandlers.onLoad();
+                  }}
+                  onError={(e) => {
+                    logPhotoTraceImgEvent(
+                      "onError",
+                      {
+                        screen: "Modifier mon profil",
+                        component: "EditProfile.tsx",
+                        userId: user?.id ?? null,
+                        slot: "primary",
+                        srcReceived: primaryImgSrc,
+                      },
+                      e.currentTarget,
+                    );
+                    editPrimaryImgHandlers.onError();
+                  }}
                   style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, marginBottom: 10 }}
                 />
               ) : (
@@ -1266,8 +1328,34 @@ export default function EditProfile() {
                   key={`secondary-${secondaryPhoto.activeRef ?? secondaryStoredRef ?? "none"}-${secondaryPhoto.urlIndex}`}
                   src={secondaryImgSrc ?? undefined}
                   alt={t("photos.secondary")}
-                  onLoad={editSecondaryImgHandlers.onLoad}
-                  onError={editSecondaryImgHandlers.onError}
+                  onLoad={(e) => {
+                    logPhotoTraceImgEvent(
+                      "onLoad",
+                      {
+                        screen: "Modifier mon profil",
+                        component: "EditProfile.tsx",
+                        userId: user?.id ?? null,
+                        slot: "secondary",
+                        srcReceived: secondaryImgSrc,
+                      },
+                      e.currentTarget,
+                    );
+                    editSecondaryImgHandlers.onLoad();
+                  }}
+                  onError={(e) => {
+                    logPhotoTraceImgEvent(
+                      "onError",
+                      {
+                        screen: "Modifier mon profil",
+                        component: "EditProfile.tsx",
+                        userId: user?.id ?? null,
+                        slot: "secondary",
+                        srcReceived: secondaryImgSrc,
+                      },
+                      e.currentTarget,
+                    );
+                    editSecondaryImgHandlers.onError();
+                  }}
                   style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, marginBottom: 10 }}
                 />
               ) : (

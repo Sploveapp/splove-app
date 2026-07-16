@@ -118,12 +118,16 @@ async function canReadPublicUrl(url: string): Promise<boolean> {
 /**
  * Résout une référence BDD → URLs d’aperçu candidates pour `<img>` (WebView iOS).
  * Ordre : URL publique d’abord (référence canonique BDD), puis signée, puis signée régénérée.
+ * Si une URL HTTP(S) complète existe et que la signature échoue, elle reste candidate.
  */
 export async function resolveProfilePhotoDisplayCandidates(
   supabase: SupabaseClient,
   storedRef: string | null | undefined,
 ): Promise<string[]> {
-  const normalized = normalizeProfilePhotoStoredRef(storedRef, supabase);
+  const raw = typeof storedRef === "string" ? storedRef.trim() : "";
+  if (!raw) return [];
+
+  const normalized = normalizeProfilePhotoStoredRef(raw, supabase);
   if (!normalized) return [];
 
   if (shouldPassThroughProfilePhotoDisplayUrl(normalized)) {
@@ -140,14 +144,24 @@ export async function resolveProfilePhotoDisplayCandidates(
     out.push(t);
   };
 
-  push(await getProfilePhotoSignedUrl(supabase, storedRef));
-  push(await getProfilePhotoSignedUrl(supabase, storedRef, 3600));
-  if (normalized !== String(storedRef ?? "").trim()) {
+  push(await getProfilePhotoSignedUrl(supabase, raw));
+  push(await getProfilePhotoSignedUrl(supabase, raw, 3600));
+  if (normalized !== raw) {
     push(await getProfilePhotoSignedUrl(supabase, normalized));
+  }
+
+  // URL HTTP(S) déjà en BDD : ne jamais aboutir à aucune candidate si le signing échoue.
+  if (out.length === 0 && (raw.startsWith("http://") || raw.startsWith("https://"))) {
+    push(raw);
   }
 
   return out;
 }
+
+export type ResolveProfilePhotoDisplayOptions = {
+  userId?: string | null;
+  slot?: "portrait" | "activity" | null;
+};
 
 /**
  * Résout une référence BDD → URL d’aperçu (première candidate utilisable).
@@ -155,20 +169,61 @@ export async function resolveProfilePhotoDisplayCandidates(
 export async function resolveProfilePhotoDisplayUrl(
   supabase: SupabaseClient,
   storedRef: string | null | undefined,
+  options?: ResolveProfilePhotoDisplayOptions,
 ): Promise<string | null> {
-  const candidates = await resolveProfilePhotoDisplayCandidates(supabase, storedRef);
-  const first = candidates[0] ?? null;
-  if (first) {
+  const raw = typeof storedRef === "string" ? storedRef.trim() : "";
+  const hasDirectUrl = raw.startsWith("http://") || raw.startsWith("https://");
+  const hasUserId = Boolean(options?.userId?.trim());
+  const slot = options?.slot ?? null;
+
+  console.log("[PROFILE_PHOTO_FIX] resolver_input", {
+    hasUserId,
+    slot,
+    hasStoredRef: Boolean(raw),
+    hasDirectUrl,
+  });
+
+  if (!raw) {
+    return null;
+  }
+
+  if (hasDirectUrl) {
+    console.log("[PROFILE_PHOTO_FIX] direct_url_used", { field: "stored_ref" });
+    // Prefer signed when available, but never drop a valid HTTPS URL.
+    const candidates = await resolveProfilePhotoDisplayCandidates(supabase, raw);
+    const first = candidates[0] ?? raw;
+    console.log("[PROFILE_PHOTO_FIX] preview_ready", {
+      sourceKind: first === raw ? "direct_https" : "signed_url",
+    });
     SPLovePhotoLog.displayResolved({
       source: "resolveProfilePhotoDisplayUrl",
-      storedRef,
+      userId: options?.userId ?? null,
+      slot: slot ?? undefined,
+      storedRef: raw,
+      displayUrl: first,
+      extra: { candidateCount: candidates.length, directHttps: true },
+    });
+    return first;
+  }
+
+  const candidates = await resolveProfilePhotoDisplayCandidates(supabase, raw);
+  const first = candidates[0] ?? null;
+  if (first) {
+    console.log("[PROFILE_PHOTO_FIX] preview_ready", { sourceKind: "resolved" });
+    SPLovePhotoLog.displayResolved({
+      source: "resolveProfilePhotoDisplayUrl",
+      userId: options?.userId ?? null,
+      slot: slot ?? undefined,
+      storedRef: raw,
       displayUrl: first,
       extra: { candidateCount: candidates.length },
     });
   } else {
     SPLovePhotoLog.displayFailed({
       source: "resolveProfilePhotoDisplayUrl",
-      storedRef,
+      userId: options?.userId ?? null,
+      slot: slot ?? undefined,
+      storedRef: raw,
       error: "no_candidates",
     });
   }

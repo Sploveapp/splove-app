@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { useLikesReceived } from "../hooks/useLikesReceived";
@@ -26,6 +26,7 @@ import {
 } from "../services/likes.service";
 import type { LikeReceived, ProfileInLikesYou } from "../types/premium.types";
 import { formatHeightCmForDisplay } from "../lib/profileHeightCm";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
 
 type LikesPreviewProfile = ProfileInLikesYou & {
   birth_date?: string | null;
@@ -410,6 +411,30 @@ function LikesYouProfilePreviewModal({
   });
   const previewHeight = formatHeightCmForDisplay(profile.height_cm ?? null);
 
+  useEffect(() => {
+    logPhotoComponent("LikesYou.tsx/LikesYouProfilePreviewModal");
+    logPhotoTrace({
+      screen: "LikesYou",
+      component: "LikesYou.tsx/LikesYouProfilePreviewModal",
+      userId: profile.id,
+      portrait_url: profile.portrait_url ?? null,
+      main_photo_url: profile.main_photo_url ?? null,
+      avatar_url: profile.avatar_url ?? null,
+      portraitDisplayResolved: primaryPhotoState.displaySrc,
+      facePreviewSrc: primaryPhoto ? "set" : "missing",
+      finalImgSrc: primaryPhoto || null,
+      extra: { secondaryPhoto: secondaryPhoto || null },
+    });
+  }, [
+    profile.id,
+    profile.portrait_url,
+    profile.main_photo_url,
+    profile.avatar_url,
+    primaryPhoto,
+    secondaryPhoto,
+    primaryPhotoState.displaySrc,
+  ]);
+
   return (
     <div
       className="fixed inset-0 z-[60] flex items-end justify-center bg-black/45 p-4 sm:items-center"
@@ -430,8 +455,34 @@ function LikesYouProfilePreviewModal({
                 src={primaryPhoto}
                 alt=""
                 className="absolute inset-0 h-full w-full object-cover"
-                onLoad={primaryPhotoState.onImageLoad}
-                onError={primaryPhotoState.onImageError}
+                onLoad={(e) => {
+                  logPhotoTraceImgEvent(
+                    "onLoad",
+                    {
+                      screen: "LikesYou",
+                      component: "LikesYou.tsx/LikesYouProfilePreviewModal",
+                      userId: profile.id,
+                      slot: "primary",
+                      srcReceived: primaryPhoto,
+                    },
+                    e.currentTarget,
+                  );
+                  primaryPhotoState.onImageLoad();
+                }}
+                onError={(e) => {
+                  logPhotoTraceImgEvent(
+                    "onError",
+                    {
+                      screen: "LikesYou",
+                      component: "LikesYou.tsx/LikesYouProfilePreviewModal",
+                      userId: profile.id,
+                      slot: "primary",
+                      srcReceived: primaryPhoto,
+                    },
+                    e.currentTarget,
+                  );
+                  primaryPhotoState.onImageError();
+                }}
               />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center" style={{ background: APP_BORDER }}>
@@ -445,8 +496,34 @@ function LikesYouProfilePreviewModal({
                 src={secondaryPhoto}
                 alt=""
                 className="absolute inset-0 h-full w-full object-cover"
-                onLoad={secondaryPhotoState.onImageLoad}
-                onError={secondaryPhotoState.onImageError}
+                onLoad={(e) => {
+                  logPhotoTraceImgEvent(
+                    "onLoad",
+                    {
+                      screen: "LikesYou",
+                      component: "LikesYou.tsx/LikesYouProfilePreviewModal",
+                      userId: profile.id,
+                      slot: "secondary",
+                      srcReceived: secondaryPhoto,
+                    },
+                    e.currentTarget,
+                  );
+                  secondaryPhotoState.onImageLoad();
+                }}
+                onError={(e) => {
+                  logPhotoTraceImgEvent(
+                    "onError",
+                    {
+                      screen: "LikesYou",
+                      component: "LikesYou.tsx/LikesYouProfilePreviewModal",
+                      userId: profile.id,
+                      slot: "secondary",
+                      srcReceived: secondaryPhoto,
+                    },
+                    e.currentTarget,
+                  );
+                  secondaryPhotoState.onImageError();
+                }}
               />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center" style={{ background: APP_BORDER }}>

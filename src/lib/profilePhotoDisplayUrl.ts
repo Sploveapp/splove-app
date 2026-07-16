@@ -76,11 +76,11 @@ export function pickPortraitFirstProfilePhotoStoredRef(
   return buildPortraitFirstProfilePhotoRefCandidates(profile).refs[0] ?? null;
 }
 
-/** Photo principale : main → portrait → avatar (sans fullbody). */
+/** Photo principale : portrait → main → avatar (sans fullbody). */
 export function pickPrimaryProfilePhotoStoredRef(
   profile: ProfilePhotoUrlFields | null | undefined,
 ): string | null {
-  for (const key of ["main_photo_url", "portrait_url", "avatar_url"] as const) {
+  for (const key of ["portrait_url", "main_photo_url", "avatar_url"] as const) {
     const t = typeof profile?.[key] === "string" ? profile[key]!.trim() : "";
     if (t) return t;
   }
@@ -93,6 +93,29 @@ export function pickSecondaryProfilePhotoStoredRef(
 ): string | null {
   const t = typeof profile?.fullbody_url === "string" ? profile.fullbody_url.trim() : "";
   return t || null;
+}
+
+/** URL HTTP(S) non vide utilisable directement en `<img src>` (sans résolution async). */
+export function isHttpOrHttpsPhotoUrl(url: string | null | undefined): boolean {
+  const t = typeof url === "string" ? url.trim() : "";
+  return t.startsWith("http://") || t.startsWith("https://");
+}
+
+/**
+ * Photo principale affichable : portrait → main → avatar (URL HTTP(S) complète uniquement).
+ * Ne remplace jamais une URL valide par un fallback.
+ */
+export function pickDirectHttpProfilePhotoUrl(
+  profile: ProfilePhotoUrlFields | null | undefined,
+): { url: string; field: "portrait_url" | "main_photo_url" | "avatar_url" } | null {
+  for (const key of ["portrait_url", "main_photo_url", "avatar_url"] as const) {
+    const raw = profile?.[key];
+    const t = typeof raw === "string" ? raw.trim() : "";
+    if (isHttpOrHttpsPhotoUrl(t)) {
+      return { url: t, field: key };
+    }
+  }
+  return null;
 }
 
 /** URL publique Storage directe (pas signée, pas avatar OAuth externe). */
@@ -161,13 +184,18 @@ export function buildSyncProfilePhotoDisplaySrc(
   return buildSyncProfilePhotoDisplayCandidates(storedRef)[0] ?? null;
 }
 
-/** URL finale UI : résolution hook async uniquement — jamais d’URL publique profile-photos. */
+/** URL finale UI : résolution hook async — conserver une URL HTTP(S) valide déjà connue. */
 export function resolveProfilePhotoUiSrc(
-  _storedRef: string | null | undefined,
+  storedRef: string | null | undefined,
   resolvedSrc: string | null | undefined,
 ): string | null {
   const fromHook = typeof resolvedSrc === "string" ? resolvedSrc.trim() : "";
   if (fromHook && !isProfilePhotosPublicStorageUrl(fromHook)) return fromHook;
+  const direct = typeof storedRef === "string" ? storedRef.trim() : "";
+  if (isHttpOrHttpsPhotoUrl(direct)) {
+    if (fromHook && isProfilePhotosPublicStorageUrl(fromHook)) return fromHook;
+    return direct;
+  }
   return null;
 }
 

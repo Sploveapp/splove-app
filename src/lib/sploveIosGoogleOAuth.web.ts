@@ -1,4 +1,7 @@
-import type { SploveIosGoogleOAuthPlugin } from "./sploveIosGoogleOAuth";
+import type {
+  SploveIosAppleNativeSignInResult,
+  SploveIosGoogleOAuthPlugin,
+} from "./sploveIosGoogleOAuth";
 
 export class SploveIosGoogleOAuthWeb implements SploveIosGoogleOAuthPlugin {
   async isAvailable(): Promise<{ available: boolean }> {
@@ -7,6 +10,10 @@ export class SploveIosGoogleOAuthWeb implements SploveIosGoogleOAuthPlugin {
 
   async openGoogleOAuth(): Promise<{ outcome: "canceled" }> {
     return { outcome: "canceled" };
+  }
+
+  async signInWithApple(): Promise<SploveIosAppleNativeSignInResult> {
+    throw new Error("apple_native_unavailable_on_web");
   }
 
   async showConnectingMask(): Promise<void> {

@@ -10,6 +10,8 @@ import {
 } from "../constants/theme";
 import { IconProfileAvatarPlaceholder } from "./FunctionalIcons";
 import { formatCityDisplay } from "../lib/formatCityDisplay";
+import { logPhotoComponent, logPhotoTrace } from "../lib/photoTraceLog";
+import { useEffect } from "react";
 
 function getSports(like: LikeReceived): string[] {
   const list = like.profile?.profile_sports ?? [];
@@ -27,6 +29,22 @@ export function BlurredProfileCard({ like, onUnlock }: Props) {
   const profile = like.profile;
   const sports = getSports(like);
   const cityUi = profile ? formatCityDisplay(profile.city) : "";
+
+  useEffect(() => {
+    logPhotoComponent("BlurredProfileCard.tsx (no <img> — placeholder only)");
+    logPhotoTrace({
+      screen: "LikesYou",
+      component: "BlurredProfileCard.tsx",
+      userId: profile?.id ?? null,
+      portrait_url: profile?.portrait_url ?? null,
+      main_photo_url: profile?.main_photo_url ?? null,
+      avatar_url: profile?.avatar_url ?? null,
+      portraitDisplayResolved: null,
+      facePreviewSrc: "missing",
+      finalImgSrc: null,
+      extra: { note: "blurred_placeholder_no_img_element" },
+    });
+  }, [profile?.id, profile?.portrait_url, profile?.main_photo_url, profile?.avatar_url]);
 
   return (
     <div

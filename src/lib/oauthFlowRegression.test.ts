@@ -31,7 +31,6 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     expect(source).toContain("BROWSER_OPEN_GOOGLE");
     expect(source).not.toContain("probeOAuthReturnUrl");
     expect(source).not.toContain("resumeOAuthFromPersistedSession");
-    expect(source).not.toContain("app_state_active");
     expect(source).not.toContain("beginIosOAuthBrowserWait");
 
     const completeSource = readSrc("lib/completeNativeOAuthReturn.ts");
@@ -72,10 +71,11 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     expect(capSource).toContain("BROWSER_OPEN_GOOGLE");
     expect(capSource).toContain("signInWithAppleOAuth");
     expect(capSource).toContain("[AppleOAuth] start");
-    expect(capSource).toContain("[AppleOAuth] callback_received");
-    expect(capSource).toContain("[AppleOAuth] code_exchange_start");
-    expect(capSource).toContain("[AppleOAuth] session_ready");
-    expect(capSource).toContain("isNativeOAuthCallbackActionable");
+    expect(capSource).toContain("[OAuthCallback] app_url_open");
+    expect(capSource).toContain("signInWithAppleNative");
+    expect(capSource).toContain("signInWithIdToken");
+    expect(capSource).toContain("[APPLE_NATIVE] authorization_start");
+    expect(capSource).toContain("[APPLE_NATIVE] session_ready");
     expect(capSource).toContain("routeOAuthDeepLink");
     expect(capSource).toContain("assertIosBrowserOpenBeforeOpen");
     expect(capSource).toContain("BROWSER_OPEN_START");
@@ -83,6 +83,8 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     expect(capSource).toContain("IOS_BROWSER_OPEN_SUPABASE_FORBIDDEN");
     expect(capSource).not.toContain("startIosGoogleOAuthWebAuth");
     expect(capSource).not.toContain("browser_supabase_authorize");
+    expect(capSource).not.toContain("openSploveIosAppleOAuthSession");
+    expect(capSource).not.toContain("[AppleOAuth] native_auth_session_start");
 
     const androidBlock = capSource.slice(
       capSource.indexOf("const browserTargetUrl = googleOAuthNativeBrowserTargetUrl"),

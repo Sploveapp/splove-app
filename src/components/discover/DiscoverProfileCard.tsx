@@ -32,6 +32,7 @@ import { formatCityDisplay } from "../../lib/formatCityDisplay";
 import { BLOCK_PROFILE_LINK_LABEL, REPORT_LINK_LABEL } from "../../constants/copy";
 import { logPhotoDebug } from "../../hooks/useProfilePhotoDisplaySrc";
 import { classifyImgSrcForIosDebug, logPhotoIosDebug } from "../../lib/photoIosDebug";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../../lib/photoTraceLog";
 import { SplovePlayHeartPicker } from "./SplovePlayHeartPicker";
 import { SplovePlayIntroModal } from "./SplovePlayIntroModal";
 import type { SplovePlayAccess } from "../../lib/splovePlayAccess";
@@ -133,6 +134,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   onPhotoLoad,
   immersive = false,
 }: DiscoverProfileCardProps) {
+  console.error("[TRACE EXECUTED] DiscoverProfileCard");
   const { t } = useTranslation();
   const { user } = useAuth();
   const [heartPickerOpen, setHeartPickerOpen] = useState(false);
@@ -277,6 +279,33 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   const swipeLikeOpacity = Math.min(1, Math.abs(dx) / 120) * (likePreview ? 1 : 0);
 
   useEffect(() => {
+    logPhotoComponent("DiscoverProfileCard.tsx");
+  }, []);
+
+  useEffect(() => {
+    logPhotoTrace({
+      screen: "Discover",
+      component: "DiscoverProfileCard.tsx",
+      userId: profile.id,
+      portrait_url: profile.portrait_url ?? null,
+      main_photo_url: profile.main_photo_url ?? null,
+      avatar_url: profile.avatar_url ?? null,
+      portraitDisplayResolved: null,
+      facePreviewSrc: photoUrl ? "set" : "missing",
+      finalImgSrc: photoUrl || null,
+      extra: { photoPending, hasDisplayPhoto },
+    });
+  }, [
+    profile.id,
+    profile.portrait_url,
+    profile.main_photo_url,
+    profile.avatar_url,
+    photoUrl,
+    photoPending,
+    hasDisplayPhoto,
+  ]);
+
+  useEffect(() => {
     logPhotoDebug("screen.render", {
       screen: "Discover",
       profileId: profile.id,
@@ -324,6 +353,17 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
 
   const handlePhotoLoad: ReactEventHandler<HTMLImageElement> = useCallback(
     (event) => {
+      logPhotoTraceImgEvent(
+        "onLoad",
+        {
+          screen: "Discover",
+          component: "DiscoverProfileCard.tsx",
+          userId: profile.id,
+          slot: "primary",
+          srcReceived: photoUrl || null,
+        },
+        event.currentTarget,
+      );
       logPhotoIosDebug("img_onload", {
         screen: "Discover",
         profileId: profile.id,
@@ -365,6 +405,17 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
 
   const handlePhotoError: ReactEventHandler<HTMLImageElement> = useCallback(
     (event) => {
+      logPhotoTraceImgEvent(
+        "onError",
+        {
+          screen: "Discover",
+          component: "DiscoverProfileCard.tsx",
+          userId: profile.id,
+          slot: "primary",
+          srcReceived: photoUrl || null,
+        },
+        event.currentTarget,
+      );
       logPhotoIosDebug("img_onerror", {
         screen: "Discover",
         profileId: profile.id,

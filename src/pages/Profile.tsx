@@ -54,6 +54,7 @@ import {
 } from "../lib/profilePhotoDisplayUrl";
 import { mergeStickyPhotoHandlers, useStickyPhotoDisplaySrc } from "../lib/profilePhotoStickyDisplay";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 import {
   SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK,
@@ -121,6 +122,7 @@ type ProfileSportDisplay = {
 };
 
 export default function Profile() {
+  console.error("[TRACE EXECUTED] Profile.tsx");
   const { t, language } = useTranslation();
   const navigate = useNavigate();
   const { user, profile, refetchProfile, commitProfileRow, signOut, isSigningOut } = useAuth();
@@ -185,6 +187,101 @@ export default function Profile() {
   const avatarImgSrc = avatarSticky.displaySrc;
   const showAvatarImgStable = avatarIosLayer.mountImg && Boolean(avatarImgSrc);
   const showAvatarPlaceholder = avatarIosLayer.showLoadingPlaceholder;
+  /** Variable exacte passée à <img src> sur Mon profil. */
+  const finalAvatarImgSrc = avatarImgSrc;
+
+  useEffect(() => {
+    const sourceKind = classifyImgSrcForIosDebug(finalAvatarImgSrc);
+    console.error("[SELF_PROFILE_RENDER] authUserId", user?.id ?? null);
+    console.error("[SELF_PROFILE_RENDER] profileId", profile?.id ?? null);
+    console.error("[SELF_PROFILE_RENDER] portrait_url", avatarPhotoFields.portrait_url ?? null);
+    console.error("[SELF_PROFILE_RENDER] main_photo_url", avatarPhotoFields.main_photo_url ?? null);
+    console.error("[SELF_PROFILE_RENDER] avatar_url", avatarPhotoFields.avatar_url ?? null);
+    console.error("[SELF_PROFILE_RENDER] storedRef", primaryStoredRef);
+    console.error("[SELF_PROFILE_RENDER] resolvedDisplaySrc", avatarPhoto.src);
+    console.error("[SELF_PROFILE_RENDER] profileAvatarDisplaySrc", profileAvatarDisplaySrc);
+    console.error("[SELF_PROFILE_RENDER] finalAvatarImgSrc", finalAvatarImgSrc);
+    console.error("[SELF_PROFILE_RENDER] sourceKind", sourceKind);
+    console.error("[SELF_PROFILE_RENDER] gates", {
+      showAvatarImgStable,
+      showAvatarPlaceholder,
+      mountImg: avatarIosLayer.mountImg,
+      stickyDisplaySrc: avatarSticky.displaySrc,
+      stickyImageLoaded: avatarSticky.imageLoaded,
+      hookIsLoading: avatarPhoto.isLoading,
+      hookIsFailed: avatarPhoto.isFailed,
+      iosIsResolving: avatarIosLayer.ios.isResolving,
+      iosResolutionFailed: avatarIosLayer.ios.resolutionFailed,
+      iosUsingDataUrl: avatarIosLayer.ios.usingDataUrl,
+      refs: avatarRefCandidates.refs,
+      bootPhotoFields,
+      profile_portrait_url: typeof profile?.portrait_url === "string" ? profile.portrait_url : null,
+      img_will_exist_in_dom: showAvatarImgStable,
+      placeholder_branch: showAvatarImgStable
+        ? "img"
+        : showAvatarPlaceholder
+          ? "loading_placeholder"
+          : "icon_placeholder",
+    });
+  }, [
+    user?.id,
+    profile?.id,
+    profile?.portrait_url,
+    avatarPhotoFields.portrait_url,
+    avatarPhotoFields.main_photo_url,
+    avatarPhotoFields.avatar_url,
+    primaryStoredRef,
+    avatarPhoto.src,
+    avatarPhoto.isLoading,
+    avatarPhoto.isFailed,
+    profileAvatarDisplaySrc,
+    finalAvatarImgSrc,
+    showAvatarImgStable,
+    showAvatarPlaceholder,
+    avatarIosLayer.mountImg,
+    avatarIosLayer.ios.isResolving,
+    avatarIosLayer.ios.resolutionFailed,
+    avatarIosLayer.ios.usingDataUrl,
+    avatarSticky.displaySrc,
+    avatarSticky.imageLoaded,
+    avatarRefCandidates.refs,
+    bootPhotoFields,
+  ]);
+
+  useEffect(() => {
+    logPhotoComponent("Profile.tsx");
+  }, []);
+
+  useEffect(() => {
+    logPhotoTrace({
+      screen: "Mon profil",
+      component: "Profile.tsx",
+      userId: user?.id ?? null,
+      portrait_url: typeof profile?.portrait_url === "string" ? profile.portrait_url : null,
+      main_photo_url: typeof profile?.main_photo_url === "string" ? profile.main_photo_url : null,
+      avatar_url: typeof profile?.avatar_url === "string" ? profile.avatar_url : null,
+      portraitDisplayResolved: avatarPhoto.src,
+      facePreviewSrc: avatarImgSrc ? "set" : "missing",
+      finalImgSrc: avatarImgSrc,
+      imgOnLoad: null,
+      imgOnError: null,
+      extra: {
+        showAvatarImgStable,
+        showAvatarPlaceholder,
+        activeRef: primaryStoredRef,
+      },
+    });
+  }, [
+    user?.id,
+    profile?.portrait_url,
+    profile?.main_photo_url,
+    profile?.avatar_url,
+    avatarPhoto.src,
+    avatarImgSrc,
+    showAvatarImgStable,
+    showAvatarPlaceholder,
+    primaryStoredRef,
+  ]);
 
   useEffect(() => {
     if (!showAvatarImgStable || !avatarImgSrc) return;
@@ -198,10 +295,20 @@ export default function Profile() {
 
   const syncProfileForScreen = useCallback(async () => {
     if (!user?.id) return;
-    const row = await fetchProfileScreenFields(user.id);
+    const authUserId = user.id;
+    console.error("[SELF_PROFILE_AUDIT] auth_user_id", authUserId);
+    console.error("[SELF_PROFILE_AUDIT] source", "Profile.tsx/syncProfileForScreen");
+    const row = await fetchProfileScreenFields(authUserId);
     if (!row) {
+      console.error("[SELF_PROFILE_AUDIT] fetched_profile_id", null);
+      console.error("[SELF_PROFILE_AUDIT] ids_match", false);
+      console.error("[SELF_PROFILE_AUDIT] portrait_url", null);
+      console.error("[SELF_PROFILE_AUDIT] main_photo_url", null);
+      console.error("[SELF_PROFILE_AUDIT] avatar_url", null);
+      console.error("[SELF_PROFILE_AUDIT] profile_query_error", "fetchProfileScreenFields_returned_null");
+      console.error("[SELF_PROFILE_AUDIT] context_profile_id_before", profileRef.current?.id ?? null);
       PhotoFlowLog.screenProfileRow({
-        userId: user.id,
+        userId: authUserId,
         screen: "Profile",
         source: "syncProfileForScreen",
         row: null,
@@ -209,8 +316,25 @@ export default function Profile() {
       });
       return;
     }
+    const fetchedId = typeof row.id === "string" ? row.id : null;
+    console.error("[SELF_PROFILE_AUDIT] fetched_profile_id", fetchedId);
+    console.error("[SELF_PROFILE_AUDIT] ids_match", Boolean(fetchedId && fetchedId === authUserId));
+    console.error(
+      "[SELF_PROFILE_AUDIT] portrait_url",
+      typeof row.portrait_url === "string" ? row.portrait_url : null,
+    );
+    console.error(
+      "[SELF_PROFILE_AUDIT] main_photo_url",
+      typeof row.main_photo_url === "string" ? row.main_photo_url : null,
+    );
+    console.error(
+      "[SELF_PROFILE_AUDIT] avatar_url",
+      typeof row.avatar_url === "string" ? row.avatar_url : null,
+    );
+    console.error("[SELF_PROFILE_AUDIT] profile_query_error", null);
+    console.error("[SELF_PROFILE_AUDIT] context_profile_id_before", profileRef.current?.id ?? null);
     PhotoFlowLog.screenProfileRow({
-      userId: user.id,
+      userId: authUserId,
       screen: "Profile",
       source: "syncProfileForScreen",
       row,
@@ -223,6 +347,7 @@ export default function Profile() {
     } else if (typeof row.id === "string") {
       commitProfileRow(row);
     }
+    console.error("[SELF_PROFILE_AUDIT] context_profile_id_after_commit_intent", fetchedId);
   }, [user?.id, commitProfileRow]);
 
   useEffect(() => {
@@ -756,6 +881,22 @@ export default function Profile() {
     return <ProfileScreenSkeleton />;
   }
 
+  console.error("[PROFILE_RENDER]", {
+    portrait_url: avatarPhotoFields.portrait_url ?? null,
+    main_photo_url: avatarPhotoFields.main_photo_url ?? null,
+    avatar_url: avatarPhotoFields.avatar_url ?? null,
+    finalSrc: finalAvatarImgSrc,
+    isLoading: avatarPhoto.isLoading,
+    photoPending: showAvatarPlaceholder || avatarIosLayer.ios.isResolving,
+    showAvatarImgStable,
+    showAvatarPlaceholder,
+    branch: showAvatarImgStable
+      ? "img"
+      : showAvatarPlaceholder
+        ? "loading_placeholder"
+        : "icon_placeholder",
+  });
+
   return (
     <div
       style={{
@@ -843,11 +984,46 @@ export default function Profile() {
           >
             {showAvatarImgStable ? (
               <img
-                key={avatarImgSrc!.slice(0, 80)}
-                src={avatarImgSrc!}
+                key={finalAvatarImgSrc!.slice(0, 80)}
+                src={finalAvatarImgSrc!}
                 alt=""
-                onLoad={profileAvatarImgHandlers.onLoad}
-                onError={profileAvatarImgHandlers.onError}
+                onLoad={(event) => {
+                  console.error("[SELF_PROFILE_IMG] onLoad", {
+                    src: finalAvatarImgSrc,
+                    naturalWidth: event.currentTarget.naturalWidth,
+                    naturalHeight: event.currentTarget.naturalHeight,
+                  });
+                  logPhotoTraceImgEvent(
+                    "onLoad",
+                    {
+                      screen: "Mon profil",
+                      component: "Profile.tsx",
+                      userId: user?.id ?? null,
+                      slot: "avatar",
+                      srcReceived: finalAvatarImgSrc,
+                    },
+                    event.currentTarget,
+                  );
+                  profileAvatarImgHandlers.onLoad();
+                }}
+                onError={(event) => {
+                  console.error("[SELF_PROFILE_IMG] onError", {
+                    src: finalAvatarImgSrc,
+                    currentSrc: event.currentTarget.currentSrc,
+                  });
+                  logPhotoTraceImgEvent(
+                    "onError",
+                    {
+                      screen: "Mon profil",
+                      component: "Profile.tsx",
+                      userId: user?.id ?? null,
+                      slot: "avatar",
+                      srcReceived: finalAvatarImgSrc,
+                    },
+                    event.currentTarget,
+                  );
+                  profileAvatarImgHandlers.onError();
+                }}
                 style={{
                   position: "absolute",
                   inset: 0,
@@ -856,6 +1032,28 @@ export default function Profile() {
                   objectFit: "cover",
                   display: "block",
                   zIndex: 2,
+                }}
+                ref={(el) => {
+                  if (!el) return;
+                  const computed = typeof window !== "undefined" ? window.getComputedStyle(el) : null;
+                  console.error("[PROFILE_IMAGE_PROPS]", {
+                    src: finalAvatarImgSrc,
+                    style: {
+                      position: "absolute",
+                      inset: 0,
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                      display: "block",
+                      zIndex: 2,
+                    },
+                    className: el.className || null,
+                    hidden: el.hidden,
+                    opacity: computed?.opacity ?? null,
+                    width: computed?.width ?? el.width,
+                    height: computed?.height ?? el.height,
+                    component: "native <img> in Profile.tsx (no ProfilePhoto component)",
+                  });
                 }}
               />
             ) : showAvatarPlaceholder ? (

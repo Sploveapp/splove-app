@@ -1,7 +1,7 @@
 # Schéma Supabase — source de vérité
 
 > Généré par `npm run schema:check` — ne pas éditer les sections « Inventaire » à la main.
-> Dernière vérification : 2026-07-14
+> Dernière vérification : 2026-07-16
 
 ## Rôle
 

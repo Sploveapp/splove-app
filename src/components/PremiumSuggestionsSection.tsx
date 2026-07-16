@@ -1,5 +1,7 @@
 import { VerifiedBadge } from "./VerifiedBadge";
+import { useEffect } from "react";
 import { useProfilePhotoSignedUrl } from "../hooks/useProfilePhotoSignedUrl";
+import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
 
 type PremiumSuggestion = {
   id: string;
@@ -23,6 +25,22 @@ type Props = {
 
 function SuggestionHeadshot({ url, name }: { url: string | null; name: string }) {
   const display = useProfilePhotoSignedUrl(url);
+
+  useEffect(() => {
+    logPhotoComponent("PremiumSuggestionsSection.tsx/SuggestionHeadshot");
+    logPhotoTrace({
+      screen: "PremiumSuggestions",
+      component: "PremiumSuggestionsSection.tsx/SuggestionHeadshot",
+      userId: null,
+      portrait_url: null,
+      main_photo_url: url,
+      avatar_url: null,
+      portraitDisplayResolved: display,
+      facePreviewSrc: display ? "set" : "missing",
+      finalImgSrc: display,
+    });
+  }, [url, display]);
+
   if (!url) {
     return <div className="h-16 w-16 shrink-0 rounded-xl bg-app-border" />;
   }
@@ -34,6 +52,30 @@ function SuggestionHeadshot({ url, name }: { url: string | null; name: string })
       src={display}
       alt={name}
       className="h-16 w-16 shrink-0 rounded-xl object-cover"
+      onLoad={(e) => {
+        logPhotoTraceImgEvent(
+          "onLoad",
+          {
+            screen: "PremiumSuggestions",
+            component: "PremiumSuggestionsSection.tsx/SuggestionHeadshot",
+            slot: "headshot",
+            srcReceived: display,
+          },
+          e.currentTarget,
+        );
+      }}
+      onError={(e) => {
+        logPhotoTraceImgEvent(
+          "onError",
+          {
+            screen: "PremiumSuggestions",
+            component: "PremiumSuggestionsSection.tsx/SuggestionHeadshot",
+            slot: "headshot",
+            srcReceived: display,
+          },
+          e.currentTarget,
+        );
+      }}
     />
   );
 }
