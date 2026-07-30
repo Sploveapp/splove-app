@@ -6,7 +6,7 @@ const SUPABASE_AUTHORIZE =
   "https://abc.supabase.co/auth/v1/authorize?provider=google&redirect_to=splove%3A%2F%2Fauth%2Fcallback&code_challenge=xyz&code_challenge_method=s256";
 
 describe("googleOAuthNativeBrowserTargetUrl", () => {
-  it("Android ouvre l’URL Supabase authorize directement (pas localhost)", () => {
+  it("Android : helper historique — Capacitor résout vers Google avant Browser.open", () => {
     const androidTarget = googleOAuthNativeBrowserTargetUrl(SUPABASE_AUTHORIZE, "android");
     expect(androidTarget).toBe(SUPABASE_AUTHORIZE);
     expect(isSupabaseGoogleAuthorizeUrl(androidTarget)).toBe(true);

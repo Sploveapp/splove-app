@@ -15,21 +15,26 @@ import {
 } from "../lib/pushNotifications";
 import {
   isBellCenterNotificationRow,
+  notificationDisplayTimestamp,
   presentNotification,
   sortNotifications,
 } from "../lib/sploveNotifications";
 import { useTranslation } from "../i18n/useTranslation";
+import { useAuth } from "../contexts/AuthContext";
 import { supabase } from "../lib/supabase";
 import {
   fetchInAppNotifications,
   markAllInAppNotificationsRead,
   markInAppNotificationRead,
   pulseInAppNotifications,
+  refreshInAppNotificationBadge,
   type InAppNotificationRow,
 } from "../services/inAppNotifications.service";
 
 export default function NotificationsPage() {
   const { t, language } = useTranslation();
+  const { user } = useAuth();
+  const userId = user?.id ?? "";
   const navigate = useNavigate();
   const [rows, setRows] = useState<InAppNotificationRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,31 +43,23 @@ export default function NotificationsPage() {
   const [pushSavedInDb, setPushSavedInDb] = useState(false);
   const [pushEnabling, setPushEnabling] = useState(false);
   const realtimeRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  const markedAllOnOpenRef = useRef(false);
+  const [markingAll, setMarkingAll] = useState(false);
 
   const dateLocale = language === "en" ? "en-GB" : "fr-FR";
 
-  const load = useCallback(async (options?: { markAllReadOnOpen?: boolean }) => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      void pulseInAppNotifications();
+      await pulseInAppNotifications(userId || undefined);
       const list = await fetchInAppNotifications(80);
       const filtered = list.filter(isBellCenterNotificationRow);
       setRows(sortNotifications(filtered));
-
-      if (options?.markAllReadOnOpen && !markedAllOnOpenRef.current) {
-        markedAllOnOpenRef.current = true;
-        const hadUnread = filtered.some((r) => !r.read);
-        if (hadUnread) {
-          await markAllInAppNotificationsRead();
-          setRows((prev) => prev.map((r) => ({ ...r, read: true })));
-        }
-      }
+      await refreshInAppNotificationBadge(userId || undefined);
       dispatchInAppNotificationsRefresh();
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [userId]);
 
   const refreshPushStatus = useCallback(async () => {
     const {
@@ -81,7 +78,7 @@ export default function NotificationsPage() {
   }, []);
 
   useEffect(() => {
-    void load({ markAllReadOnOpen: true });
+    void load();
   }, [load]);
 
   useEffect(() => {
@@ -163,13 +160,29 @@ export default function NotificationsPage() {
     }
   }
 
+  async function handleMarkAllRead() {
+    if (markingAll) return;
+    const hadUnread = rows.some((r) => !r.read);
+    if (!hadUnread) return;
+    setMarkingAll(true);
+    try {
+      await markAllInAppNotificationsRead(userId || undefined);
+      setRows((prev) => prev.map((r) => ({ ...r, read: true })));
+      await refreshInAppNotificationBadge(userId || undefined);
+      dispatchInAppNotificationsRefresh();
+    } finally {
+      setMarkingAll(false);
+    }
+  }
+
   async function handleOpen(row: InAppNotificationRow) {
     const presentation = presentNotification(row, t);
     if (!row.read) {
-      await markInAppNotificationRead(row.id);
+      await markInAppNotificationRead(row.id, userId || undefined);
       setRows((prev) =>
         sortNotifications(prev.map((r) => (r.id === row.id ? { ...r, read: true } : r))),
       );
+      await refreshInAppNotificationBadge(userId || undefined);
       dispatchInAppNotificationsRefresh();
     }
     const route = presentation.route;
@@ -194,6 +207,17 @@ export default function NotificationsPage() {
 
         <h1 className="text-xl font-bold tracking-tight text-app-text">{t("in_app_notif.screen_title")}</h1>
         <p className="mt-1 text-[13px] leading-snug text-app-muted">{t("in_app_notif.screen_subtitle")}</p>
+
+        {!loading && rows.some((r) => !r.read) ? (
+          <button
+            type="button"
+            disabled={markingAll}
+            onClick={() => void handleMarkAllRead()}
+            className="mt-3 self-start text-[13px] font-semibold text-white/80 underline-offset-2 transition hover:text-white hover:underline disabled:opacity-60"
+          >
+            {markingAll ? t("loading") : t("in_app_notif.mark_all_read")}
+          </button>
+        ) : null}
 
         {pushPermission !== "unsupported" ? (
           <section
@@ -250,7 +274,12 @@ export default function NotificationsPage() {
           <ul className="m-0 mt-5 list-none space-y-2 p-0">
             {sorted.map((row) => {
               const presentation = presentNotification(row, t);
-              const relativeTime = formatRelativeTime(row.created_at, dateLocale, nowTick);
+              const relativeTime = formatRelativeTime(
+                notificationDisplayTimestamp(row),
+                dateLocale,
+                nowTick,
+                { assumePast: true },
+              );
               return (
                 <NotificationListItem
                   key={row.id}

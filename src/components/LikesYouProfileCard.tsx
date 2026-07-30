@@ -28,6 +28,8 @@ import { ProfilePhotoViewerModal } from "./ProfilePhotoViewerModal";
 import { formatHeightCmForDisplay } from "../lib/profileHeightCm";
 import { formatCityDisplay } from "../lib/formatCityDisplay";
 import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
+import { formatReceivedPlayPresentation } from "../lib/splovePlay";
+import { ReceivedPlayIntentCard } from "./ReceivedPlayIntentCard";
 
 function getSports(like: LikeReceived): string[] {
   const list = like.profile?.profile_sports ?? [];
@@ -127,6 +129,7 @@ export function LikesYouProfileCard({
   const photoAlt = profile.first_name?.trim()
     ? t("likes.photo_alt", { name: profile.first_name.trim() })
     : t("likes.profile_photo_alt");
+  const receivedPlay = formatReceivedPlayPresentation(t, like.play_type, displayName);
 
   useEffect(() => {
     logPhotoComponent("LikesYouProfileCard.tsx");
@@ -317,6 +320,11 @@ export function LikesYouProfileCard({
         >
           {guided}
         </p>
+        {receivedPlay ? (
+          <div style={{ margin: "0 0 16px 0" }}>
+            <ReceivedPlayIntentCard presentation={receivedPlay} />
+          </div>
+        ) : null}
         <div style={{ display: "flex", gap: "12px" }}>
           {onViewProfile && (
             <button

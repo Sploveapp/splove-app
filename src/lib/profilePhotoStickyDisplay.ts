@@ -55,7 +55,7 @@ export function useStickyPhotoDisplaySrc(
 }
 
 export function mergeStickyPhotoHandlers(
-  sticky: Pick<StickyPhotoDisplay, "onImageLoad" | "imageLoaded">,
+  sticky: Pick<StickyPhotoDisplay, "onImageLoad" | "imageLoaded" | "resetSticky">,
   handlers?: { onLoad?: () => void; onError?: () => void },
 ): { onLoad: () => void; onError: () => void } {
   return {
@@ -64,7 +64,7 @@ export function mergeStickyPhotoHandlers(
       handlers?.onLoad?.();
     },
     onError: () => {
-      if (sticky.imageLoaded) return;
+      sticky.resetSticky();
       handlers?.onError?.();
     },
   };

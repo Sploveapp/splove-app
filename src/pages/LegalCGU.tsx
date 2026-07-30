@@ -57,6 +57,12 @@ export default function LegalCGU() {
             "SPLove met en relation des profils selon des critères de compatibilité et permet de proposer une activité. Les échanges et propositions dépendent des actions des utilisateurs et de la disponibilité des fonctionnalités.",
           ],
         },
+        {
+          h: "Abonnements et fonctionnalités premium",
+          p: [
+            "Certaines fonctionnalités de SPLove peuvent être proposées gratuitement, temporairement ou sous forme d'abonnements ou d'achats intégrés. Les fonctionnalités concernées, leurs conditions d'accès et, le cas échéant, leurs tarifs sont indiqués directement dans l'application. Les paiements sont gérés par les plateformes de distribution (App Store et, le cas échéant, Google Play).",
+          ],
+        },
         { h: "Absence de garantie de rencontre", p: ["SPLove ne garantit pas l’obtention de matchs, de réponses, ni la réalisation effective d’une rencontre."] },
         {
           h: "Sécurité lors des rencontres physiques",
@@ -79,13 +85,19 @@ export default function LegalCGU() {
         {
           h: "Limitation de responsabilité",
           p: [
-            "SPLove met à disposition une plateforme. SPLove ne peut être tenue responsable des interactions entre utilisateurs, ni des dommages résultant d’une utilisation non conforme ou d’un comportement d’un tiers.",
+            "SPLove met à disposition une plateforme de mise en relation entre utilisateurs. SPLove ne peut être tenue responsable des interactions entre utilisateurs, ni des dommages résultant d’une utilisation non conforme ou d’un comportement d’un tiers.",
+          ],
+        },
+        {
+          h: "Protection des données",
+          p: [
+            "Le traitement des données personnelles est régi par la Politique de confidentialité de SPLove, accessible depuis l'application.",
           ],
         },
         { h: "Loi applicable", p: ["Les présentes CGU sont régies par le droit français."] },
         {
           h: "Contact support",
-          p: ["Support : à remplacer par l’email officiel SPLove (ex. support@splove.app)."],
+          p: ["Pour toute question concernant les présentes Conditions Générales d'Utilisation, vous pouvez nous contacter à l'adresse suivante : contact@sploveapp.com."],
         },
       ];
     }
@@ -109,7 +121,7 @@ export default function LegalCGU() {
       { h: "Intellectual property", p: ["App elements (trademarks, logos, text, UI, code, databases) are protected. Unauthorized reproduction is prohibited."] },
       { h: "Limitation of liability", p: ["SPLove provides a platform and cannot be held liable for user-to-user interactions or damages caused by misuse or third-party behavior."] },
       { h: "Governing law", p: ["These Terms are governed by French law."] },
-      { h: "Support contact", p: ["Support: replace with SPLove’s official email (e.g. support@splove.app)."] },
+      { h: "Support contact", p: ["Support: replace with SPLove’s official email (e.g. contact@sploveapp.com)."] },
     ];
   }, [language]);
 
@@ -137,11 +149,6 @@ export default function LegalCGU() {
             <h1 className="text-lg font-bold">{title}</h1>
             <p className="text-xs text-app-muted">
               {language === "fr" ? "Dernière mise à jour" : "Last updated"} : {lastUpdated}
-            </p>
-            <p className="text-xs text-app-muted">
-              {language === "fr"
-                ? "Document à faire relire par un professionnel du droit avant publication officielle."
-                : "Internal note: this document must be reviewed by a legal professional before official publication."}
             </p>
           </div>
 

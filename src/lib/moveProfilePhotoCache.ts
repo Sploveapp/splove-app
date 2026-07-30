@@ -15,6 +15,7 @@ import {
   fetchCapacitorImageDataUrl,
   shouldUseIosCapacitorImageFallback,
 } from "./capacitorImageDataUrl";
+import { isValidCachedImageDataUrl } from "./normalizeCapacitorImageResponseToDataUrl";
 import { photoUrlPrefix } from "./profilePhotoPipelineLog";
 
 const SIGNED_CACHE_TTL_MS = 50 * 60 * 1000;
@@ -38,10 +39,24 @@ let activeFetches = 0;
 const fetchWaitQueue: Array<() => void> = [];
 
 export function refKeyFromStoredRef(storedRef: string): string {
-  return (
-    normalizeProfilePhotoStoredRef(storedRef, supabase).split("?")[0]?.split("#")[0] ??
-    storedRef.trim()
-  );
+  const raw = storedRef.trim();
+  const pathKey =
+    normalizeProfilePhotoStoredRef(raw, supabase).split("?")[0]?.split("#")[0] ?? raw;
+  // Conserver ?v= du ref BDD brut — sinon un replace JPEG sur le même path réutilise
+  // l’ancien displaySrc Move (souvent application/octet-stream).
+  let cacheBuster = "";
+  try {
+    if (raw.includes("://")) {
+      const v = new URL(raw).searchParams.get("v");
+      if (v) cacheBuster = `?v=${v}`;
+    } else {
+      const m = raw.match(/[?&]v=([^&#]+)/);
+      if (m?.[1]) cacheBuster = `?v=${m[1]}`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return `${pathKey}${cacheBuster}`;
 }
 
 function normalizeProfileId(profileId: string | null | undefined): string {
@@ -100,6 +115,9 @@ function rememberDisplay(
   kind: DisplayEntry["kind"],
   logSource?: string | null,
 ): void {
+  if (kind === "data" && !isValidCachedImageDataUrl(src)) {
+    return;
+  }
   const cacheKey = moveProfilePhotoDisplayCacheKey(profileId, storedRef);
   const pid = normalizeProfileId(profileId);
   if (displayByKey.size >= DISPLAY_CACHE_MAX && !displayByKey.has(cacheKey)) {
@@ -153,6 +171,11 @@ export function getMoveProfilePhotoDisplaySync(
   const trimmed = typeof storedRef === "string" ? storedRef.trim() : "";
   if (!trimmed) return null;
   const cacheKey = moveProfilePhotoDisplayCacheKey(profileId, trimmed);
+  const entry = displayByKey.get(cacheKey);
+  if (entry?.kind === "data" && !isValidCachedImageDataUrl(entry.src)) {
+    revokeBlobIfNeeded(entry);
+    displayByKey.delete(cacheKey);
+  }
   const hit = displayByKey.get(cacheKey)?.src ?? null;
   logIosPhotoDiag(hit ? "cache_hit" : "cache_miss", {
     profileId,
@@ -254,6 +277,23 @@ export function purgeMoveProfilePhotoCachesForViewer(viewerUserId: string): void
     }
   }
 }
+
+/** Jette les data URLs Move corrompues (double encodage / magic invalide). */
+export function purgeCorruptMoveDataUrlDisplays(): number {
+  let removed = 0;
+  for (const key of [...displayByKey.keys()]) {
+    const entry = displayByKey.get(key);
+    if (entry?.kind === "data" && !isValidCachedImageDataUrl(entry.src)) {
+      revokeBlobIfNeeded(entry);
+      displayByKey.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+// Au chargement du module : invalide les anciennes data URLs corrompues encore en mémoire.
+purgeCorruptMoveDataUrlDisplays();
 
 function readSignedCache(storedRef: string): string | null {
   const key = refKeyFromStoredRef(storedRef);
@@ -467,6 +507,19 @@ export async function ensureMoveProfilePhotoDisplay(
       error: "ios_capacitor_fetch_exhausted",
       extra: { candidateCount: candidates.length },
     });
+
+    // Repli HTTPS (signed ou publique) — même stratégie que Mon profil après le correctif iOS.
+    // Un objet JPEG se décode ; un ancien octet-stream échouera via img onError → failover.
+    if (signed?.startsWith("http")) {
+      rememberDisplay(profileId, trimmed, signed, "https", logSource);
+      return signed;
+    }
+    const normalizedPublic = normalizeProfilePhotoStoredRef(trimmed, supabase);
+    if (normalizedPublic.startsWith("http")) {
+      rememberDisplay(profileId, trimmed, normalizedPublic, "https", logSource);
+      return normalizedPublic;
+    }
+
     notifyDisplayListeners(cacheKey, null);
     return null;
   });

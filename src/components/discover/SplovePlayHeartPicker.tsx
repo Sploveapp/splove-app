@@ -17,9 +17,10 @@ const LIKE_FAN_RADIUS_PX = 76;
 
 /**
  * Arc vers le haut, centré sur le bouton Play — évite Pass (gauche) et Like (droite).
- * Ordre aligné sur SPLOVE_PLAY_PREMIUM_TYPES : warmup, training, match, victory.
+ * Indices alignés sur SPLOVE_PLAY_PREMIUM_TYPES : warmup, training, match, victory.
+ * Visuel (gauche → droite) : 🩵 → 💚 → 🧡 → 💜
  */
-const PHOTO_FAN_ANGLES_DEG = [-160, -127, -50, -90] as const;
+const PHOTO_FAN_ANGLES_DEG = [-160, -127, -90, -50] as const;
 const PHOTO_FAN_RADIUS_PX = 70;
 
 const POP_MS = 130;

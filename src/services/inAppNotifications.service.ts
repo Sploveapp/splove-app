@@ -1,11 +1,15 @@
 import { supabase } from "../lib/supabase";
 import { DISCOVER_BETA_SIMPLE_PIPELINE } from "../lib/discoverBetaPipeline";
 import { rpcOptional } from "../lib/optionalSupabase";
+import { syncBellNotificationsFromSocialEvents } from "../lib/syncBellNotifications";
+import { syncNativeIconBadge } from "../lib/pushBadgeSync";
 
-/** Phase 1 cloche : événements importants (pas les messages chat). */
+/** Centre cloche : likes, Play, matchs, 1er message, activités. */
 export const BELL_NOTIFICATION_KINDS = [
   "new_like",
+  "play_sent",
   "new_match",
+  "new_message",
   "activity_proposed",
   "activity_accepted",
   "activity_counter",
@@ -33,27 +37,33 @@ function isMissingRpcOrTableError(error: { code?: string | number; message?: str
   return m.includes("does not exist") || m.includes("could not find the function") || m.includes("not found");
 }
 
-/** Traite les jobs dus pour l’utilisateur courant ; retourne le nombre de notifications non lues. */
-export async function pulseInAppNotifications(): Promise<number> {
-  if (DISCOVER_BETA_SIMPLE_PIPELINE) return 0;
-  const data = await rpcOptional<number | string>(
-    "pulse_my_in_app_notifications",
-    {},
-    "pulse_my_in_app_notifications",
-    2_500,
-  );
-  if (typeof data === "number" && Number.isFinite(data)) return data;
-  if (typeof data === "string") {
-    const n = Number(data);
-    return Number.isFinite(n) ? n : 0;
+/** Sync cloche + jobs différés ; retourne le nombre de notifications non lues (badge). */
+export async function pulseInAppNotifications(userId?: string): Promise<number> {
+  await syncBellNotificationsFromSocialEvents();
+  if (!DISCOVER_BETA_SIMPLE_PIPELINE) {
+    await rpcOptional<number | string>(
+      "pulse_my_in_app_notifications",
+      {},
+      "pulse_my_in_app_notifications",
+      2_500,
+    );
   }
-  return 0;
+  return refreshInAppNotificationBadge(userId);
+}
+
+/** Recalcule le badge depuis la base (sans backfill). */
+export async function refreshInAppNotificationBadge(userId?: string): Promise<number> {
+  const count = await countUnreadInAppNotifications();
+  if (userId) void syncNativeIconBadge(userId);
+  return count;
 }
 
 export async function fetchInAppNotifications(limit = 50): Promise<InAppNotificationRow[]> {
+  await syncBellNotificationsFromSocialEvents();
   const { data, error } = await supabase
     .from("in_app_notifications")
     .select("id, user_id, kind, title, message, read, exempt_daily_cap, payload, dedupe_key, created_at")
+    .in("kind", [...BELL_NOTIFICATION_KINDS])
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) {
@@ -67,27 +77,33 @@ export async function fetchInAppNotifications(limit = 50): Promise<InAppNotifica
   return (data ?? []) as InAppNotificationRow[];
 }
 
-export async function markInAppNotificationRead(id: string): Promise<void> {
+export async function markInAppNotificationRead(id: string, userId?: string): Promise<void> {
   const { error } = await supabase.from("in_app_notifications").update({ read: true }).eq("id", id);
   if (error) {
     console.warn("[inAppNotifications] mark read", error.message);
+    return;
   }
+  if (userId) void syncNativeIconBadge(userId);
 }
 
-/** Ouverture du centre cloche : tout marquer lu (hors messages chat). */
-export async function markAllInAppNotificationsRead(): Promise<void> {
+/** Tout marquer comme lu (RPC si dispo, sinon UPDATE RLS). */
+export async function markAllInAppNotificationsRead(userId?: string): Promise<void> {
   const { error } = await supabase.rpc("mark_all_in_app_notifications_read");
   if (error) {
     if (isMissingRpcOrTableError(error)) {
       const { error: updErr } = await supabase
         .from("in_app_notifications")
         .update({ read: true })
-        .eq("read", false);
+        .eq("read", false)
+        .in("kind", [...BELL_NOTIFICATION_KINDS]);
       if (updErr) console.warn("[inAppNotifications] mark all read fallback", updErr.message);
+      if (userId) void syncNativeIconBadge(userId);
       return;
     }
     console.warn("[inAppNotifications] mark all read", error.message);
+    return;
   }
+  if (userId) void syncNativeIconBadge(userId);
 }
 
 export async function countUnreadInAppNotifications(): Promise<number> {

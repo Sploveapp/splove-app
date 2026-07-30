@@ -13,6 +13,11 @@ import {
   PROFILE_PHOTO_JPEG_MIME,
   normalizeProfilePhotoForUpload,
 } from "./profilePhotoNormalize";
+import { uploadProfilePhotoJpegViaCapacitorHttp } from "./profilePhotoCapacitorUpload";
+import {
+  assertProfilePhotoUploadVerified,
+  verifyUploadedProfilePhotoPublicUrl,
+} from "./profilePhotoUploadVerify";
 export type ProfilePhotoSlot = "portrait" | "activity";
 
 export type ProfilePhotoUploadResult = {
@@ -27,6 +32,31 @@ export type ProfilePhotoUploadResult = {
 };
 
 const LOG = "[profilePhoto]";
+const PROFILE_PHOTO_PNG_MIME = "image/png" as const;
+
+/**
+ * MIME Storage explicite — jamais `application/octet-stream`.
+ * Priorité : type Blob/File réel → extension (.png) → JPEG par défaut.
+ */
+export function resolveProfilePhotoUploadContentType(
+  blob: { type?: string; name?: string } | null | undefined,
+  objectPath?: string | null,
+): typeof PROFILE_PHOTO_JPEG_MIME | typeof PROFILE_PHOTO_PNG_MIME {
+  const blobType = typeof blob?.type === "string" ? blob.type.trim().toLowerCase() : "";
+  if (blobType === "image/png") return PROFILE_PHOTO_PNG_MIME;
+  if (blobType === "image/jpeg" || blobType === "image/jpg") return PROFILE_PHOTO_JPEG_MIME;
+
+  const name = typeof blob?.name === "string" ? blob.name : "";
+  const path = typeof objectPath === "string" ? objectPath : "";
+  const extSource = `${name}\n${path}`.toLowerCase();
+  if (/\.png(?:$|[?#])/.test(extSource)) return PROFILE_PHOTO_PNG_MIME;
+  return PROFILE_PHOTO_JPEG_MIME;
+}
+
+function extensionFromObjectPath(objectPath: string): string {
+  const m = objectPath.toLowerCase().match(/\.([a-z0-9]+)(?:$|[?#])/);
+  return m?.[1] ?? PROFILE_PHOTO_JPEG_EXT;
+}
 
 export function buildProfilePhotoObjectPath(
   userId: string,
@@ -235,75 +265,191 @@ export async function uploadProfilePhoto(
   userId: string,
   file: File,
   slot: ProfilePhotoSlot,
+  options?: { replaceObjectPath?: string | null },
 ): Promise<ProfilePhotoUploadResult> {
   if (!(file instanceof File)) {
     throw new Error("invalid_file");
   }
 
+  // Toujours re-encoder en JPEG (HEIC/PNG → JPEG) avec MIME explicite.
   const normalizedFile = await normalizeProfilePhotoForUpload(file);
-  const objectPath = buildProfilePhotoObjectPath(userId, slot, PROFILE_PHOTO_JPEG_EXT);
+  const replacePath =
+    typeof options?.replaceObjectPath === "string" ? options.replaceObjectPath.trim() : "";
+  const objectPath =
+    replacePath && replacePath.startsWith(`${userId}/`)
+      ? replacePath.replace(/\.[a-z0-9]+$/i, `.${PROFILE_PHOTO_JPEG_EXT}`)
+      : buildProfilePhotoObjectPath(userId, slot, PROFILE_PHOTO_JPEG_EXT);
+
+  const resolvedMimeType = PROFILE_PHOTO_JPEG_MIME;
+  // Bytes JPEG bruts + Blob typé — transmis tel quel (pas de re-wrap ArrayBuffer sans MIME).
+  const jpegBytes = await normalizedFile.arrayBuffer();
+  const jpegBlob = new Blob([jpegBytes], { type: PROFILE_PHOTO_JPEG_MIME });
+
+  console.log("[PROFILE_PHOTO_UPLOAD_MIME]", {
+    objectPath,
+    blobType: jpegBlob.type || null,
+    resolvedMimeType,
+    extension: extensionFromObjectPath(objectPath),
+  });
 
   SPLovePhotoLog.uploadStarted({
     source: "uploadProfilePhoto",
     userId,
     slot,
     objectPath,
-    fileSize: normalizedFile.size,
-    fileType: normalizedFile.type,
+    fileSize: jpegBlob.size,
+    fileType: resolvedMimeType,
     extra: {
       originalFileSize: file.size,
       originalFileType: file.type || null,
       originalFileName: file.name,
+      blobType: jpegBlob.type || null,
+      resolvedMimeType,
+      replaceObjectPath: Boolean(replacePath),
     },
   });
   PhotoFlowLog.onboardingUploadStart({
     userId,
     slot,
-    fileSize: normalizedFile.size,
-    fileType: normalizedFile.type,
+    fileSize: jpegBlob.size,
+    fileType: resolvedMimeType,
     objectPath,
   });
 
-  const { data: uploadData, error: uploadError } = await supabase.storage
-    .from(PROFILE_PHOTOS_BUCKET)
-    .upload(objectPath, normalizedFile, {
-      cacheControl: "3600",
-      upsert: true,
-      contentType: PROFILE_PHOTO_JPEG_MIME,
+  /**
+   * iOS/Android : `supabase.storage.upload` passe par `capacitorFetch`, qui stringify
+   * Blob/File et peut enregistrer l’objet en `application/octet-stream`.
+   * Upload natif CapacitorHttp avec Content-Type: image/jpeg + dataType file.
+   */
+  const useNativeCapacitorUpload = isNativeCapacitorApp();
+  let uploadDataPath: string | null = objectPath;
+
+  if (useNativeCapacitorUpload) {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) throw sessionError;
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken?.trim()) {
+      throw new Error("auth_session_required");
+    }
+
+    console.log("[PROFILE_PHOTO_UPLOAD_REQUEST_AUDIT]", {
+      transport: "capacitor_http",
+      method: "POST",
+      objectPathEndsWithJpg: objectPath.toLowerCase().endsWith(".jpg"),
+      bodyKind: "base64_file",
+      blobType: jpegBlob.type || null,
+      contentTypeHeader: PROFILE_PHOTO_JPEG_MIME,
+      upsertHeaderPresent: true,
     });
 
-  if (uploadError) {
-    PhotoFlowLog.uploadFailed({
-      userId,
-      slot,
-      error: uploadError.message,
-      code: (uploadError as { statusCode?: string }).statusCode ?? null,
-      objectPath,
+    try {
+      await uploadProfilePhotoJpegViaCapacitorHttp(
+        accessToken,
+        objectPath,
+        jpegBytes,
+        PROFILE_PHOTO_JPEG_MIME,
+      );
+    } catch (uploadError) {
+      const message = uploadError instanceof Error ? uploadError.message : String(uploadError);
+      PhotoFlowLog.uploadFailed({
+        userId,
+        slot,
+        error: message,
+        code: null,
+        objectPath,
+      });
+      PhotoFlowLog.uploadResult({
+        userId,
+        slot,
+        ok: false,
+        error: message,
+      });
+      SPLovePhotoLog.displayFailed({
+        source: "uploadProfilePhoto",
+        userId,
+        slot,
+        objectPath,
+        error: message,
+      });
+      console.error(`${LOG} upload_error`, {
+        slot,
+        objectPath,
+        message,
+        transport: "capacitor_http",
+      });
+      throw uploadError;
+    }
+  } else {
+    console.log("[PROFILE_PHOTO_UPLOAD_REQUEST_AUDIT]", {
+      transport: "supabase_storage_upload",
+      method: "POST",
+      objectPathEndsWithJpg: objectPath.toLowerCase().endsWith(".jpg"),
+      bodyKind: "blob",
+      blobType: jpegBlob.type || null,
+      contentTypeHeader: PROFILE_PHOTO_JPEG_MIME,
+      upsertHeaderPresent: true,
     });
-    PhotoFlowLog.uploadResult({
-      userId,
-      slot,
-      ok: false,
-      error: uploadError.message,
-    });
-    SPLovePhotoLog.displayFailed({
-      source: "uploadProfilePhoto",
-      userId,
-      slot,
-      objectPath,
-      error: uploadError.message,
-    });
-    console.error(`${LOG} upload_error`, {
-      slot,
-      objectPath,
-      message: uploadError.message,
-      code: (uploadError as { statusCode?: string }).statusCode ?? null,
-    });
-    throw uploadError;
+
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from(PROFILE_PHOTOS_BUCKET)
+      .upload(objectPath, jpegBlob, {
+        upsert: true,
+        contentType: PROFILE_PHOTO_JPEG_MIME,
+        cacheControl: "3600",
+      });
+
+    if (uploadError) {
+      PhotoFlowLog.uploadFailed({
+        userId,
+        slot,
+        error: uploadError.message,
+        code: (uploadError as { statusCode?: string }).statusCode ?? null,
+        objectPath,
+      });
+      PhotoFlowLog.uploadResult({
+        userId,
+        slot,
+        ok: false,
+        error: uploadError.message,
+      });
+      SPLovePhotoLog.displayFailed({
+        source: "uploadProfilePhoto",
+        userId,
+        slot,
+        objectPath,
+        error: uploadError.message,
+      });
+      console.error(`${LOG} upload_error`, {
+        slot,
+        objectPath,
+        message: uploadError.message,
+        code: (uploadError as { statusCode?: string }).statusCode ?? null,
+        transport: "supabase_storage_upload",
+      });
+      throw uploadError;
+    }
+    uploadDataPath = uploadData?.path ?? objectPath;
   }
 
   const publicUrl = buildProfilePhotoPublicUrl(supabase, objectPath);
-  const storedRef = publicUrl;
+  // Bust WKWebView / CDN quand on écrase le même objectPath avec un nouveau MIME.
+  const storedRef = `${publicUrl.split("?")[0]}?v=${Date.now()}`;
+
+  const serverVerify = await verifyUploadedProfilePhotoPublicUrl(publicUrl);
+  const serverContentType = serverVerify.contentType;
+  const serverContentTypeIsJpeg =
+    typeof serverContentType === "string" &&
+    serverContentType.split(";")[0]?.trim().toLowerCase() === PROFILE_PHOTO_JPEG_MIME;
+  console.log("[PROFILE_PHOTO_UPLOAD_SERVER_VERIFY]", {
+    status: serverVerify.httpStatus,
+    ok: serverVerify.ok,
+    serverContentType,
+    serverContentTypeIsJpeg,
+  });
+  if (!serverContentTypeIsJpeg) {
+    // assert removes the broken object and throws BAD_CONTENT_TYPE / HEAD_FAILED.
+    await assertProfilePhotoUploadVerified(supabase, objectPath, publicUrl);
+  }
 
   SPLovePhotoLog.uploadSuccess({
     source: "uploadProfilePhoto",
@@ -355,7 +501,7 @@ export async function uploadProfilePhoto(
     console.warn(`${LOG} preview_fallback_public_url`, {
       slot,
       publicUrl,
-      uploadPath: uploadData?.path ?? objectPath,
+      uploadPath: uploadDataPath ?? objectPath,
       bucketReadableViaPublicUrl,
     });
   }

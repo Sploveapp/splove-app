@@ -43,9 +43,21 @@ import {
   useProfilePhotoIosDisplayLayer,
 } from "../hooks/useProfilePhotoDisplaySrc";
 import { buildIosAwareProfilePhotoImgHandlers } from "../lib/profilePhotoIosImgHandlers";
-import { classifyImgSrcForIosDebug, logPhotoIosDebug } from "../lib/photoIosDebug";
 import { useBrokenProfilePhotoReuploadHint } from "../hooks/useBrokenProfilePhotoReuploadHint";
 import { snapshotProfilePhotoFields, photoUrlPrefix } from "../lib/profilePhotoPipelineLog";
+import {
+  auditProfilePhotoDisplaySrcHttpFetch,
+  auditSrcKindOrPrefix,
+  logProfilePhotoComponentFound,
+} from "../lib/profilePhotoComponentFoundAudit";
+import { classifyImgSrcForIosDebug } from "../lib/photoIosDebug";
+import {
+  decideProfileAvatarImgError,
+  decideProfileAvatarImgLoad,
+  fingerprintProfileAvatarImgSrc,
+  profileAvatarImgReactKey,
+  shouldUnlockPreferDirectHttps,
+} from "../lib/profileAvatarImgRender";
 import { fetchProfileScreenFields, mergeProfileScreenRowPreservingPhotos } from "../lib/profileScreenHydrate";
 import { normalizeProfileRowCanonicalPhotos } from "../lib/onboardingProfilePhotos";
 import { PhotoFlowLog, photoFlowFieldsFromRow } from "../lib/photoFlowLog";
@@ -54,7 +66,10 @@ import {
 } from "../lib/profilePhotoDisplayUrl";
 import { mergeStickyPhotoHandlers, useStickyPhotoDisplaySrc } from "../lib/profilePhotoStickyDisplay";
 import { chainPhotoRenderHandlers, PhotoRenderLog } from "../lib/photoRenderLog";
-import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../lib/photoTraceLog";
+import {
+  extractIosDataOrBlobSrc,
+  resolveSelfProfileAvatarImgSrc,
+} from "../lib/profilePhotoIosDisplay";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 import {
   SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK,
@@ -122,13 +137,20 @@ type ProfileSportDisplay = {
 };
 
 export default function Profile() {
-  console.error("[TRACE EXECUTED] Profile.tsx");
   const { t, language } = useTranslation();
   const navigate = useNavigate();
   const { user, profile, refetchProfile, commitProfileRow, signOut, isSigningOut } = useAuth();
   const brokenPhotoHint = useBrokenProfilePhotoReuploadHint(user?.id ?? null);
   const [screenReady, setScreenReady] = useState(false);
   const [bootPhotoFields, setBootPhotoFields] = useState<ProfileBootPhotoFields | null>(null);
+  const [preferDirectHttps, setPreferDirectHttps] = useState(false);
+  const lastIosDataUrlRef = useRef<string | null>(null);
+  const httpsFallbackLockFpRef = useRef<string | null>(null);
+  const activeAvatarSrcRef = useRef<string | null>(null);
+  const avatarImgDomRef = useRef<HTMLImageElement | null>(null);
+  const [avatarImgRevision, setAvatarImgRevision] = useState(0);
+  const [avatarImgHadError, setAvatarImgHadError] = useState(false);
+  const [avatarImgTrackedSrc, setAvatarImgTrackedSrc] = useState<string | null>(null);
   const profileRef = useRef(profile);
   profileRef.current = profile;
 
@@ -181,132 +203,176 @@ export default function Profile() {
 
   const primaryStoredRef = avatarPhoto.activeRef ?? avatarRefCandidates.refs[0] ?? null;
   const avatarIosLayer = useProfilePhotoIosDisplayLayer(avatarPhoto, primaryStoredRef);
+
+  const avatarSourceDecision = useMemo(
+    () =>
+      resolveSelfProfileAvatarImgSrc({
+        iosLayerDisplaySrc: avatarIosLayer.displaySrc,
+        iosRawDisplaySrc: avatarIosLayer.ios.displaySrc,
+        portraitUrl: avatarPhotoFields.portrait_url,
+        mainPhotoUrl: avatarPhotoFields.main_photo_url,
+        avatarUrl: avatarPhotoFields.avatar_url,
+        hookSrc: avatarPhoto.src,
+        preferDirectHttps,
+      }),
+    [
+      avatarIosLayer.displaySrc,
+      avatarIosLayer.ios.displaySrc,
+      avatarPhotoFields.portrait_url,
+      avatarPhotoFields.main_photo_url,
+      avatarPhotoFields.avatar_url,
+      avatarPhoto.src,
+      preferDirectHttps,
+    ],
+  );
+
+  useEffect(() => {
+    const ios =
+      extractIosDataOrBlobSrc(avatarIosLayer.displaySrc) ??
+      extractIosDataOrBlobSrc(avatarIosLayer.ios.displaySrc);
+    const decision = shouldUnlockPreferDirectHttps({
+      nextIosDataUrl: ios,
+      previousIosDataUrl: lastIosDataUrlRef.current,
+      httpsFallbackLockedForFingerprint: httpsFallbackLockFpRef.current,
+    });
+    lastIosDataUrlRef.current = decision.nextPrevious;
+    if (decision.clearLock) {
+      httpsFallbackLockFpRef.current = null;
+    }
+    if (decision.unlock) {
+      setPreferDirectHttps(false);
+    }
+  }, [avatarIosLayer.displaySrc, avatarIosLayer.ios.displaySrc]);
+
+  const avatarStickyScope = `${user?.id ?? "anon"}:${primaryStoredRef ?? "none"}:${avatarSourceDecision.sourceKind}`;
+  const avatarSticky = useStickyPhotoDisplaySrc(avatarSourceDecision.src, avatarStickyScope);
+  const finalAvatarImgSrc = avatarSticky.displaySrc ?? avatarSourceDecision.src;
+  const showAvatarImgStable = Boolean(finalAvatarImgSrc);
+  const showAvatarPlaceholder =
+    !finalAvatarImgSrc && (avatarPhoto.isLoading || avatarIosLayer.ios.isResolving);
   const profileAvatarDisplaySrc = avatarIosLayer.displaySrc;
-  const avatarStickyScope = `${user?.id ?? "anon"}:${primaryStoredRef ?? "none"}`;
-  const avatarSticky = useStickyPhotoDisplaySrc(profileAvatarDisplaySrc, avatarStickyScope);
-  const avatarImgSrc = avatarSticky.displaySrc;
-  const showAvatarImgStable = avatarIosLayer.mountImg && Boolean(avatarImgSrc);
-  const showAvatarPlaceholder = avatarIosLayer.showLoadingPlaceholder;
-  /** Variable exacte passée à <img src> sur Mon profil. */
-  const finalAvatarImgSrc = avatarImgSrc;
+  const avatarImgSrc = finalAvatarImgSrc;
+  const trimmedFinalAvatarSrc = finalAvatarImgSrc?.trim() || null;
+  // Source active synchrone au rendu — un onError d’un ancien <img> voit déjà la nouvelle source.
+  if (activeAvatarSrcRef.current !== trimmedFinalAvatarSrc) {
+    activeAvatarSrcRef.current = trimmedFinalAvatarSrc;
+  }
+  if (trimmedFinalAvatarSrc !== avatarImgTrackedSrc) {
+    setAvatarImgTrackedSrc(trimmedFinalAvatarSrc);
+    setAvatarImgHadError(false);
+    setAvatarImgRevision((r) => r + 1);
+  }
+  const avatarImgReactKey = profileAvatarImgReactKey(trimmedFinalAvatarSrc, avatarImgRevision);
+  const activeAvatarFingerprint = trimmedFinalAvatarSrc
+    ? fingerprintProfileAvatarImgSrc(trimmedFinalAvatarSrc)
+    : null;
 
+  // Audit rendu : clé React, source active, décision fallback.
   useEffect(() => {
-    const sourceKind = classifyImgSrcForIosDebug(finalAvatarImgSrc);
-    console.error("[SELF_PROFILE_RENDER] authUserId", user?.id ?? null);
-    console.error("[SELF_PROFILE_RENDER] profileId", profile?.id ?? null);
-    console.error("[SELF_PROFILE_RENDER] portrait_url", avatarPhotoFields.portrait_url ?? null);
-    console.error("[SELF_PROFILE_RENDER] main_photo_url", avatarPhotoFields.main_photo_url ?? null);
-    console.error("[SELF_PROFILE_RENDER] avatar_url", avatarPhotoFields.avatar_url ?? null);
-    console.error("[SELF_PROFILE_RENDER] storedRef", primaryStoredRef);
-    console.error("[SELF_PROFILE_RENDER] resolvedDisplaySrc", avatarPhoto.src);
-    console.error("[SELF_PROFILE_RENDER] profileAvatarDisplaySrc", profileAvatarDisplaySrc);
-    console.error("[SELF_PROFILE_RENDER] finalAvatarImgSrc", finalAvatarImgSrc);
-    console.error("[SELF_PROFILE_RENDER] sourceKind", sourceKind);
-    console.error("[SELF_PROFILE_RENDER] gates", {
-      showAvatarImgStable,
-      showAvatarPlaceholder,
-      mountImg: avatarIosLayer.mountImg,
-      stickyDisplaySrc: avatarSticky.displaySrc,
-      stickyImageLoaded: avatarSticky.imageLoaded,
-      hookIsLoading: avatarPhoto.isLoading,
-      hookIsFailed: avatarPhoto.isFailed,
-      iosIsResolving: avatarIosLayer.ios.isResolving,
-      iosResolutionFailed: avatarIosLayer.ios.resolutionFailed,
-      iosUsingDataUrl: avatarIosLayer.ios.usingDataUrl,
-      refs: avatarRefCandidates.refs,
-      bootPhotoFields,
-      profile_portrait_url: typeof profile?.portrait_url === "string" ? profile.portrait_url : null,
-      img_will_exist_in_dom: showAvatarImgStable,
-      placeholder_branch: showAvatarImgStable
-        ? "img"
-        : showAvatarPlaceholder
-          ? "loading_placeholder"
-          : "icon_placeholder",
+    if (!showAvatarImgStable || !trimmedFinalAvatarSrc) return;
+    const img = avatarImgDomRef.current;
+    console.log("[PROFILE_IMG_RENDER_AUDIT]", {
+      component: "Profile",
+      reactKey: avatarImgReactKey,
+      activeSrcKind: classifyImgSrcForIosDebug(trimmedFinalAvatarSrc),
+      activeSrcLength: trimmedFinalAvatarSrc.length,
+      eventSrcKind: null,
+      naturalWidth: img?.naturalWidth ?? null,
+      naturalHeight: img?.naturalHeight ?? null,
+      preferDirectHttps,
+      avatarImgHadError,
+      fallbackDecision: null,
+      fallbackReason: null,
+      httpsFallbackLocked: Boolean(httpsFallbackLockFpRef.current),
     });
   }, [
-    user?.id,
-    profile?.id,
-    profile?.portrait_url,
-    avatarPhotoFields.portrait_url,
-    avatarPhotoFields.main_photo_url,
-    avatarPhotoFields.avatar_url,
-    primaryStoredRef,
-    avatarPhoto.src,
-    avatarPhoto.isLoading,
-    avatarPhoto.isFailed,
-    profileAvatarDisplaySrc,
+    showAvatarImgStable,
+    trimmedFinalAvatarSrc,
+    preferDirectHttps,
+    avatarImgReactKey,
+    avatarImgHadError,
+  ]);
+
+  // Identification du composant qui dessine l’avatar « Mon profil » (glyph WKWebView « ? »).
+  useEffect(() => {
+    if (!showAvatarImgStable || !finalAvatarImgSrc) return;
+    logProfilePhotoComponentFound({
+      component: "Profile",
+      "props.photo": auditSrcKindOrPrefix(primaryStoredRef),
+      displaySrc: auditSrcKindOrPrefix(finalAvatarImgSrc),
+      "img.src": null,
+      onLoad: null,
+      onError: null,
+      naturalWidth: null,
+      naturalHeight: null,
+    });
+    // Audit temporaire : même URL que displaySrc / <img src>, via fetch() WKWebView.
+    void auditProfilePhotoDisplaySrcHttpFetch(finalAvatarImgSrc);
+  }, [finalAvatarImgSrc, primaryStoredRef, showAvatarImgStable]);
+
+  useEffect(() => {
+    if (!finalAvatarImgSrc?.trim()) return;
+    let latestUploaded: string | null = null;
+    try {
+      latestUploaded = sessionStorage.getItem("__splove_diag_last_portrait_upload");
+    } catch {
+      latestUploaded = null;
+    }
+    const src = finalAvatarImgSrc.trim();
+    const uploaded = typeof latestUploaded === "string" ? latestUploaded.trim() : "";
+    // Ignore cache-buster ?v=… — compare only the stable object URL.
+    const withoutCacheBuster = (url: string) => url.split(/[?#]/)[0];
+    const sourceMatchesLatestUploadedPortrait = Boolean(
+      uploaded && withoutCacheBuster(src) === withoutCacheBuster(uploaded),
+    );
+    const selectedField =
+      (primaryStoredRef && avatarRefCandidates.fieldByRef[primaryStoredRef]) ||
+      avatarPhoto.activeField ||
+      null;
+    console.log("[PROFILE_FINAL_PHOTO_AFTER_UPLOAD]", {
+      selectedField,
+      sourcePresent: true,
+      sourceMatchesLatestUploadedPortrait,
+      sourceKind: avatarSourceDecision.sourceKind,
+    });
+
+    if (!src.startsWith("http://") && !src.startsWith("https://")) return;
+    let cancelled = false;
+    void fetch(src, { method: "HEAD" })
+      .then((res) => {
+        if (cancelled) return;
+        console.log("[PROFILE_FINAL_PHOTO_HTTP]", {
+          status: res.status,
+          ok: res.ok,
+          contentType: res.headers.get("content-type"),
+          contentLengthPresent: Boolean(res.headers.get("content-length")),
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        console.log("[PROFILE_FINAL_PHOTO_HTTP]", {
+          status: null,
+          ok: false,
+          contentType: null,
+          contentLengthPresent: false,
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
     finalAvatarImgSrc,
-    showAvatarImgStable,
-    showAvatarPlaceholder,
-    avatarIosLayer.mountImg,
-    avatarIosLayer.ios.isResolving,
-    avatarIosLayer.ios.resolutionFailed,
-    avatarIosLayer.ios.usingDataUrl,
-    avatarSticky.displaySrc,
-    avatarSticky.imageLoaded,
-    avatarRefCandidates.refs,
-    bootPhotoFields,
-  ]);
-
-  useEffect(() => {
-    logPhotoComponent("Profile.tsx");
-  }, []);
-
-  useEffect(() => {
-    logPhotoTrace({
-      screen: "Mon profil",
-      component: "Profile.tsx",
-      userId: user?.id ?? null,
-      portrait_url: typeof profile?.portrait_url === "string" ? profile.portrait_url : null,
-      main_photo_url: typeof profile?.main_photo_url === "string" ? profile.main_photo_url : null,
-      avatar_url: typeof profile?.avatar_url === "string" ? profile.avatar_url : null,
-      portraitDisplayResolved: avatarPhoto.src,
-      facePreviewSrc: avatarImgSrc ? "set" : "missing",
-      finalImgSrc: avatarImgSrc,
-      imgOnLoad: null,
-      imgOnError: null,
-      extra: {
-        showAvatarImgStable,
-        showAvatarPlaceholder,
-        activeRef: primaryStoredRef,
-      },
-    });
-  }, [
-    user?.id,
-    profile?.portrait_url,
-    profile?.main_photo_url,
-    profile?.avatar_url,
-    avatarPhoto.src,
-    avatarImgSrc,
-    showAvatarImgStable,
-    showAvatarPlaceholder,
     primaryStoredRef,
+    avatarRefCandidates.fieldByRef,
+    avatarPhoto.activeField,
+    avatarSourceDecision.sourceKind,
   ]);
-
-  useEffect(() => {
-    if (!showAvatarImgStable || !avatarImgSrc) return;
-    logPhotoIosDebug("final_img_src", {
-      screen: "Profile",
-      userId: user?.id?.slice(0, 8) ?? null,
-      srcKind: classifyImgSrcForIosDebug(avatarImgSrc),
-      iosUsingDataUrl: avatarIosLayer.ios.usingDataUrl,
-    });
-  }, [showAvatarImgStable, avatarImgSrc, user?.id, avatarIosLayer.ios.usingDataUrl]);
 
   const syncProfileForScreen = useCallback(async () => {
     if (!user?.id) return;
     const authUserId = user.id;
-    console.error("[SELF_PROFILE_AUDIT] auth_user_id", authUserId);
-    console.error("[SELF_PROFILE_AUDIT] source", "Profile.tsx/syncProfileForScreen");
     const row = await fetchProfileScreenFields(authUserId);
     if (!row) {
-      console.error("[SELF_PROFILE_AUDIT] fetched_profile_id", null);
-      console.error("[SELF_PROFILE_AUDIT] ids_match", false);
-      console.error("[SELF_PROFILE_AUDIT] portrait_url", null);
-      console.error("[SELF_PROFILE_AUDIT] main_photo_url", null);
-      console.error("[SELF_PROFILE_AUDIT] avatar_url", null);
-      console.error("[SELF_PROFILE_AUDIT] profile_query_error", "fetchProfileScreenFields_returned_null");
-      console.error("[SELF_PROFILE_AUDIT] context_profile_id_before", profileRef.current?.id ?? null);
       PhotoFlowLog.screenProfileRow({
         userId: authUserId,
         screen: "Profile",
@@ -316,23 +382,6 @@ export default function Profile() {
       });
       return;
     }
-    const fetchedId = typeof row.id === "string" ? row.id : null;
-    console.error("[SELF_PROFILE_AUDIT] fetched_profile_id", fetchedId);
-    console.error("[SELF_PROFILE_AUDIT] ids_match", Boolean(fetchedId && fetchedId === authUserId));
-    console.error(
-      "[SELF_PROFILE_AUDIT] portrait_url",
-      typeof row.portrait_url === "string" ? row.portrait_url : null,
-    );
-    console.error(
-      "[SELF_PROFILE_AUDIT] main_photo_url",
-      typeof row.main_photo_url === "string" ? row.main_photo_url : null,
-    );
-    console.error(
-      "[SELF_PROFILE_AUDIT] avatar_url",
-      typeof row.avatar_url === "string" ? row.avatar_url : null,
-    );
-    console.error("[SELF_PROFILE_AUDIT] profile_query_error", null);
-    console.error("[SELF_PROFILE_AUDIT] context_profile_id_before", profileRef.current?.id ?? null);
     PhotoFlowLog.screenProfileRow({
       userId: authUserId,
       screen: "Profile",
@@ -347,7 +396,6 @@ export default function Profile() {
     } else if (typeof row.id === "string") {
       commitProfileRow(row);
     }
-    console.error("[SELF_PROFILE_AUDIT] context_profile_id_after_commit_intent", fetchedId);
   }, [user?.id, commitProfileRow]);
 
   useEffect(() => {
@@ -881,22 +929,6 @@ export default function Profile() {
     return <ProfileScreenSkeleton />;
   }
 
-  console.error("[PROFILE_RENDER]", {
-    portrait_url: avatarPhotoFields.portrait_url ?? null,
-    main_photo_url: avatarPhotoFields.main_photo_url ?? null,
-    avatar_url: avatarPhotoFields.avatar_url ?? null,
-    finalSrc: finalAvatarImgSrc,
-    isLoading: avatarPhoto.isLoading,
-    photoPending: showAvatarPlaceholder || avatarIosLayer.ios.isResolving,
-    showAvatarImgStable,
-    showAvatarPlaceholder,
-    branch: showAvatarImgStable
-      ? "img"
-      : showAvatarPlaceholder
-        ? "loading_placeholder"
-        : "icon_placeholder",
-  });
-
   return (
     <div
       style={{
@@ -980,49 +1012,138 @@ export default function Profile() {
               border: `2px solid ${APP_BORDER}`,
               background: APP_CARD,
             }}
-            aria-hidden={!avatarImgSrc}
+            aria-hidden={!finalAvatarImgSrc}
           >
             {showAvatarImgStable ? (
               <img
-                key={finalAvatarImgSrc!.slice(0, 80)}
+                ref={avatarImgDomRef}
+                key={avatarImgReactKey}
                 src={finalAvatarImgSrc!}
                 alt=""
-                onLoad={(event) => {
-                  console.error("[SELF_PROFILE_IMG] onLoad", {
-                    src: finalAvatarImgSrc,
-                    naturalWidth: event.currentTarget.naturalWidth,
-                    naturalHeight: event.currentTarget.naturalHeight,
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  const eventSrc = img.getAttribute("src") || img.currentSrc || img.src || null;
+                  const activeSrc = activeAvatarSrcRef.current;
+                  const loadDecision = decideProfileAvatarImgLoad({
+                    naturalWidth: img.naturalWidth,
+                    naturalHeight: img.naturalHeight,
+                    eventSrc,
+                    activeSrc,
                   });
-                  logPhotoTraceImgEvent(
-                    "onLoad",
-                    {
-                      screen: "Mon profil",
-                      component: "Profile.tsx",
-                      userId: user?.id ?? null,
-                      slot: "avatar",
-                      srcReceived: finalAvatarImgSrc,
-                    },
-                    event.currentTarget,
-                  );
-                  profileAvatarImgHandlers.onLoad();
+                  console.log("[PROFILE_IMG_RENDER_AUDIT]", {
+                    event: "onLoad",
+                    reactKey: avatarImgReactKey,
+                    activeSrcKind: classifyImgSrcForIosDebug(activeSrc),
+                    eventSrcKind: classifyImgSrcForIosDebug(eventSrc),
+                    naturalWidth: img.naturalWidth,
+                    naturalHeight: img.naturalHeight,
+                    fallbackDecision: loadDecision.acceptAsLoaded
+                      ? "accept_loaded"
+                      : loadDecision.treatAsError
+                        ? "treat_as_error"
+                        : "ignore",
+                    fallbackReason: loadDecision.reason,
+                  });
+                  if (loadDecision.acceptAsLoaded) {
+                    setAvatarImgHadError(false);
+                    logProfilePhotoComponentFound({
+                      component: "Profile",
+                      "props.photo": auditSrcKindOrPrefix(primaryStoredRef),
+                      displaySrc: auditSrcKindOrPrefix(finalAvatarImgSrc),
+                      "img.src": auditSrcKindOrPrefix(eventSrc),
+                      onLoad: true,
+                      onError: false,
+                      naturalWidth: img.naturalWidth,
+                      naturalHeight: img.naturalHeight,
+                    });
+                    profileAvatarImgHandlers.onLoad();
+                    return;
+                  }
+                  if (!loadDecision.treatAsError) return;
+                  // naturalWidth/Height 0 → même chemin qu’onError (source active uniquement).
+                  const errDecision = decideProfileAvatarImgError({
+                    eventSrc,
+                    activeSrc,
+                    sourceKind: avatarSourceDecision.sourceKind,
+                    preferDirectHttpsAlready: preferDirectHttps,
+                    httpsFallbackLockedForFingerprint: httpsFallbackLockFpRef.current,
+                    activeFingerprint: activeAvatarFingerprint,
+                  });
+                  console.log("[PROFILE_IMG_RENDER_AUDIT]", {
+                    event: "onLoad_as_error",
+                    reactKey: avatarImgReactKey,
+                    activeSrcKind: classifyImgSrcForIosDebug(activeSrc),
+                    eventSrcKind: classifyImgSrcForIosDebug(eventSrc),
+                    naturalWidth: img.naturalWidth,
+                    naturalHeight: img.naturalHeight,
+                    fallbackDecision: errDecision.applyPreferDirectHttps
+                      ? "prefer_direct_https"
+                      : errDecision.callHandlersOnError
+                        ? "handlers_on_error"
+                        : "ignore",
+                    fallbackReason: errDecision.reason,
+                  });
+                  if (errDecision.reason === "stale_error_ignored") return;
+                  setAvatarImgHadError(true);
+                  if (errDecision.lockHttpsFallback && activeAvatarFingerprint) {
+                    httpsFallbackLockFpRef.current = activeAvatarFingerprint;
+                  }
+                  if (errDecision.applyPreferDirectHttps) {
+                    setPreferDirectHttps(true);
+                    return;
+                  }
+                  if (errDecision.callHandlersOnError) {
+                    profileAvatarImgHandlers.onError();
+                  }
                 }}
-                onError={(event) => {
-                  console.error("[SELF_PROFILE_IMG] onError", {
-                    src: finalAvatarImgSrc,
-                    currentSrc: event.currentTarget.currentSrc,
+                onError={(e) => {
+                  const img = e.currentTarget;
+                  const eventSrc = img.getAttribute("src") || img.currentSrc || img.src || null;
+                  const activeSrc = activeAvatarSrcRef.current;
+                  const errDecision = decideProfileAvatarImgError({
+                    eventSrc,
+                    activeSrc,
+                    sourceKind: avatarSourceDecision.sourceKind,
+                    preferDirectHttpsAlready: preferDirectHttps,
+                    httpsFallbackLockedForFingerprint: httpsFallbackLockFpRef.current,
+                    activeFingerprint: activeAvatarFingerprint,
                   });
-                  logPhotoTraceImgEvent(
-                    "onError",
-                    {
-                      screen: "Mon profil",
-                      component: "Profile.tsx",
-                      userId: user?.id ?? null,
-                      slot: "avatar",
-                      srcReceived: finalAvatarImgSrc,
-                    },
-                    event.currentTarget,
-                  );
-                  profileAvatarImgHandlers.onError();
+                  console.log("[PROFILE_IMG_RENDER_AUDIT]", {
+                    event: "onError",
+                    reactKey: avatarImgReactKey,
+                    activeSrcKind: classifyImgSrcForIosDebug(activeSrc),
+                    eventSrcKind: classifyImgSrcForIosDebug(eventSrc),
+                    naturalWidth: img.naturalWidth,
+                    naturalHeight: img.naturalHeight,
+                    fallbackDecision: errDecision.applyPreferDirectHttps
+                      ? "prefer_direct_https"
+                      : errDecision.callHandlersOnError
+                        ? "handlers_on_error"
+                        : "ignore",
+                    fallbackReason: errDecision.reason,
+                  });
+                  logProfilePhotoComponentFound({
+                    component: "Profile",
+                    "props.photo": auditSrcKindOrPrefix(primaryStoredRef),
+                    displaySrc: auditSrcKindOrPrefix(finalAvatarImgSrc),
+                    "img.src": auditSrcKindOrPrefix(eventSrc),
+                    onLoad: false,
+                    onError: true,
+                    naturalWidth: img.naturalWidth,
+                    naturalHeight: img.naturalHeight,
+                  });
+                  if (errDecision.reason === "stale_error_ignored") return;
+                  setAvatarImgHadError(true);
+                  if (errDecision.lockHttpsFallback && activeAvatarFingerprint) {
+                    httpsFallbackLockFpRef.current = activeAvatarFingerprint;
+                  }
+                  if (errDecision.applyPreferDirectHttps) {
+                    setPreferDirectHttps(true);
+                    return;
+                  }
+                  if (errDecision.callHandlersOnError) {
+                    profileAvatarImgHandlers.onError();
+                  }
                 }}
                 style={{
                   position: "absolute",
@@ -1032,28 +1153,6 @@ export default function Profile() {
                   objectFit: "cover",
                   display: "block",
                   zIndex: 2,
-                }}
-                ref={(el) => {
-                  if (!el) return;
-                  const computed = typeof window !== "undefined" ? window.getComputedStyle(el) : null;
-                  console.error("[PROFILE_IMAGE_PROPS]", {
-                    src: finalAvatarImgSrc,
-                    style: {
-                      position: "absolute",
-                      inset: 0,
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
-                      display: "block",
-                      zIndex: 2,
-                    },
-                    className: el.className || null,
-                    hidden: el.hidden,
-                    opacity: computed?.opacity ?? null,
-                    width: computed?.width ?? el.width,
-                    height: computed?.height ?? el.height,
-                    component: "native <img> in Profile.tsx (no ProfilePhoto component)",
-                  });
                 }}
               />
             ) : showAvatarPlaceholder ? (

@@ -5,6 +5,7 @@ import { supabase } from "./supabase";
 import {
   isForbiddenOAuthRedirectTarget,
   isGoogleOAuthNativePlatform,
+  isNativeCapacitorApp,
   isNativeOAuthCallbackUrl,
   NATIVE_OAUTH_CALLBACK,
   oauthRedirectUrl,
@@ -32,7 +33,6 @@ import {
 import { forceReleaseOAuthUx } from "./oauthUxRelease";
 import { logPkceStorageKeys } from "./oauthPkceDiagnostics";
 import { isGoogleAccountsOAuthUrl } from "./oauthGoogleBrowserUrl";
-import { googleOAuthNativeBrowserTargetUrl } from "./googleOAuthNativeBrowserUrl";
 import {
   ensureIosBrowserNeverOpensSupabase,
   isIosBrowserOpenAllowed,
@@ -50,6 +50,30 @@ import {
 } from "./sploveIosGoogleOAuth";
 import { completePostGoogleAuth } from "./postGoogleAuthComplete";
 import { ensureProfileRowForAuthUserId } from "./authProfileSync";
+import { requestAuthSessionSync } from "./authSessionSyncBridge";
+import { invalidateProfilePhotoDisplayCaches } from "./profilePhotoDisplayInvalidate";
+import {
+  isAndroidGoogleNativeEnabled,
+  signInWithGoogleNativeAndroid,
+} from "./googleNativeSignIn";
+import { hasGoogleNativeAndroidEnv } from "./env";
+
+/** Empêche tout Browser.open OAuth Google / Supabase sur Android (Custom Tab). */
+function assertAndroidGoogleBrowserOpenAllowed(url: string, caller: string): void {
+  if (Capacitor.getPlatform() !== "android" && !isAndroidGoogleNativeEnabled()) return;
+  const trimmed = url.trim();
+  const host = hostFromOAuthUrl(trimmed);
+  if (/supabase\.co/i.test(host) || /\/auth\/v1\/authorize/i.test(trimmed)) {
+    console.log("SUPABASE_OAUTH_BROWSER_START", {
+      blocked: true,
+      caller,
+      host,
+    });
+    throw new Error(
+      `ANDROID_GOOGLE_BROWSER_FORBIDDEN: Browser.open bloqué (${caller}) — host=${host}`,
+    );
+  }
+}
 
 export const OAUTH_BROWSER_TIMEOUT_USER_MSG = OAUTH_CALLBACK_INTERRUPTED_MSG;
 export const GOOGLE_OAUTH_INTERRUPTED_MSG = GOOGLE_OAUTH_USER_ERROR_MSG;
@@ -400,20 +424,74 @@ function hostFromOAuthUrl(url: string): string {
   }
 }
 
+/**
+ * Audit Apple web uniquement — aucun secret.
+ * L’app n’envoie jamais de client_id : Supabase Dashboard doit exposer le Services ID
+ * (jamais le Bundle ID iOS `com.splove.app`) comme Client ID du provider Apple.
+ */
+function logAppleWebOAuthAudit(redirectTo: string, oauthUrl: string | null): void {
+  let redirectToOrigin: string | null = null;
+  try {
+    redirectToOrigin = new URL(redirectTo).origin;
+  } catch {
+    redirectToOrigin = null;
+  }
+
+  let callbackHost: string | null = null;
+  let clientIdPresent = false;
+  /** Attendu web : Services ID (Dashboard). Bundle ID = mauvaise config. */
+  let clientIdKind: "services_id" | "bundle_id" | "unknown" | "absent" = "services_id";
+
+  if (oauthUrl?.trim()) {
+    try {
+      const parsed = new URL(oauthUrl.trim());
+      callbackHost = parsed.host;
+      const clientId = parsed.searchParams.get("client_id")?.trim() ?? "";
+      if (clientId) {
+        clientIdPresent = true;
+        // Bundle ID natif SPLove — invalide comme client_id OAuth web Apple.
+        if (clientId === "com.splove.app") {
+          clientIdKind = "bundle_id";
+        } else if (/\.(web|signin|service)/i.test(clientId) || clientId.length > "com.splove.app".length) {
+          clientIdKind = "services_id";
+        } else {
+          clientIdKind = "unknown";
+        }
+      } else {
+        // URL /authorize Supabase : pas de client_id dans la query app — délégué au Dashboard.
+        clientIdPresent = false;
+        clientIdKind = "services_id";
+      }
+    } catch {
+      callbackHost = null;
+    }
+  }
+
+  console.log("[APPLE_WEB_OAUTH_AUDIT]", {
+    platform: "web",
+    clientIdKind,
+    clientIdPresent,
+    redirectToOrigin,
+    callbackHost,
+  });
+}
+
 
 /** iOS : accounts.google.com uniquement — jamais *.supabase.co ni splove://callback. */
 export function isIosOAuthBrowserOpenAllowedUrl(url: string): boolean {
   return isIosBrowserOpenAllowed(url) && !isNativeOAuthCallbackUrl(url.trim());
 }
 
-/** Android : Google ou Supabase /authorize — jamais splove://callback. */
+/**
+ * Android Custom Tabs : accounts.google.com uniquement — jamais *.supabase.co
+ * (évite le flash du domaine Supabase avant la redirection Google).
+ */
 export function isOAuthBrowserOpenAllowedUrl(url: string): boolean {
   const trimmed = url.trim();
   if (!trimmed) return false;
   if (isNativeOAuthCallbackUrl(trimmed)) return false;
-  if (isGoogleAccountsOAuthUrl(trimmed)) return true;
-  if (isSupabaseAuthHost(trimmed)) return true;
-  return false;
+  if (isSupabaseAuthHost(trimmed)) return false;
+  return isGoogleAccountsOAuthUrl(trimmed);
 }
 
 function profileRowHasDisplayPhoto(row: Record<string, unknown> | null | undefined): boolean {
@@ -553,6 +631,12 @@ async function signInWithAppleNativeIos(): Promise<{ error: Error | null }> {
 
     await prefillAppleNativeFirstNameIfEmpty(userId, credential.givenName);
 
+    // Parité Google (completeNativeOAuthReturn / googleNativeSignIn) :
+    // synchroniser AuthContext + invalider caches self-photo avant routage.
+    clearOauthProcessingLock();
+    await requestAuthSessionSync();
+    invalidateProfilePhotoDisplayCaches("apple_native_post_auth");
+
     const routed = await completePostGoogleAuth(userId, "apple_native_ios");
     if (!routed) {
       console.log("[APPLE_NATIVE] error", { stage: "routing", code: "post_auth_route_failed" });
@@ -626,6 +710,7 @@ async function signInWithAppleOAuthAndroid(): Promise<{ error: Error | null }> {
   try {
     oauthBrowserOpen = true;
     markOAuthBrowserOpen(true);
+    assertAndroidGoogleBrowserOpenAllowed(url, "signInWithAppleOAuthAndroid");
     await Browser.open({ url, presentationStyle: "fullscreen" });
     console.log("[AppleOAuth] browser_opened", { host: hostFromOAuthUrl(url) });
     scheduleAppleOAuthSafetyTimeout();
@@ -650,7 +735,8 @@ export async function signInWithAppleOAuth(): Promise<{ error: Error | null }> {
     return signInWithAppleOAuthAndroid();
   }
 
-  // Web : OAuth Apple via Service ID (inchangé).
+  // Web : OAuth Apple via Services ID configuré dans Supabase Dashboard (jamais Bundle ID iOS).
+  // Ne pas passer client_id / queryParams — laisser Supabase utiliser le Client ID Apple du provider.
   const redirectTo = oauthRedirectUrl();
   beginWebOAuthSplash();
   showGoogleSignInOverlay();
@@ -665,6 +751,7 @@ export async function signInWithAppleOAuth(): Promise<{ error: Error | null }> {
   });
 
   if (error) {
+    logAppleWebOAuthAudit(redirectTo, null);
     dismissWebOAuthSplash("apple_oauth_url_error");
     hideGoogleSignInOverlay("apple_oauth_url_error");
     console.log("[AppleOAuth] error", { reason: "signInWithOAuth_failed" });
@@ -672,6 +759,7 @@ export async function signInWithAppleOAuth(): Promise<{ error: Error | null }> {
   }
 
   const url = typeof data?.url === "string" ? data.url.trim() : "";
+  logAppleWebOAuthAudit(redirectTo, url || null);
   if (!url) {
     dismissWebOAuthSplash("apple_missing_oauth_url");
     hideGoogleSignInOverlay("apple_missing_oauth_url");
@@ -804,6 +892,7 @@ async function openIosOAuthBrowser(
     console.log("BROWSER_OPEN_GOOGLE", { host: "accounts.google.com" });
     oauthBrowserOpen = true;
     markOAuthBrowserOpen(true);
+    assertAndroidGoogleBrowserOpenAllowed(url, "openIosOAuthBrowser");
     await Browser.open({ url, presentationStyle: "fullscreen" });
     console.log("BROWSER_OPEN_DONE", { url, host, strategy });
     return { error: null };
@@ -824,37 +913,23 @@ async function openIosOAuthBrowser(
 async function openAndroidOAuthBrowser(url: string): Promise<{ error: Error | null }> {
   const trimmed = url.trim();
 
-  if (await routeOAuthDeepLink(trimmed)) {
-    return { error: null };
-  }
+  console.log("GOOGLE_BROWSER_FALLBACK_START", {
+    host: hostFromOAuthUrl(trimmed),
+    note: "should_only_run_via_explicit_fallback",
+  });
 
-  if (!isOAuthBrowserOpenAllowedUrl(trimmed)) {
-    console.log("BROWSER_OPEN_BLOCKED", {
-      host: hostFromOAuthUrl(trimmed),
-      reason: "url_not_allowed_android",
-    });
-    hideGoogleSignInOverlay("browser_open_blocked");
-    return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
-  }
-
-  if (isGoogleAccountsOAuthUrl(trimmed)) {
-    console.log("BROWSER_OPEN_GOOGLE", { host: "accounts.google.com" });
-  }
-
-  console.log("BROWSER_OPEN_START", { host: hostFromOAuthUrl(trimmed) });
-  try {
-    oauthBrowserOpen = true;
-    markOAuthBrowserOpen(true);
-    await Browser.open({ url: trimmed, presentationStyle: "fullscreen" });
-    console.log("BROWSER_OPEN_DONE", { host: hostFromOAuthUrl(trimmed) });
-    return { error: null };
-  } catch (e) {
-    oauthBrowserOpen = false;
-    const message = e instanceof Error ? e.message : String(e);
-    console.log("BROWSER_OPEN_FAIL", { message });
-    hideGoogleSignInOverlay("browser_open_error");
-    return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
-  }
+  // Interdiction dure : le bouton Google Android ne doit jamais arriver ici automatiquement.
+  console.log("SUPABASE_OAUTH_BROWSER_START", {
+    blocked: true,
+    reason: "android_google_native_only",
+    host: hostFromOAuthUrl(trimmed),
+  });
+  hideGoogleSignInOverlay("android_browser_forbidden");
+  return {
+    error: new Error(
+      "Connexion Google Android : flux navigateur interdit. Utilise le login natif (Credential Manager).",
+    ),
+  };
 }
 
 export async function closeCapacitorOAuthBrowser(): Promise<void> {
@@ -925,6 +1000,36 @@ export function initCapacitorAuthBridge(): void {
 }
 
 export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> {
+  const platform = Capacitor.getPlatform();
+  console.log("GOOGLE_SIGNIN_ENTRY", {
+    platform,
+    isNativePlatform: Capacitor.isNativePlatform(),
+    androidNativeEnabled: isAndroidGoogleNativeEnabled(),
+    hasWebClientId: hasGoogleNativeAndroidEnv,
+  });
+
+  // Android : UNIQUEMENT login natif — jamais signInWithOAuth / Browser.open / Custom Tab.
+  if (isAndroidGoogleNativeEnabled()) {
+    if (isOauthProcessingLocked()) {
+      console.log("GOOGLE_SIGNIN_SKIP", "oauth_callback_in_progress");
+      return { error: new Error(OAUTH_BROWSER_TIMEOUT_USER_MSG) };
+    }
+    console.log("GOOGLE_NATIVE_START", { via: "signInWithGoogleOAuth" });
+    oauthBrowserClosedOnCallback = false;
+    lastProcessedOAuthCode = null;
+    const nativeResult = await signInWithGoogleNativeAndroid();
+    if (nativeResult.error) {
+      console.log("GOOGLE_NATIVE_ERROR", {
+        via: "signInWithGoogleOAuth",
+        message: nativeResult.error.message,
+      });
+      console.log("ANDROID_GOOGLE_NATIVE_FAILED_NO_BROWSER_FALLBACK", {
+        message: nativeResult.error.message,
+      });
+    }
+    return nativeResult;
+  }
+
   if (isGoogleOAuthNativePlatform()) {
     if (isOauthProcessingLocked()) {
       console.log("GOOGLE_SIGNIN_SKIP", "oauth_callback_in_progress");
@@ -937,6 +1042,20 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
 
     const isIos = Capacitor.getPlatform() === "ios";
 
+    if (!isIos) {
+      // Filet de sécurité : plateforme native non-iOS non détectée comme Android.
+      console.log("GOOGLE_NATIVE_ERROR", {
+        reason: "native_non_ios_without_android_flag",
+        platform,
+      });
+      return {
+        error: new Error(
+          `Connexion Google native indisponible (platform=${platform}). Rebuild l’app Android.`,
+        ),
+      };
+    }
+
+    console.log("SUPABASE_OAUTH_BROWSER_START", { platform: "ios", phase: "signInWithOAuth_url_only" });
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
@@ -964,31 +1083,33 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
       return { error: new Error(GOOGLE_OAUTH_USER_ERROR_MSG) };
     }
 
-    if (isIos) {
-      console.log("IOS_OAUTH_RESOLVE_START");
-      const iosTarget = ensureIosBrowserNeverOpensSupabase(
-        await resolveIosGoogleOAuthBrowserTarget(url),
-        url,
-      );
-      logIosOAuthBrowserTarget(iosTarget, url);
+    console.log("IOS_OAUTH_RESOLVE_START");
+    const iosTarget = ensureIosBrowserNeverOpensSupabase(
+      await resolveIosGoogleOAuthBrowserTarget(url),
+      url,
+    );
+    logIosOAuthBrowserTarget(iosTarget, url);
 
-      if (iosTarget.strategy !== "google_direct" || !iosTarget.url) {
-        return failIosGoogleOAuthResolve(iosTarget.reason ?? "google_url_unresolved");
-      }
-
-      await logPkceStorageKeys("PKCE_KEYS_AFTER_SIGNIN");
-      return openIosNativeOAuthSession(iosTarget.url, iosTarget.strategy);
+    if (iosTarget.strategy !== "google_direct" || !iosTarget.url) {
+      return failIosGoogleOAuthResolve(iosTarget.reason ?? "google_url_unresolved");
     }
 
-    const browserTargetUrl = googleOAuthNativeBrowserTargetUrl(url, "android");
-
     await logPkceStorageKeys("PKCE_KEYS_AFTER_SIGNIN");
+    return openIosNativeOAuthSession(iosTarget.url, iosTarget.strategy);
+  }
 
-    showGoogleSignInOverlay();
-    await awaitGoogleSignInOverlayPaint();
-    logGoogleSignInBrowserOpen();
-
-    return openAndroidOAuthBrowser(browserTargetUrl);
+  // Web uniquement — jamais Capacitor Android.
+  if (isNativeCapacitorApp() || platform === "android") {
+    console.log("SUPABASE_OAUTH_BROWSER_START", {
+      blocked: true,
+      reason: "web_branch_blocked_on_native",
+      platform,
+    });
+    return {
+      error: new Error(
+        "Branche OAuth web bloquée sur Android. Le login Google doit passer par SocialLogin natif.",
+      ),
+    };
   }
 
   console.log("GOOGLE_SIGNIN_START");
@@ -999,6 +1120,7 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
   showGoogleSignInOverlay();
   await awaitGoogleSignInOverlayPaint();
 
+  console.log("SUPABASE_OAUTH_BROWSER_START", { platform: "web", phase: "location_assign" });
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: {
@@ -1030,4 +1152,20 @@ export async function signInWithGoogleOAuth(): Promise<{ error: Error | null }> 
   logGoogleSignInBrowserOpen();
   window.location.assign(url);
   return { error: null };
+}
+
+/**
+ * Fallback Android contrôlé — NON branché sur le bouton Google.
+ * Conservé pour diagnostic ; refuse toujours Browser.open (Custom Tab interdit).
+ */
+export async function signInWithGoogleOAuthBrowserAndroidFallback(): Promise<{
+  error: Error | null;
+}> {
+  console.log("GOOGLE_BROWSER_FALLBACK_START", { explicit: true });
+  console.log("SUPABASE_OAUTH_BROWSER_START", {
+    blocked: true,
+    reason: "explicit_fallback_disabled",
+  });
+  // Conserve la fonction openAndroidOAuthBrowser (interdiction dure) pour audit runtime.
+  return openAndroidOAuthBrowser("https://blocked.invalid/");
 }

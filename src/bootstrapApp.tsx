@@ -13,6 +13,8 @@ import "./styles/globals.css";
 import { initTheme } from "./lib/theme";
 import { initCapacitorAuthBridge } from "./lib/capacitorOAuth";
 import { isNativeCapacitorApp } from "./lib/authRedirect";
+import { initPushNotificationHandlersEarly } from "./lib/pushNotifications";
+import { initGoogleNativeSignIn } from "./lib/googleNativeSignIn";
 import { probeSupabaseAuthHealth } from "./lib/supabaseDiagnostics";
 import {
   isWebOAuthSplashRequested,
@@ -26,6 +28,10 @@ console.log("[main bootstrap]", "profile-tab-fix-v2");
 initTheme();
 
 initCapacitorAuthBridge();
+if (isNativeCapacitorApp()) {
+  void initPushNotificationHandlersEarly();
+  void initGoogleNativeSignIn();
+}
 if (shouldRestoreWebOAuthSplashFromStorage()) {
   restoreWebOAuthSplashFromStorage();
 }

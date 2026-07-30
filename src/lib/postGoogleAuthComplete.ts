@@ -78,9 +78,10 @@ async function applyHashRoute(path: string, reason: string): Promise<boolean> {
   return true;
 }
 
-/** Après session Supabase établie (OAuth navigateur ou Google natif iOS). */
+/** Après session Supabase établie (OAuth navigateur ou Google natif iOS/Android). */
 export async function completePostGoogleAuth(sessionUserId: string, reason: string): Promise<boolean> {
-  const isNativeGoogleIos = reason === "google_native_ios";
+  const isNativeGoogle =
+    reason === "google_native_ios" || reason === "google_native_android";
 
   console.log("GOOGLE_SIGNIN_SUCCESS");
   hideIosGoogleOAuthConnectingOverlay("google_signin_success");
@@ -92,7 +93,7 @@ export async function completePostGoogleAuth(sessionUserId: string, reason: stri
   markOAuthSessionAt();
   clearOAuthCallbackUrl();
 
-  if (isNativeGoogleIos) {
+  if (isNativeGoogle) {
     await ensureProfileRowForAuthUserId(sessionUserId);
     const routePath = await resolvePostOAuthPath(supabase, sessionUserId);
     const hashTarget = routePath === "/move" ? "/move" : "/";

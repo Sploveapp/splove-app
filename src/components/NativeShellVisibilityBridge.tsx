@@ -1,10 +1,12 @@
 import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
-import { syncNativeBottomNavigationVisible } from "../lib/nativeShellBridge";
-
-/** Barre native iOS — uniquement les 4 onglets principaux (pas onboarding / chat / réglages). */
-const NATIVE_BOTTOM_NAV_ROUTES = new Set(["/move", "/likes-you", "/messages", "/profile"]);
+import { isNativeBottomNavVisibleRoute } from "../lib/bottomNavActiveTab";
+import {
+  CHAT_KEYBOARD_SHELL_EVENT,
+  isChatConversationKeyboardOpen,
+} from "../lib/chatConversationKeyboardShell";
+import { syncNativeBottomNavShell } from "../lib/nativeShellBridge";
 
 /** Masque la barre d’onglets native iOS hors session ou hors écrans principaux. */
 export function NativeShellVisibilityBridge() {
@@ -12,12 +14,19 @@ export function NativeShellVisibilityBridge() {
   const { pathname } = useLocation();
 
   useEffect(() => {
-    const visible =
-      isAuthInitialized &&
-      Boolean(user?.id) &&
-      isProfileComplete &&
-      NATIVE_BOTTOM_NAV_ROUTES.has(pathname);
-    syncNativeBottomNavigationVisible(visible);
+    const sync = () => {
+      const routeVisible =
+        isAuthInitialized &&
+        Boolean(user?.id) &&
+        isProfileComplete &&
+        isNativeBottomNavVisibleRoute(pathname);
+      const visible = routeVisible && !isChatConversationKeyboardOpen();
+      syncNativeBottomNavShell({ visible, activePath: pathname });
+    };
+
+    sync();
+    window.addEventListener(CHAT_KEYBOARD_SHELL_EVENT, sync);
+    return () => window.removeEventListener(CHAT_KEYBOARD_SHELL_EVENT, sync);
   }, [user?.id, isAuthInitialized, isProfileComplete, pathname]);
 
   return null;

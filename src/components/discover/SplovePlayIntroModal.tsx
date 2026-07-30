@@ -1,15 +1,20 @@
-import { memo, useCallback, useEffect } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { APP_TEXT_MUTED, BRAND_BG } from "../../constants/theme";
+import { BRAND_BG } from "../../constants/theme";
 import { SPLOVE_PLAY_META, SPLOVE_PLAY_PREMIUM_TYPES } from "../../lib/splovePlay";
 import { useTranslation } from "../../i18n/useTranslation";
 import { modalSheetHostClass } from "../../lib/nativeBottomNav";
 
+export type SplovePlayIntroDismissResult = {
+  dontShowAgain: boolean;
+  /** Après « J'ai compris », enchaîner sur le sélecteur. */
+  openPicker: boolean;
+};
+
 export type SplovePlayIntroModalProps = {
   open: boolean;
-  onDismiss: () => void;
+  onDismiss: (result: SplovePlayIntroDismissResult) => void;
 };
 
 export const SplovePlayIntroModal = memo(function SplovePlayIntroModal({
@@ -17,21 +22,21 @@ export const SplovePlayIntroModal = memo(function SplovePlayIntroModal({
   onDismiss,
 }: SplovePlayIntroModalProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const [dontShowAgain, setDontShowAgain] = useState(true);
 
   useEffect(() => {
     if (!open) return;
+    setDontShowAgain(true);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onDismiss();
+      if (e.key === "Escape") onDismiss({ dontShowAgain: false, openPicker: false });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onDismiss, open]);
 
-  const goSplovePlus = useCallback(() => {
-    onDismiss();
-    navigate("/splove-plus");
-  }, [navigate, onDismiss]);
+  const confirm = useCallback(() => {
+    onDismiss({ dontShowAgain, openPicker: true });
+  }, [dontShowAgain, onDismiss]);
 
   if (typeof document === "undefined") return null;
 
@@ -53,10 +58,14 @@ export const SplovePlayIntroModal = memo(function SplovePlayIntroModal({
             type="button"
             className="absolute inset-0 bg-black/55"
             aria-label={t("cancel")}
-            onClick={onDismiss}
+            onClick={() => onDismiss({ dontShowAgain: false, openPicker: false })}
           />
           <motion.div
-            className="relative w-full max-w-lg rounded-t-[24px] border border-app-border/80 bg-app-card px-5 pb-[max(20px,env(safe-area-inset-bottom))] pt-5 shadow-2xl ring-1 ring-white/[0.05]"
+            className="relative w-full max-w-lg rounded-t-[24px] border border-app-border/80 bg-app-card px-5 pt-5 shadow-2xl ring-1 ring-white/[0.05]"
+            style={{
+              paddingBottom:
+                "max(20px, calc(env(safe-area-inset-bottom, 0px) + min(12px, var(--splove-bottom-nav-height, 12px))))",
+            }}
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
@@ -69,9 +78,6 @@ export const SplovePlayIntroModal = memo(function SplovePlayIntroModal({
             >
               {t("splovePlay.introTitle")}
             </h2>
-            <p className="mt-1.5 text-center text-[13px] font-medium leading-snug text-app-muted">
-              {t("splovePlay.introSubtitle")}
-            </p>
 
             <div className="mt-5 grid grid-cols-1 gap-2">
               {SPLOVE_PLAY_PREMIUM_TYPES.map((play) => {
@@ -89,7 +95,7 @@ export const SplovePlayIntroModal = memo(function SplovePlayIntroModal({
                         {t(meta.titleKey)}
                       </p>
                       <p className="mt-0.5 text-[12px] font-medium leading-snug text-app-muted">
-                        « {t(meta.lineKey)} »
+                        {t(meta.lineKey)}
                       </p>
                     </div>
                   </div>
@@ -99,20 +105,24 @@ export const SplovePlayIntroModal = memo(function SplovePlayIntroModal({
 
             <button
               type="button"
-              onClick={goSplovePlus}
+              onClick={confirm}
               className="mt-5 w-full rounded-2xl px-4 py-3.5 text-[15px] font-semibold text-white shadow-[0_8px_24px_rgba(255,30,45,0.28)] transition active:scale-[0.99]"
               style={{ background: BRAND_BG }}
             >
-              {t("splovePlay.upsellPrimary")}
+              {t("splovePlay.introGotIt")}
             </button>
-            <button
-              type="button"
-              onClick={onDismiss}
-              className="mt-3 w-full rounded-2xl py-2.5 text-center text-[13px] font-semibold"
-              style={{ color: APP_TEXT_MUTED }}
-            >
-              {t("splovePlay.upsellSecondary")}
-            </button>
+
+            <label className="mt-3 flex cursor-pointer items-center justify-center gap-2 py-1">
+              <input
+                type="checkbox"
+                checked={dontShowAgain}
+                onChange={(e) => setDontShowAgain(e.target.checked)}
+                className="h-4 w-4 rounded border-app-border accent-[#FF1E2D]"
+              />
+              <span className="text-[13px] font-medium leading-normal text-app-muted">
+                {t("splovePlay.introDontShowAgain")}
+              </span>
+            </label>
           </motion.div>
         </motion.div>
       ) : null}

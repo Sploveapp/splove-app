@@ -41,7 +41,16 @@ vi.mock("@capacitor/core", () => ({
 }));
 
 vi.mock("./env", () => ({
-  env: { supabaseAnonKey: "test-anon-key" },
+  env: { supabaseAnonKey: "test-anon-key", googleWebClientId: "web-id.apps.googleusercontent.com" },
+  hasGoogleNativeAndroidEnv: false,
+  hasGoogleNativeIosEnv: false,
+}));
+
+vi.mock("./googleNativeSignIn", () => ({
+  isAndroidGoogleNativeEnabled: () => false,
+  signInWithGoogleNativeAndroid: vi.fn(async () => ({
+    error: new Error("should not run on ios test"),
+  })),
 }));
 
 vi.mock("./supabase", () => ({

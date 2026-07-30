@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Bike, CircleDot, Footprints, Mountain, Waves } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import { beginPostOAuthSplash } from "../lib/postOAuthSplash";
 import {
   showGoogleSignInOverlay,
   awaitGoogleSignInOverlayPaint,
@@ -13,7 +12,6 @@ import {
   isIosGoogleOAuthBrowserFlow,
   showIosGoogleOAuthConnectingOverlay,
 } from "../lib/iosGoogleOAuthDisplay";
-import { isIosGoogleNativeEnabled } from "../lib/googleNativeSignIn";
 import { PostLoginProfileSplash } from "../components/PostLoginProfileSplash";
 import { isAppAuthReady } from "../lib/isAppAuthReady";
 import { APP_BORDER, BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
@@ -25,6 +23,10 @@ import {
   signInWithGoogleOAuth,
   subscribeGoogleOAuthBrowserTimeout,
 } from "../lib/capacitorOAuth";
+import {
+  isAndroidGoogleNativeEnabled,
+  signInWithGoogleNativeAndroid,
+} from "../lib/googleNativeSignIn";
 
 /** WebKit iOS Safari : backdrop-filter + calques peut dupliquer le rendu des CTA. */
 function welcomeIsIosSafari(): boolean {
@@ -191,17 +193,30 @@ export default function WelcomeSPLove() {
 
   async function signInWithGoogle() {
     if (!navigationReady) return;
-    console.log("GOOGLE_SIGNIN_BUTTON_TAP");
+    console.log("GOOGLE_SIGNIN_BUTTON_TAP", {
+      platform: isAndroidGoogleNativeEnabled() ? "android_native" : isIosGoogleOAuthBrowserFlow() ? "ios" : "web",
+    });
     setOauthBanner(null);
     setOauthLoading("google");
+    if (isAndroidGoogleNativeEnabled()) {
+      // Android : appel DIRECT du natif — ne passe pas par le routeur OAuth navigateur.
+      console.log("GOOGLE_NATIVE_START", { via: "WelcomeSPLove" });
+      try {
+        const { error } = await signInWithGoogleNativeAndroid();
+        if (error) throw error;
+      } catch (err: unknown) {
+        setOauthBanner(oauthErrorToUserMessage(err, language));
+      } finally {
+        setOauthLoading(null);
+      }
+      return;
+    }
     if (isIosGoogleOAuthBrowserFlow()) {
       await showIosGoogleOAuthConnectingOverlay();
     } else if (!isNativeCapacitorApp()) {
       beginWebOAuthSplash();
       showGoogleSignInOverlay();
       await awaitGoogleSignInOverlayPaint();
-    } else if (!isIosGoogleNativeEnabled()) {
-      beginPostOAuthSplash();
     }
     try {
       const { error } = await signInWithGoogleOAuth();

@@ -121,7 +121,7 @@ background-color: #0F0F14;
   transition: background-color 9999s ease-out 0s;
 }
 
-/* Shell authentifié — barre d’onglets fixe type Instagram / Tinder */
+/* Shell authentifié — barre d’onglets flottante glass (overlay translucide) */
 .splove-app-shell {
   position: relative;
   display: flex;
@@ -139,7 +139,11 @@ background-color: #0F0F14;
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: var(--splove-bottom-nav-height, calc(78px + env(safe-area-inset-bottom, 0px)));
+  /* Clearance = hauteur réelle barre (--splove-bottom-nav-height) : pilule + gap + safe area. */
+  padding-bottom: var(
+    --splove-bottom-nav-height,
+    calc(44px + 10px + env(safe-area-inset-bottom, 0px))
+  );
 }
 
 .splove-app-shell__main--native-nav {
@@ -155,7 +159,8 @@ background-color: #0F0F14;
   right: 0;
   bottom: 0;
   z-index: 50;
-  pointer-events: auto;
+  pointer-events: none;
+  background: transparent;
 }
 
 /** Host modale / sheet — barre native (var injectée) + safe area système. */

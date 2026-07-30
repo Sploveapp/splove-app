@@ -7,6 +7,10 @@ import { GOOGLE_OAUTH_USER_ERROR_MSG, APPLE_OAUTH_USER_ERROR_MSG } from "../lib/
 import { ensureProfileRowForAuthUserId } from "../lib/authProfileSync";
 import { showGoogleSignInOverlay, hideGoogleSignInOverlay, awaitGoogleSignInOverlayPaint } from "../lib/googleSignInOverlay";
 import { isIosGoogleOAuthBrowserFlow, showIosGoogleOAuthConnectingOverlay, hideIosGoogleOAuthConnectingOverlay } from "../lib/iosGoogleOAuthDisplay";
+import {
+  isAndroidGoogleNativeEnabled,
+  signInWithGoogleNativeAndroid,
+} from "../lib/googleNativeSignIn";
 import { isNativeCapacitorApp } from "../lib/authRedirect";
 import { beginWebOAuthSplash } from "../lib/webOAuthSplash";
 import { logOAuthLoaderDiag } from "../lib/oauthLoaderDiag";
@@ -312,16 +316,31 @@ export default function Auth() {
   });
 
   async function signInWithGoogle() {
-    console.log("GOOGLE_SIGNIN_BUTTON_TAP");
+    console.log("GOOGLE_SIGNIN_BUTTON_TAP", {
+      via: "Auth",
+      androidNative: isAndroidGoogleNativeEnabled(),
+    });
     setMessage(null);
     setOauthLoading("google");
+    if (isAndroidGoogleNativeEnabled()) {
+      console.log("GOOGLE_NATIVE_START", { via: "Auth" });
+      try {
+        const { error } = await signInWithGoogleNativeAndroid();
+        if (error) {
+          setMessage({ type: "error", text: error.message || GOOGLE_OAUTH_USER_ERROR_MSG });
+          setOauthLoading(null);
+        }
+      } catch (err: unknown) {
+        const text = err instanceof Error ? err.message : GOOGLE_OAUTH_USER_ERROR_MSG;
+        setMessage({ type: "error", text });
+        setOauthLoading(null);
+      }
+      return;
+    }
     if (isIosGoogleOAuthBrowserFlow()) {
       await showIosGoogleOAuthConnectingOverlay();
     } else if (!isNativeCapacitorApp()) {
       beginWebOAuthSplash();
-      showGoogleSignInOverlay();
-      await awaitGoogleSignInOverlayPaint();
-    } else {
       showGoogleSignInOverlay();
       await awaitGoogleSignInOverlayPaint();
     }

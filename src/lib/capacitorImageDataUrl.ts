@@ -2,10 +2,18 @@ import { Capacitor, CapacitorHttp } from "@capacitor/core";
 import { PhotoFlowLog } from "./photoFlowLog";
 import { photoUrlPrefix } from "./profilePhotoPipelineLog";
 import { logPhotoIosDebug } from "./photoIosDebug";
+import {
+  isValidCachedImageDataUrl,
+  normalizeAndValidateCapacitorImageResponseToDataUrl,
+} from "./normalizeCapacitorImageResponseToDataUrl";
 
+/** Bump : jette les data URLs corrompues (double encodage) encore en mémoire. */
+const DATA_URL_CACHE_FORMAT = 3;
 const CACHE_MAX_ENTRIES = 32;
 const FETCH_TIMEOUT_MS = 25_000;
-const dataUrlCache = new Map<string, string>();
+
+type CacheEntry = { format: number; dataUrl: string };
+const dataUrlCache = new Map<string, CacheEntry>();
 
 /** iOS WKWebView : `<img src=https://…>` échoue souvent ; CapacitorHttp GET fonctionne. */
 export function shouldUseIosCapacitorImageFallback(): boolean {
@@ -24,25 +32,24 @@ function cacheKey(url: string): string {
 export function getCachedCapacitorImageDataUrl(url: string): string | null {
   const trimmed = url.trim();
   if (!trimmed) return null;
-  return dataUrlCache.get(cacheKey(trimmed)) ?? null;
-}
-
-function uint8ToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  const key = cacheKey(trimmed);
+  const entry = dataUrlCache.get(key);
+  if (!entry) return null;
+  if (entry.format !== DATA_URL_CACHE_FORMAT || !isValidCachedImageDataUrl(entry.dataUrl)) {
+    dataUrlCache.delete(key);
+    return null;
   }
-  return btoa(binary);
+  return entry.dataUrl;
 }
 
 function rememberDataUrl(url: string, dataUrl: string): void {
+  if (!isValidCachedImageDataUrl(dataUrl)) return;
   const key = cacheKey(url);
   if (dataUrlCache.size >= CACHE_MAX_ENTRIES && !dataUrlCache.has(key)) {
     const oldest = dataUrlCache.keys().next().value;
     if (oldest) dataUrlCache.delete(oldest);
   }
-  dataUrlCache.set(key, dataUrl);
+  dataUrlCache.set(key, { format: DATA_URL_CACHE_FORMAT, dataUrl });
 }
 
 function contentTypeFromHeaders(headers: Record<string, unknown> | undefined): string {
@@ -54,33 +61,9 @@ function contentTypeFromHeaders(headers: Record<string, unknown> | undefined): s
   return (typeof raw === "string" ? raw.split(";")[0]?.trim() : "") || "image/jpeg";
 }
 
-function dataUrlFromCapacitorBody(data: unknown, mime: string): string | null {
-  if (typeof data === "string") {
-    const trimmed = data.trim();
-    if (!trimmed) return null;
-    if (trimmed.startsWith("data:")) return trimmed;
-    if (trimmed.startsWith("{") || trimmed.startsWith("<") || trimmed.startsWith("[")) {
-      return null;
-    }
-    return `data:${mime};base64,${trimmed}`;
-  }
-
-  if (data instanceof ArrayBuffer) {
-    if (!data.byteLength) return null;
-    return `data:${mime};base64,${uint8ToBase64(new Uint8Array(data))}`;
-  }
-
-  if (ArrayBuffer.isView(data)) {
-    const view = data as ArrayBufferView;
-    if (!view.byteLength) return null;
-    return `data:${mime};base64,${uint8ToBase64(new Uint8Array(view.buffer, view.byteOffset, view.byteLength))}`;
-  }
-
-  return null;
-}
-
 /**
  * GET image via CapacitorHttp natif (pas capacitorFetch — évite corruption binaire JSON.stringify).
+ * `responseType: "arraybuffer"` : octets binaires → base64 une seule fois (jamais double btoa).
  */
 async function fetchOneRemoteImageDataUrl(url: string): Promise<string | null> {
   const trimmed = url.trim();
@@ -95,7 +78,7 @@ async function fetchOneRemoteImageDataUrl(url: string): Promise<string | null> {
 
   try {
     const response = await Promise.race([
-      CapacitorHttp.get({ url: trimmed, responseType: "blob" }),
+      CapacitorHttp.get({ url: trimmed, responseType: "arraybuffer" }),
       new Promise<never>((_, reject) => {
         window.setTimeout(() => reject(new Error("CapacitorHttp image timeout")), FETCH_TIMEOUT_MS);
       }),
@@ -114,6 +97,7 @@ async function fetchOneRemoteImageDataUrl(url: string): Promise<string | null> {
           return trimmed.slice(0, 48);
         }
       })(),
+      responseDataType: response.data == null ? "null" : typeof response.data,
     });
 
     if (status < 200 || status >= 300) {
@@ -126,13 +110,13 @@ async function fetchOneRemoteImageDataUrl(url: string): Promise<string | null> {
       return null;
     }
 
-    const dataUrl = dataUrlFromCapacitorBody(response.data, mime);
+    const dataUrl = await normalizeAndValidateCapacitorImageResponseToDataUrl(response.data, mime);
     if (!dataUrl) {
       PhotoFlowLog.imageLoadError({
         context: "ios.capacitor_http",
         storedRef: trimmed,
         displayUrl: trimmed,
-        error: "unrecognized_response_body",
+        error: "data_url_normalize_or_decode_failed",
       });
       return null;
     }
@@ -213,3 +197,18 @@ export async function fetchCapacitorImageDataUrl(
 export function clearCapacitorImageDataUrlCache(): void {
   dataUrlCache.clear();
 }
+
+/** Purge les entrées data URL invalides / ancien format (double encodage). */
+export function purgeInvalidCapacitorImageDataUrlCache(): number {
+  let removed = 0;
+  for (const [key, entry] of [...dataUrlCache.entries()]) {
+    if (entry.format !== DATA_URL_CACHE_FORMAT || !isValidCachedImageDataUrl(entry.dataUrl)) {
+      dataUrlCache.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+// Au chargement du module : aucune entrée ancien format ne doit survivre.
+purgeInvalidCapacitorImageDataUrlCache();

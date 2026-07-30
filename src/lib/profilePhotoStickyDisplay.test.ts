@@ -6,7 +6,7 @@ describe("mergeStickyPhotoHandlers", () => {
     const stickyLoad = vi.fn();
     const externalLoad = vi.fn();
     const handlers = mergeStickyPhotoHandlers(
-      { onImageLoad: stickyLoad, imageLoaded: false },
+      { onImageLoad: stickyLoad, imageLoaded: false, resetSticky: vi.fn() },
       { onLoad: externalLoad },
     );
 
@@ -15,25 +15,29 @@ describe("mergeStickyPhotoHandlers", () => {
     expect(externalLoad).toHaveBeenCalledOnce();
   });
 
-  it("ignore onError si image déjà chargée (garde anti-flash)", () => {
+  it("propage onError et reset sticky même si image déjà chargée", () => {
     const externalError = vi.fn();
+    const resetSticky = vi.fn();
     const handlers = mergeStickyPhotoHandlers(
-      { onImageLoad: () => {}, imageLoaded: true },
+      { onImageLoad: () => {}, imageLoaded: true, resetSticky },
       { onError: externalError },
     );
 
     handlers.onError();
-    expect(externalError).not.toHaveBeenCalled();
+    expect(resetSticky).toHaveBeenCalledOnce();
+    expect(externalError).toHaveBeenCalledOnce();
   });
 
   it("propage onError si image pas encore chargée", () => {
     const externalError = vi.fn();
+    const resetSticky = vi.fn();
     const handlers = mergeStickyPhotoHandlers(
-      { onImageLoad: () => {}, imageLoaded: false },
+      { onImageLoad: () => {}, imageLoaded: false, resetSticky },
       { onError: externalError },
     );
 
     handlers.onError();
+    expect(resetSticky).toHaveBeenCalledOnce();
     expect(externalError).toHaveBeenCalledOnce();
   });
 });

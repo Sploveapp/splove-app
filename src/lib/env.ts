@@ -15,3 +15,6 @@ export const env = {
 export const hasSupabaseEnv = Boolean(env.supabaseUrl && env.supabaseAnonKey);
 
 export const hasGoogleNativeIosEnv = Boolean(env.googleIosClientId && env.googleWebClientId);
+
+/** Android native Google : Client ID Web (audience idToken pour Supabase) — pas de secret. */
+export const hasGoogleNativeAndroidEnv = Boolean(env.googleWebClientId);

@@ -1,13 +1,35 @@
+import { parseSupabaseTimestamp } from "./parseSupabaseTimestamp";
+
+export type FormatRelativeTimeOptions = {
+  /** Notifications reçues : jamais « dans X secondes » (décalage horaire serveur). */
+  assumePast?: boolean;
+  /** Au-delà de ce délai passé, afficher une date lisible (ex. 12 mars 2025). */
+  absoluteAfterDays?: number;
+};
+
 /** Timestamp relatif court (ex. « il y a 5 min »). */
 export function formatRelativeTime(
   iso: string,
   locale: string,
   nowMs: number = Date.now(),
+  options: FormatRelativeTimeOptions = {},
 ): string {
-  const t = new Date(iso).getTime();
+  const t = parseSupabaseTimestamp(iso);
   if (Number.isNaN(t)) return "";
-  const deltaSec = Math.round((t - nowMs) / 1000);
+
+  let deltaSec = Math.round((t - nowMs) / 1000);
+
+  if (options.assumePast && deltaSec > 0) {
+    deltaSec = -Math.abs(deltaSec);
+  }
+
   const abs = Math.abs(deltaSec);
+  const absoluteAfterDays = options.absoluteAfterDays ?? 30;
+  if (deltaSec < 0 && abs >= absoluteAfterDays * 86_400) {
+    const d = new Date(t);
+    return d.toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" });
+  }
+
   const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
 
   if (abs < 60) return rtf.format(deltaSec, "second");

@@ -52,8 +52,9 @@ describe("capacitorOAuth garde-fous Browser.open iOS", () => {
     expect(isIosOAuthBrowserOpenAllowedUrl(CALLBACK)).toBe(false);
   });
 
-  it("Android : autorise Supabase /authorize", () => {
-    expect(isOAuthBrowserOpenAllowedUrl(SUPABASE_AUTHORIZE)).toBe(true);
+  it("Android : refuse *.supabase.co (Custom Tabs = Google uniquement)", () => {
+    expect(isOAuthBrowserOpenAllowedUrl(SUPABASE_AUTHORIZE)).toBe(false);
+    expect(isOAuthBrowserOpenAllowedUrl(GOOGLE_AUTHORIZE)).toBe(true);
   });
 
   it("routeOAuthDeepLink traite le callback sans Browser.open", async () => {

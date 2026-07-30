@@ -35,6 +35,7 @@ import { classifyImgSrcForIosDebug, logPhotoIosDebug } from "../../lib/photoIosD
 import { logPhotoComponent, logPhotoTrace, logPhotoTraceImgEvent } from "../../lib/photoTraceLog";
 import { SplovePlayHeartPicker } from "./SplovePlayHeartPicker";
 import { SplovePlayIntroModal } from "./SplovePlayIntroModal";
+import { SplovePlayUpsellSheet } from "./SplovePlayUpsellSheet";
 import type { SplovePlayAccess } from "../../lib/splovePlayAccess";
 import type { SplovePlayType } from "../../lib/splovePlay";
 import { useAuth } from "../../contexts/AuthContext";
@@ -42,6 +43,17 @@ import {
   hasDismissedSplovePlayIntro,
   markSplovePlayIntroDismissed,
 } from "../../lib/splovePlayIntroStorage";
+import {
+  SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK,
+  SPLOVE_BOTTOM_NAV_HEIGHT_VAR,
+  SPLOVE_NATIVE_BOTTOM_NAV_CONTENT_HEIGHT_VAR,
+} from "../../constants/appBottomNavLayout";
+
+/** Marge visuelle entre sports/description et la barre d’onglets sur Move. */
+const MOVE_CARD_PROFILE_NAV_VISUAL_GAP_PX = 28;
+
+/** Clearance basse scroll carte Move : barre native (si iOS) + hauteur mesurée + marge visuelle. */
+const MOVE_CARD_SCROLL_PADDING_BOTTOM = `calc(var(${SPLOVE_NATIVE_BOTTOM_NAV_CONTENT_HEIGHT_VAR}, 0px) + var(${SPLOVE_BOTTOM_NAV_HEIGHT_VAR}, ${SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK}) + ${MOVE_CARD_PROFILE_NAV_VISUAL_GAP_PX}px)`;
 
 export type DiscoverProfileCardModel = {
   id: string;
@@ -99,11 +111,8 @@ export type DiscoverProfileCardProps = {
   onPass: (decisionTimeMs?: number) => void;
   onLike: (decisionTimeMs?: number, playType?: SplovePlayType) => void | Promise<void>;
   onReport: () => void;
-  /** Repli URL photo (public → signée) après échec `<img>`. */
   onPhotoError?: ReactEventHandler<HTMLImageElement>;
-  /** Diagnostic `[PhotoRender] img_onload` — sans effet métier. */
   onPhotoLoad?: ReactEventHandler<HTMLImageElement>;
-  /** Carte Discover plein focus — photo plus haute, rythme immersif. */
   immersive?: boolean;
 };
 
@@ -139,6 +148,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
   const { user } = useAuth();
   const [heartPickerOpen, setHeartPickerOpen] = useState(false);
   const [introOpen, setIntroOpen] = useState(false);
+  const [upsellOpen, setUpsellOpen] = useState(false);
   const [likeSending, setLikeSending] = useState(false);
   const likePendingRef = useRef(false);
   const playAnchorRef = useRef<HTMLButtonElement>(null);
@@ -176,8 +186,8 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
         : null;
   const cityDisplay = locLines.line2 ?? profileCityPretty;
   const shortBio = phraseTrim
-    ? phraseTrim.length > 120
-      ? `${phraseTrim.slice(0, 117)}…`
+    ? phraseTrim.length > 160
+      ? `${phraseTrim.slice(0, 157)}…`
       : phraseTrim
     : irlLine;
   const locationLine = (() => {
@@ -188,8 +198,8 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
     return null;
   })();
   const descriptionLine = shortBio
-    ? shortBio.length > 140
-      ? `${shortBio.slice(0, 137)}…`
+    ? shortBio.length > 180
+      ? `${shortBio.slice(0, 177)}…`
       : shortBio
     : null;
   const hasDisplayPhoto = Boolean(photoUrl?.trim());
@@ -216,23 +226,34 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
     });
   }, [onLike]);
 
-  const dismissPlayIntro = useCallback(() => {
-    markSplovePlayIntroDismissed(user?.id);
-    setIntroOpen(false);
-  }, [user?.id]);
+  const dismissPlayIntro = useCallback(
+    (result: { dontShowAgain: boolean; openPicker: boolean }) => {
+      if (result.dontShowAgain) {
+        markSplovePlayIntroDismissed(user?.id);
+      }
+      setIntroOpen(false);
+      if (result.openPicker && canUsePlayPicker) {
+        setHeartPickerOpen(true);
+      }
+    },
+    [canUsePlayPicker, user?.id],
+  );
 
   /** Bouton flottant sur la photo — Play uniquement (sans Like classique). */
   const handleFloatingPlayClick = useCallback(() => {
     if (likePendingRef.current) return;
 
-    if (canUsePlayPicker) {
-      setHeartPickerOpen((open) => !open);
+    if (!canUsePlayPicker) {
+      setUpsellOpen(true);
       return;
     }
 
     if (user?.id && !hasDismissedSplovePlayIntro(user.id)) {
       setIntroOpen(true);
+      return;
     }
+
+    setHeartPickerOpen((open) => !open);
   }, [canUsePlayPicker, user?.id]);
 
   const closeHeartPicker = useCallback(() => {
@@ -353,6 +374,12 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
 
   const handlePhotoLoad: ReactEventHandler<HTMLImageElement> = useCallback(
     (event) => {
+      const img = event.currentTarget;
+      // WKWebView : onLoad avec naturalWidth 0 = glyph « ? » (octet-stream / decode fail).
+      if (!img.naturalWidth || !img.naturalHeight) {
+        onPhotoError?.(event);
+        return;
+      }
       logPhotoTraceImgEvent(
         "onLoad",
         {
@@ -362,13 +389,13 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
           slot: "primary",
           srcReceived: photoUrl || null,
         },
-        event.currentTarget,
+        img,
       );
       logPhotoIosDebug("img_onload", {
         screen: "Discover",
         profileId: profile.id,
-        srcKind: classifyImgSrcForIosDebug(photoUrl || event.currentTarget.currentSrc),
-        naturalWidth: event.currentTarget.naturalWidth,
+        srcKind: classifyImgSrcForIosDebug(photoUrl || img.currentSrc),
+        naturalWidth: img.naturalWidth,
       });
       logPhotoDebug("screen.img_onload", {
         screen: "Discover",
@@ -387,11 +414,12 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
         },
         isLoading: photoPending,
         isFailed: false,
-        extra: { naturalWidth: event.currentTarget.naturalWidth },
+        extra: { naturalWidth: img.naturalWidth },
       });
       onPhotoLoad?.(event);
     },
     [
+      onPhotoError,
       onPhotoLoad,
       photoPending,
       photoUrl,
@@ -405,6 +433,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
 
   const handlePhotoError: ReactEventHandler<HTMLImageElement> = useCallback(
     (event) => {
+      const img = event.currentTarget;
       logPhotoTraceImgEvent(
         "onError",
         {
@@ -414,13 +443,13 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
           slot: "primary",
           srcReceived: photoUrl || null,
         },
-        event.currentTarget,
+        img,
       );
       logPhotoIosDebug("img_onerror", {
         screen: "Discover",
         profileId: profile.id,
-        srcKind: classifyImgSrcForIosDebug(photoUrl || event.currentTarget.currentSrc),
-        imgSrcAttr: event.currentTarget.currentSrc?.slice(0, 120) ?? null,
+        srcKind: classifyImgSrcForIosDebug(photoUrl || img.currentSrc),
+        imgSrcAttr: img.currentSrc?.slice(0, 120) ?? null,
       });
       logPhotoDebug("screen.img_onerror", {
         screen: "Discover",
@@ -440,7 +469,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
         isLoading: photoPending,
         isFailed: true,
         error: "img_element_onerror",
-        extra: { imgSrcAttr: event.currentTarget.currentSrc?.slice(0, 120) ?? null },
+        extra: { imgSrcAttr: img.currentSrc?.slice(0, 120) ?? null },
       });
       onPhotoError?.(event);
     },
@@ -472,7 +501,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
         {/* ── 1. PHOTO ── */}
         <div
           ref={photoZoneRef}
-          className="relative w-full shrink-0 overflow-hidden rounded-t-[28px] bg-zinc-900 aspect-[4/3] max-h-[360px]"
+          className="relative w-full shrink-0 overflow-hidden rounded-t-[28px] bg-zinc-900 aspect-[7/6] max-h-[472px]"
         >
           {hasDisplayPhoto ? (
             <img
@@ -694,42 +723,92 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
           />
         </div>
 
-        {/* ── 2. INFORMATIONS ── */}
-        <section className="w-full shrink-0 bg-app-card px-5 pt-4">
-          <h2 className="text-[1.3rem] font-extrabold leading-tight tracking-tight text-app-text">
-            {profile.first_name ?? t("unnamed_profile")}
-            {age != null ? <span className="font-semibold">, {age}</span> : null}
-            {heightLine ? (
-              <span className="text-[0.95rem] font-semibold text-app-muted"> · {heightLine}</span>
+        {immersive ? (
+          <div
+            data-move-card-scroll
+            className="min-h-0 w-full flex-1 overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch]"
+            style={{
+              paddingBottom: MOVE_CARD_SCROLL_PADDING_BOTTOM,
+              touchAction: "pan-y",
+            }}
+          >
+            {/* ── 2. INFORMATIONS ── */}
+            <section className="w-full shrink-0 bg-app-card px-5 pt-3.5 pb-1">
+              <h2 className="text-[1.35rem] font-extrabold leading-snug tracking-tight text-app-text">
+                {profile.first_name ?? t("unnamed_profile")}
+                {age != null ? <span className="font-semibold">, {age}</span> : null}
+                {heightLine ? (
+                  <span className="text-[0.95rem] font-semibold text-app-muted"> · {heightLine}</span>
+                ) : null}
+              </h2>
+
+              {locationLine ? (
+                <p className="mt-1.5 text-[14px] font-medium leading-snug text-app-muted">{locationLine}</p>
+              ) : null}
+
+              {descriptionLine ? (
+                <p className="mt-1.5 text-[14px] font-medium leading-relaxed text-app-text">
+                  &ldquo;{descriptionLine}&rdquo;
+                </p>
+              ) : null}
+            </section>
+
+            {/* ── 3. SPORTS ── */}
+            {sportChips.length > 0 ? (
+              <section className="w-full shrink-0 bg-app-card px-5 pt-2.5 pb-2">
+                <div className="space-y-1">
+                  {sportChips.map(({ label: sportLabel, level }) => (
+                    <DiscoverSportLevelRow
+                      key={sportLabel}
+                      label={sportLabel}
+                      slug={slugForSportLabel(profile, sportLabel)}
+                      level={level}
+                    />
+                  ))}
+                </div>
+              </section>
             ) : null}
-          </h2>
+          </div>
+        ) : (
+          <>
+            {/* ── 2. INFORMATIONS ── */}
+            <section className="w-full shrink-0 bg-app-card px-5 pt-3.5 pb-1">
+              <h2 className="text-[1.35rem] font-extrabold leading-snug tracking-tight text-app-text">
+                {profile.first_name ?? t("unnamed_profile")}
+                {age != null ? <span className="font-semibold">, {age}</span> : null}
+                {heightLine ? (
+                  <span className="text-[0.95rem] font-semibold text-app-muted"> · {heightLine}</span>
+                ) : null}
+              </h2>
 
-          {locationLine ? (
-            <p className="mt-2 text-[13px] font-medium leading-snug text-app-muted">{locationLine}</p>
-          ) : null}
+              {locationLine ? (
+                <p className="mt-1.5 text-[14px] font-medium leading-snug text-app-muted">{locationLine}</p>
+              ) : null}
 
-          {descriptionLine ? (
-            <p className="mt-2 text-[14px] font-medium leading-snug text-app-text">
-              &ldquo;{descriptionLine}&rdquo;
-            </p>
-          ) : null}
-        </section>
+              {descriptionLine ? (
+                <p className="mt-1.5 text-[14px] font-medium leading-relaxed text-app-text">
+                  &ldquo;{descriptionLine}&rdquo;
+                </p>
+              ) : null}
+            </section>
 
-        {/* ── 3. SPORTS ── */}
-        {sportChips.length > 0 ? (
-          <section className="w-full shrink-0 bg-app-card px-5 pt-4">
-            <div className="space-y-2.5">
-              {sportChips.map(({ label: sportLabel, level }) => (
-                <DiscoverSportLevelRow
-                  key={sportLabel}
-                  label={sportLabel}
-                  slug={slugForSportLabel(profile, sportLabel)}
-                  level={level}
-                />
-              ))}
-            </div>
-          </section>
-        ) : null}
+            {/* ── 3. SPORTS ── */}
+            {sportChips.length > 0 ? (
+              <section className="w-full shrink-0 bg-app-card px-5 pt-2.5 pb-6">
+                <div className="space-y-1">
+                  {sportChips.map(({ label: sportLabel, level }) => (
+                    <DiscoverSportLevelRow
+                      key={sportLabel}
+                      label={sportLabel}
+                      slug={slugForSportLabel(profile, sportLabel)}
+                      level={level}
+                    />
+                  ))}
+                </div>
+              </section>
+            ) : null}
+          </>
+        )}
       </div>
 
       {!immersive ? (
@@ -745,6 +824,7 @@ export const DiscoverProfileCard = memo(function DiscoverProfileCard({
       ) : null}
 
       <SplovePlayIntroModal open={introOpen} onDismiss={dismissPlayIntro} />
+      <SplovePlayUpsellSheet open={upsellOpen} onClose={() => setUpsellOpen(false)} />
     </>
   );
 });

@@ -86,40 +86,34 @@ describe("oauthFlowRegression — garde-fous statiques", () => {
     expect(capSource).not.toContain("openSploveIosAppleOAuthSession");
     expect(capSource).not.toContain("[AppleOAuth] native_auth_session_start");
 
-    const androidBlock = capSource.slice(
-      capSource.indexOf("const browserTargetUrl = googleOAuthNativeBrowserTargetUrl"),
-      capSource.indexOf("return openAndroidOAuthBrowser(browserTargetUrl)"),
-    );
-    expect(androidBlock).toContain("showGoogleSignInOverlay");
+    const androidNativeIdx = capSource.indexOf("signInWithGoogleNativeAndroid");
+    expect(androidNativeIdx).toBeGreaterThan(-1);
+    expect(capSource).toContain("ANDROID_GOOGLE_NATIVE_FAILED_NO_BROWSER_FALLBACK");
+    expect(capSource).toContain("signInWithGoogleOAuthBrowserAndroidFallback");
+    expect(capSource).not.toContain('googleOAuthNativeBrowserTargetUrl(url, "android")');
   });
 
-  it("WelcomeSPLove : overlay iOS avant signInWithGoogleOAuth", () => {
+  it("WelcomeSPLove : Android appelle signInWithGoogleNativeAndroid directement", () => {
     const source = readSrc("pages/WelcomeSPLove.tsx");
-    expect(source).toContain("showIosGoogleOAuthConnectingOverlay");
     const fnBlock = source.slice(
       source.indexOf("async function signInWithGoogle"),
       source.indexOf("function goEmailAuth"),
     );
-    expect(fnBlock).toContain("showIosGoogleOAuthConnectingOverlay");
+    expect(fnBlock).toContain("isAndroidGoogleNativeEnabled");
+    expect(fnBlock).toContain("signInWithGoogleNativeAndroid");
+    expect(fnBlock).toContain("GOOGLE_NATIVE_START");
     expect(fnBlock).not.toMatch(/navigate\s*\(\s*["'`]\/oauth/);
   });
 
-  it("Auth : overlay iOS avant signInWithGoogleOAuth et Apple OAuth branché", () => {
+  it("Auth : Android appelle signInWithGoogleNativeAndroid directement", () => {
     const source = readSrc("pages/Auth.tsx");
-    expect(source).toContain("showIosGoogleOAuthConnectingOverlay");
-    expect(source).toContain("signInWithAppleOAuth");
-    expect(source).not.toContain("coming soon clicked");
     const googleBlock = source.slice(
       source.indexOf("async function signInWithGoogle"),
       source.indexOf("async function signInWithApple"),
     );
-    expect(googleBlock).toContain("showIosGoogleOAuthConnectingOverlay");
-    expect(googleBlock).not.toMatch(/navigate\s*\(\s*["'`]\/oauth/);
-    const appleBlock = source.slice(
-      source.indexOf("async function signInWithApple"),
-      source.indexOf("async function handleSubmit"),
-    );
-    expect(appleBlock).toContain("signInWithAppleOAuth");
+    expect(googleBlock).toContain("isAndroidGoogleNativeEnabled");
+    expect(googleBlock).toContain("signInWithGoogleNativeAndroid");
+    expect(googleBlock).toContain("GOOGLE_NATIVE_START");
   });
 
   it("postGoogleAuthComplete : logs succès et route", () => {

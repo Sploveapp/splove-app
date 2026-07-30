@@ -53,6 +53,11 @@ describe("Apple native SIWA — garde-fous", () => {
     expect(webFn).toContain('provider: "apple"');
     expect(webFn).toContain("signInWithOAuth");
     expect(webFn).toContain("window.location.assign");
+    expect(webFn).toContain("logAppleWebOAuthAudit");
+    expect(webFn).not.toContain("signInWithIdToken");
+    expect(webFn).not.toMatch(/queryParams\s*:/);
+    expect(webFn).not.toMatch(/client_id\s*:/);
+    expect(webFn).not.toMatch(/clientId\s*:/);
   });
 
   it("plugin Swift natif Apple ID + Google ASWebAuth inchangé", () => {

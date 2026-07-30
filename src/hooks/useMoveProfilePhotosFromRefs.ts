@@ -236,7 +236,8 @@ export function useMoveProfilePhotosFromRefs(
   }, [photo.displaySrc, activeRef, profileId, logSource, fieldByRef, refIndex, refs.length]);
 
   const onImageError = useCallback(() => {
-    if (sticky.imageLoaded && sticky.displaySrc) return;
+    // Toujours réessayer / failover — ne pas verrouiller un displaySrc décodé en échec (glyph « ? »).
+    sticky.resetSticky();
     logDiscoverProfilePhotoDiag({
       phase: "img_onerror",
       profileId,
@@ -265,7 +266,6 @@ export function useMoveProfilePhotosFromRefs(
         candidateCount: refs.length,
         extra: { nextRef: photoUrlPrefix(refs[refIndex + 1]), nextField: fieldByRef[refs[refIndex + 1]!] ?? null },
       });
-      sticky.resetSticky();
       setRefIndex((i) => i + 1);
       return;
     }
@@ -278,7 +278,6 @@ export function useMoveProfilePhotosFromRefs(
     photo.onImageError,
     profileId,
     sticky.displaySrc,
-    sticky.imageLoaded,
     sticky.resetSticky,
     refIndex,
     refs,

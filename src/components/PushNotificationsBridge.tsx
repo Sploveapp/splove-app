@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { scheduleDevicePushPresenceSync, resetDevicePushPresenceCache } from "../lib/pushAppPresence";
+import { clearNativeIconBadge, syncNativeIconBadge } from "../lib/pushBadgeSync";
 import {
   initPushNotificationHandlers,
   offerPushNotificationsAfterLogin,
@@ -9,7 +10,7 @@ import {
   syncPushTokenIfGranted,
   teardownPushNotificationHandlers,
 } from "../lib/pushNotifications";
-import { registerPushNavigate } from "../lib/pushNavigate";
+import { flushPendingPushRoute, registerPushNavigate } from "../lib/pushNavigate";
 
 /** Enregistre la navigation push + présence + handlers natifs (dans HashRouter). */
 export function PushNotificationsBridge() {
@@ -17,29 +18,41 @@ export function PushNotificationsBridge() {
   const location = useLocation();
   const { user } = useAuth();
   const userId = user?.id ?? "";
+  const previousUserIdRef = useRef("");
 
   useEffect(() => {
     registerPushNavigate((path, options) => {
       navigate(path, { replace: options?.replace ?? false });
     });
+    flushPendingPushRoute();
     return () => registerPushNavigate(null);
   }, [navigate]);
 
   useEffect(() => {
+    const previousUserId = previousUserIdRef.current;
+    previousUserIdRef.current = userId;
+
     if (!userId) {
       resetDevicePushPresenceCache();
-      void teardownPushNotificationHandlers();
+      clearNativeIconBadge();
+      if (previousUserId) {
+        void teardownPushNotificationHandlers(previousUserId);
+      } else {
+        void teardownPushNotificationHandlers();
+      }
       return;
     }
 
     void (async () => {
       await initPushNotificationHandlers(userId);
       await syncPushTokenIfGranted(userId);
+      await syncNativeIconBadge(userId);
+      flushPendingPushRoute();
       void offerPushNotificationsAfterLogin(userId);
     })();
 
     return () => {
-      void teardownPushNotificationHandlers();
+      void teardownPushNotificationHandlers(userId);
     };
   }, [userId]);
 
@@ -54,6 +67,7 @@ export function PushNotificationsBridge() {
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
         scheduleDevicePushPresenceSync(userId, location.pathname);
+        void syncNativeIconBadge(userId);
       }
     };
     document.addEventListener("visibilitychange", onVisibility);

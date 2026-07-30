@@ -19,12 +19,18 @@ import { runPostLoginOptionalBatch } from "../lib/postLoginPerf";
 import {
   countUnreadInAppNotifications,
   pulseInAppNotifications,
+  refreshInAppNotificationBadge,
 } from "../services/inAppNotifications.service";
+import { syncNativeIconBadge } from "../lib/pushBadgeSync";
 import {
   SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK,
   SPLOVE_BOTTOM_NAV_HEIGHT_VAR,
-  SPLOVE_NATIVE_BOTTOM_NAV_HEIGHT_FALLBACK,
 } from "../constants/appBottomNavLayout";
+import { matchActiveMessages } from "../lib/bottomNavActiveTab";
+import {
+  CHAT_KEYBOARD_SHELL_EVENT,
+  isChatConversationKeyboardOpen,
+} from "../lib/chatConversationKeyboardShell";
 import { usesNativeBottomNavigation } from "../lib/nativeBottomNav";
 
 const USER_PROFILE_PATH = "/profile";
@@ -42,10 +48,18 @@ export function AppLayout() {
   const isMesRencontres = /^\/mes-rencontres\/?$/.test(location.pathname);
 
   const pulseAppNotifications = useCallback(async () => {
-    await pulseInAppNotifications();
+    const uid = user?.id;
+    await pulseInAppNotifications(uid);
     const n = await countUnreadInAppNotifications();
     setInAppUnread(n);
-  }, []);
+    if (uid) void syncNativeIconBadge(uid);
+  }, [user?.id]);
+
+  const refreshAppNotificationBadge = useCallback(async () => {
+    const uid = user?.id;
+    const n = await refreshInAppNotificationBadge(uid);
+    setInAppUnread(n);
+  }, [user?.id]);
 
   const loadLikesBadgeCount = useCallback(async () => {
     const {
@@ -112,7 +126,8 @@ export function AppLayout() {
       (unreadRows ?? []).map((r: { conversation_id: string }) => r.conversation_id),
     );
     setInboxCount(distinct.size);
-  }, []);
+    if (user?.id) void syncNativeIconBadge(user.id);
+  }, [user?.id]);
 
   useEffect(() => {
     return deferSecondaryWork(() => {
@@ -177,7 +192,7 @@ export function AppLayout() {
 
   useEffect(() => {
     const onRefresh = () => {
-      void pulseAppNotifications();
+      void refreshAppNotificationBadge();
     };
     const cancelDefer = deferSecondaryWork(() => {
       window.addEventListener(IN_APP_NOTIFICATIONS_REFRESH_EVENT, onRefresh);
@@ -186,31 +201,49 @@ export function AppLayout() {
       cancelDefer();
       window.removeEventListener(IN_APP_NOTIFICATIONS_REFRESH_EVENT, onRefresh);
     };
-  }, [pulseAppNotifications]);
+  }, [refreshAppNotificationBadge]);
 
   const inboxRealtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const notifRealtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const bottomNavMeasureRef = useRef<HTMLDivElement | null>(null);
+
+  const [chatKeyboardOpen, setChatKeyboardOpen] = useState(isChatConversationKeyboardOpen);
+
+  useEffect(() => {
+    const sync = () => setChatKeyboardOpen(isChatConversationKeyboardOpen());
+    window.addEventListener(CHAT_KEYBOARD_SHELL_EVENT, sync);
+    return () => window.removeEventListener(CHAT_KEYBOARD_SHELL_EVENT, sync);
+  }, []);
 
   useEffect(() => {
     const el = bottomNavMeasureRef.current;
     if (!el) return;
 
     const syncNavHeight = () => {
+      if (isChat && isChatConversationKeyboardOpen()) {
+        document.documentElement.style.setProperty(SPLOVE_BOTTOM_NAV_HEIGHT_VAR, "0px");
+        return;
+      }
+      // Overlap glass réservé à Move — Messages/Chat : clearance pleine (composer jamais sous la barre).
+      const overlapPx = matchActiveMessages(location.pathname) ? 0 : 12;
+      // Hauteur mesurée du conteneur fixed (pilule + gap + safe area) − overlap éventuel.
+      const measured = Math.max(0, el.offsetHeight - overlapPx);
       document.documentElement.style.setProperty(
         SPLOVE_BOTTOM_NAV_HEIGHT_VAR,
-        `${el.offsetHeight}px`,
+        `${measured}px`,
       );
     };
 
     syncNavHeight();
     const ro = new ResizeObserver(syncNavHeight);
     ro.observe(el);
+    window.addEventListener(CHAT_KEYBOARD_SHELL_EVENT, syncNavHeight);
     return () => {
       ro.disconnect();
+      window.removeEventListener(CHAT_KEYBOARD_SHELL_EVENT, syncNavHeight);
       document.documentElement.style.removeProperty(SPLOVE_BOTTOM_NAV_HEIGHT_VAR);
     };
-  }, []);
+  }, [isChat, location.pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -298,6 +331,7 @@ export function AppLayout() {
 
   const shellBg = isMesRencontres ? "#F4F6F8" : APP_BG;
   const nativeBottomNav = usesNativeBottomNavigation();
+  const hideWebBottomNav = isChat && chatKeyboardOpen;
 
   const handleProfileTabClick = useCallback(() => {
     const currentPath = location.pathname;
@@ -322,7 +356,10 @@ export function AppLayout() {
           {
             background: shellBg,
             [SPLOVE_BOTTOM_NAV_HEIGHT_VAR]: nativeBottomNav
-              ? SPLOVE_NATIVE_BOTTOM_NAV_HEIGHT_FALLBACK
+              ? // iOS : la safeAreaInset native réserve déjà la barre.
+                // Slack ~12px uniquement → léger scroll comme Android (overlap glass),
+                // sans doubler la clearance (sinon grand vide + bas de carte masqué).
+                "12px"
               : SPLOVE_BOTTOM_NAV_HEIGHT_FALLBACK,
           } as CSSProperties
         }
@@ -338,9 +375,16 @@ export function AppLayout() {
         </div>
 
         {!nativeBottomNav ? (
-          <div ref={bottomNavMeasureRef} className="splove-app-shell__bottom-nav">
+          <div
+            ref={bottomNavMeasureRef}
+            className="splove-app-shell__bottom-nav transition-[opacity,transform] duration-200 ease-out"
+            style={{
+              opacity: hideWebBottomNav ? 0 : 1,
+              transform: hideWebBottomNav ? "translateY(calc(100% + 8px))" : "translateY(0)",
+              pointerEvents: hideWebBottomNav ? "none" : undefined,
+            }}
+          >
             <SPLoveBottomNav
-              activeRoute={location.pathname}
               unreadMessagesCount={inboxCount}
               likesCount={likesCount}
               profileNeedsAction={!isProfileLoading && !isProfileComplete}

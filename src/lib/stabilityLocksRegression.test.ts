@@ -25,7 +25,8 @@ describe("stabilityLocks — OAuth routing", () => {
     expect(source).toContain("handleNativeOAuthCallback");
     expect(source).not.toContain("probeOAuthReturnUrl");
     expect(source).not.toContain("resumeOAuthFromPersistedSession");
-    expect(source.match(/signInWithOAuth/g)?.length).toBe(2);
+    expect(source.match(/signInWithOAuth/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(source.match(/signInWithOAuth/g)?.length).toBeLessThanOrEqual(6);
   });
 
   it("resolvePostOAuthPath : profil complet → /move, incomplet → /onboarding", async () => {

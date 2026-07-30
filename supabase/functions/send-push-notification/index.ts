@@ -2,7 +2,16 @@ import "@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { SignJWT, importPKCS8 } from "https://deno.land/x/jose@v5.2.0/index.ts";
 
-type PushKind = "like" | "message" | "match";
+type PushKind =
+  | "like"
+  | "message"
+  | "match"
+  | "play_sent"
+  | "activity_proposed"
+  | "activity_counter"
+  | "activity_accepted"
+  | "meetup_confirmed";
+
 type PushEnvironment = "development" | "staging" | "production";
 
 type RequestBody = {
@@ -10,9 +19,12 @@ type RequestBody = {
   kind?: PushKind;
   route?: string;
   conversationId?: string | null;
+  actorId?: string | null;
+  profileId?: string | null;
+  playType?: string | null;
+  proposalId?: string | null;
   pushEnvironment?: string;
   triggerSource?: string;
-  /** Broadcast — bloqué sauf confirmation admin explicite (jamais depuis les triggers SQL). */
   broadcast?: boolean;
   adminUserId?: string;
   adminConfirmationCode?: string;
@@ -27,26 +39,61 @@ type DeviceTokenRow = {
   presence_updated_at: string | null;
 };
 
-const PUSH_COPY: Record<PushKind, { title: string; body: string }> = {
-  like: {
+const PLAY_LABELS: Record<string, string> = {
+  warmup: "Échauffement",
+  training: "Entraînement",
+  match: "Match",
+  victory: "Victoire",
+};
+
+const PUSH_COPY: Record<
+  PushKind,
+  (ctx: { playType?: string | null }) => { title: string; body: string }
+> = {
+  like: () => ({
     title: "Nouveau like sur SPLove 💜",
     body: "Découvre son profil dans tes likes :)",
-  },
-  message: {
+  }),
+  message: () => ({
     title: "Nouveau message 💬",
     body: "Tu as reçu un nouveau message sur SPLove.",
-  },
-  match: {
+  }),
+  match: () => ({
     title: "C'est un match 💘",
     body: "Vous pouvez lancer l'échange sur SPLove.",
+  }),
+  play_sent: ({ playType }) => {
+    const label = playType && PLAY_LABELS[playType] ? PLAY_LABELS[playType] : "Play";
+    return {
+      title: "Nouveau Play SPLove ❤️",
+      body: `Quelqu'un t'a envoyé un Play : ${label}.`,
+    };
   },
+  activity_proposed: () => ({
+    title: "Proposition d'activité ⛰️",
+    body: "Une nouvelle activité sportive t'attend sur SPLove.",
+  }),
+  activity_counter: () => ({
+    title: "Contre-proposition 🔄",
+    body: "Un nouveau créneau d'activité a été proposé.",
+  }),
+  activity_accepted: () => ({
+    title: "Activité acceptée 🎯",
+    body: "Ton créneau a été accepté — confirmez votre rencontre.",
+  }),
+  meetup_confirmed: () => ({
+    title: "Rencontre confirmée 📍",
+    body: "Votre activité est confirmée sur SPLove.",
+  }),
 };
 
 const VALID_PUSH_ENVS = new Set<PushEnvironment>(["development", "staging", "production"]);
+const VALID_KINDS = new Set<string>(Object.keys(PUSH_COPY));
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const PRESENCE_MAX_AGE_MS = 45_000;
+const DEDUPE_WINDOW_MS = 60_000;
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -96,11 +143,19 @@ function shouldSkipForPresence(
 
   const activeRoute = normalizeRoute(row.active_route ?? "");
 
-  if (kind === "like" && (activeRoute === "/likes-you" || activeRoute.startsWith("/likes-you/"))) {
+  if ((kind === "like" || kind === "play_sent") &&
+    (activeRoute === "/likes-you" || activeRoute.startsWith("/likes-you/"))) {
     return true;
   }
 
-  if (kind === "message" && conversationId && row.active_conversation_id === conversationId) {
+  if (
+    (kind === "message" ||
+      kind === "activity_proposed" ||
+      kind === "activity_counter" ||
+      kind === "activity_accepted") &&
+    conversationId &&
+    row.active_conversation_id === conversationId
+  ) {
     return true;
   }
 
@@ -108,6 +163,12 @@ function shouldSkipForPresence(
     if (row.active_conversation_id === conversationId) return true;
     const matchRoute = `/match/${conversationId}`;
     if (activeRoute === matchRoute || activeRoute.startsWith(`${matchRoute}/`)) return true;
+  }
+
+  if (kind === "meetup_confirmed") {
+    if (activeRoute === "/mes-rencontres" || activeRoute.startsWith("/mes-rencontres/")) {
+      return true;
+    }
   }
 
   if (activeRoute === route || activeRoute.startsWith(`${route}/`)) {
@@ -179,6 +240,56 @@ async function writePushAuditLog(
   }
 }
 
+async function fetchIconBadgeCount(
+  admin: ReturnType<typeof createClient>,
+  recipientUserId: string,
+): Promise<number> {
+  const { data, error } = await admin.rpc("splove_icon_badge_count", {
+    p_user_id: recipientUserId,
+  });
+  if (error) {
+    console.warn("[send-push] badge_count_failed", error.message);
+    return 1;
+  }
+  const n = typeof data === "number" ? data : Number(data);
+  if (!Number.isFinite(n) || n < 0) return 1;
+  return Math.min(999, Math.max(0, Math.floor(n)));
+}
+
+async function wasRecentlySent(
+  admin: ReturnType<typeof createClient>,
+  recipientUserId: string,
+  kind: PushKind,
+  conversationId: string | null,
+  proposalId: string | null,
+): Promise<boolean> {
+  const since = new Date(Date.now() - DEDUPE_WINDOW_MS).toISOString();
+  let query = admin
+    .from("push_send_audit_log")
+    .select("id, payload")
+    .eq("recipient_user_id", recipientUserId)
+    .eq("kind", kind)
+    .gte("created_at", since)
+    .gt("sent_count", 0)
+    .limit(5);
+
+  const { data, error } = await query;
+  if (error || !data?.length) return false;
+
+  for (const row of data) {
+    const payload = row.payload as Record<string, unknown> | null;
+    if (!payload) continue;
+    const sameConversation =
+      !conversationId ||
+      payload.conversationId === conversationId ||
+      payload.conversationId === null;
+    const sameProposal =
+      !proposalId || payload.proposalId === proposalId || payload.proposalId === null;
+    if (sameConversation && sameProposal) return true;
+  }
+  return false;
+}
+
 let apnsJwtCache: { token: string; exp: number } | null = null;
 
 async function getApnsJwt(): Promise<string | null> {
@@ -215,13 +326,22 @@ function isInvalidFcmToken(status: number, body: string): boolean {
   return status === 404 || /UNREGISTERED|NOT_FOUND|InvalidRegistration/i.test(body);
 }
 
+type PushDataPayload = {
+  route: string;
+  kind: PushKind;
+  conversationId: string;
+  profileId: string;
+  actorId: string;
+  proposalId: string;
+  playType: string;
+};
+
 async function sendApns(
   deviceToken: string,
   title: string,
   body: string,
-  route: string,
-  conversationId: string | null,
-  kind: PushKind,
+  badge: number,
+  data: PushDataPayload,
 ): Promise<{ ok: boolean; error?: string; invalidToken?: boolean }> {
   const jwt = await getApnsJwt();
   const bundleId = Deno.env.get("APNS_BUNDLE_ID") ?? "com.splove.app";
@@ -234,11 +354,16 @@ async function sendApns(
     aps: {
       alert: { title, body },
       sound: "default",
+      badge,
       "mutable-content": 0,
     },
-    route,
-    kind,
-    conversationId: conversationId ?? "",
+    route: data.route,
+    kind: data.kind,
+    conversationId: data.conversationId,
+    profileId: data.profileId,
+    actorId: data.actorId,
+    proposalId: data.proposalId,
+    playType: data.playType,
   };
 
   const res = await fetch(`https://${host}/3/device/${deviceToken}`, {
@@ -313,9 +438,8 @@ async function sendFcm(
   deviceToken: string,
   title: string,
   body: string,
-  route: string,
-  conversationId: string | null,
-  kind: PushKind,
+  badge: number,
+  data: PushDataPayload,
 ): Promise<{ ok: boolean; error?: string; invalidToken?: boolean }> {
   const accessToken = await getFcmAccessToken();
   const raw = Deno.env.get("FCM_SERVICE_ACCOUNT_JSON");
@@ -335,15 +459,20 @@ async function sendFcm(
           token: deviceToken,
           notification: { title, body },
           data: {
-            route,
-            kind,
-            conversationId: conversationId ?? "",
+            route: data.route,
+            kind: data.kind,
+            conversationId: data.conversationId,
+            profileId: data.profileId,
+            actorId: data.actorId,
+            proposalId: data.proposalId,
+            playType: data.playType,
           },
           android: {
             priority: "HIGH",
             notification: {
               channel_id: "splove_default",
               icon: "ic_launcher",
+              notification_count: badge,
             },
           },
         },
@@ -441,9 +570,17 @@ Deno.serve(async (req) => {
   const kind = body.kind;
   const route = body.route ? normalizeRoute(body.route) : "";
   const conversationId = body.conversationId?.trim() || null;
+  const actorId = body.actorId?.trim() || body.profileId?.trim() || null;
+  const profileId = body.profileId?.trim() || actorId;
+  const playType = body.playType?.trim() || null;
+  const proposalId = body.proposalId?.trim() || null;
 
-  if (!recipientUserId || !UUID_RE.test(recipientUserId) || !kind || !route || !(kind in PUSH_COPY)) {
+  if (!recipientUserId || !UUID_RE.test(recipientUserId) || !kind || !route || !VALID_KINDS.has(kind)) {
     return jsonResponse({ error: "invalid_payload" }, 400);
+  }
+
+  if (actorId && actorId === recipientUserId) {
+    return jsonResponse({ ok: true, sent: 0, skipped: 1, reason: "self_notification_blocked" });
   }
 
   const apnsGuard = apnsConfigMatchesEnvironment(serverPushEnv);
@@ -455,7 +592,7 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: apnsGuard.reason }, 503);
   }
 
-  const copy = PUSH_COPY[kind];
+  const copy = PUSH_COPY[kind]({ playType });
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -466,6 +603,12 @@ Deno.serve(async (req) => {
   const admin = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  if (await wasRecentlySent(admin, recipientUserId, kind, conversationId, proposalId)) {
+    return jsonResponse({ ok: true, sent: 0, skipped: 1, reason: "duplicate_suppressed" });
+  }
+
+  const badge = await fetchIconBadgeCount(admin, recipientUserId);
 
   const { data: tokens, error } = await admin
     .from("device_tokens")
@@ -482,20 +625,35 @@ Deno.serve(async (req) => {
 
   const rows = (tokens ?? []) as DeviceTokenRow[];
 
+  const pushData: PushDataPayload = {
+    route: body.route?.trim() || route,
+    kind,
+    conversationId: conversationId ?? "",
+    profileId: profileId ?? "",
+    actorId: actorId ?? "",
+    proposalId: proposalId ?? "",
+    playType: playType ?? "",
+  };
+
   const auditBase = {
     pushEnvironment: serverPushEnv,
     triggerSource,
     kind,
     title: copy.title,
     body: copy.body,
-    route,
+    route: pushData.route,
     recipientUserId,
     recipientCount: rows.length,
     adminUserId: body.adminUserId?.trim() || null,
     payload: {
       kind,
-      route,
+      route: pushData.route,
       conversationId,
+      profileId,
+      actorId,
+      proposalId,
+      playType,
+      badge,
       pushEnvironment: serverPushEnv,
       triggerSource,
     },
@@ -529,9 +687,9 @@ Deno.serve(async (req) => {
 
     const result =
       row.platform === "ios"
-        ? await sendApns(row.token, copy.title, copy.body, route, conversationId, kind)
+        ? await sendApns(row.token, copy.title, copy.body, badge, pushData)
         : row.platform === "android"
-          ? await sendFcm(row.token, copy.title, copy.body, route, conversationId, kind)
+          ? await sendFcm(row.token, copy.title, copy.body, badge, pushData)
           : { ok: false, error: "unknown_platform" };
 
     if (result.ok) {
@@ -562,8 +720,9 @@ Deno.serve(async (req) => {
     pushEnvironment: serverPushEnv,
     sent,
     skipped,
+    badge,
     errors: errors.slice(0, 3),
   });
 
-  return jsonResponse({ ok: true, sent, skipped, errors });
+  return jsonResponse({ ok: true, sent, skipped, badge, errors });
 });

@@ -38,6 +38,7 @@ import { buildIosAwareProfilePhotoImgHandlers } from "../lib/profilePhotoIosImgH
 import { invalidateProfilePhotoDisplayCaches } from "../lib/profilePhotoDisplayInvalidate";
 import { coerceProfileHeightCm, parseHeightCmOptionalInput } from "../lib/profileHeightCm";
 import { uploadProfilePhoto } from "../lib/profilePhotoUpload";
+import { profilePhotoObjectPathFromStoredValue } from "../lib/profilePhotoSignedUrl";
 import { sportPictogramForSlug } from "../lib/onboardingSportsQuickPick";
 import {
   SPORT_PRACTICE_LEVELS,
@@ -798,12 +799,17 @@ export default function EditProfile() {
     const hCoerced = coerceProfileHeightCm((profile as Record<string, unknown>).height_cm);
     setHeightCmInput(hCoerced != null ? String(hCoerced) : "");
     setBio(String((profile as Record<string, unknown>).sport_phrase ?? ""));
-    const portraitFromDb = buildEditPrimaryPhotoCandidates(profile, "").refs[0] ?? "";
-    setPortraitUrl(portraitFromDb);
-    const bodyFromDb = buildEditSecondaryPhotoCandidates(profile, "").refs[0] ?? "";
-    setBodyUrl(bodyFromDb);
+    // Never clobber a pending local selection with a stale AuthContext portrait_url.
+    if (!portraitFile) {
+      const portraitFromDb = buildEditPrimaryPhotoCandidates(profile, "").refs[0] ?? "";
+      setPortraitUrl(portraitFromDb);
+    }
+    if (!bodyFile) {
+      const bodyFromDb = buildEditSecondaryPhotoCandidates(profile, "").refs[0] ?? "";
+      setBodyUrl(bodyFromDb);
+    }
     setSportMatchPreference(parseSportMatchPreference((profile as Record<string, unknown>).sport_match_preference));
-  }, [profile]);
+  }, [profile, portraitFile, bodyFile]);
 
   useEffect(() => {
     if (!portraitFile) {
@@ -918,60 +924,15 @@ export default function EditProfile() {
         return;
       }
 
-      let nextPortraitUrl: string | null = null;
-      let nextBodyUrl: string | null = null;
-      if (portraitFile) {
-        const uploaded = await uploadProfilePhoto(supabase, user.id, portraitFile, "portrait");
-        nextPortraitUrl = uploaded.storedRef;
-      }
-      if (bodyFile) {
-        const uploaded = await uploadProfilePhoto(supabase, user.id, bodyFile, "activity");
-        nextBodyUrl = uploaded.storedRef;
-      }
-
-      // Keep PATCH payload minimal and schema-safe to avoid PostgREST 400 on unknown columns.
-      // Never send portrait_url / fullbody_url / main_photo_url as null or "" unless we are
-      // replacing that slot via upload — DB trigger derives main_photo_url from portrait_url.
-      const payload: Record<string, unknown> = {
-        intent: mapUiIntentToDb(intent),
-        looking_for: lookingFor.length ? lookingFor.join(",") : null,
-        sport_phrase: bio.trim() || null,
-        sport_match_preference: sportMatchPreference,
-        height_cm: parseHeightCmOptionalInput(heightCmInput),
-        updated_at: new Date().toISOString(),
-      };
-      if (nextPortraitUrl) payload.portrait_url = nextPortraitUrl;
-      if (nextBodyUrl) payload.fullbody_url = nextBodyUrl;
-
-      if (import.meta.env.DEV) {
-        console.log("[EditProfile] profiles.update payload → Supabase", { ...payload });
-      }
-
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update(payload)
-        .eq("id", user.id);
-      if (profileError) {
-        console.error("[EditProfile] profiles update error", {
-          profileId: user.id,
-          payload,
-          code: profileError.code,
-          message: profileError.message,
-          details: profileError.details,
-          hint: profileError.hint,
-          error: profileError,
-        });
-        throw profileError;
-      }
-
       const selectedSportIds = Array.from(
         new Set(
           selectedSports
             .map((s) => String(s.id).trim())
-            .filter((id) => id.length > 0)
-        )
+            .filter((id) => id.length > 0),
+        ),
       );
 
+      // Validate sports before any upload/update so we never abandon after writing photos.
       if (
         selectedSportIds.length > 0 &&
         !selectedSportIds.every((id) => hasValidSportPracticeLevel(sportLevelsById[id]))
@@ -979,6 +940,126 @@ export default function EditProfile() {
         setMessage(t("edit_profile_err_sport_level"));
         setLoading(false);
         return;
+      }
+
+      const matchPhotoUrl = (stored: string | null | undefined, uploaded: string) => {
+        const a = typeof stored === "string" ? stored.trim() : "";
+        const b = uploaded.trim();
+        if (!a || !b) return false;
+        if (a === b) return true;
+        return a.split("?")[0] === b.split("?")[0];
+      };
+
+      // Upload first; build profiles payload only after uploads finish.
+      let nextPortraitUrl: string | null = null;
+      let uploadedPortraitStoredRef: string | null = null;
+      let nextBodyUrl: string | null = null;
+      if (portraitFile) {
+        const existingPortraitPath = profilePhotoObjectPathFromStoredValue(
+          portraitUrl || profile?.portrait_url || profile?.main_photo_url || null,
+        );
+        const uploaded = await uploadProfilePhoto(supabase, user.id, portraitFile, "portrait", {
+          replaceObjectPath: existingPortraitPath,
+        });
+        uploadedPortraitStoredRef = uploaded.storedRef;
+        nextPortraitUrl = uploaded.storedRef;
+        try {
+          sessionStorage.setItem("__splove_diag_last_portrait_upload", uploaded.storedRef);
+        } catch {
+          /* ignore */
+        }
+        console.log("[EDIT_PROFILE_PORTRAIT_UPLOAD_RESULT]", {
+          uploadSucceeded: true,
+          newObjectPathPresent: Boolean(uploaded.objectPath?.trim()),
+          newPublicUrlPresent: Boolean(uploaded.storedRef?.trim()),
+          newPublicUrlHasCacheVersion: /\?v=\d+/.test(uploaded.storedRef ?? ""),
+        });
+      }
+      if (bodyFile) {
+        const existingBodyPath = profilePhotoObjectPathFromStoredValue(
+          bodyUrl || profile?.fullbody_url || null,
+        );
+        const uploaded = await uploadProfilePhoto(supabase, user.id, bodyFile, "activity", {
+          replaceObjectPath: existingBodyPath,
+        });
+        nextBodyUrl = uploaded.storedRef;
+      }
+
+      const profileUpdate: Record<string, unknown> = {
+        intent: mapUiIntentToDb(intent),
+        looking_for: lookingFor.length ? lookingFor.join(",") : null,
+        sport_phrase: bio.trim() || null,
+        sport_match_preference: sportMatchPreference,
+        height_cm: parseHeightCmOptionalInput(heightCmInput),
+        updated_at: new Date().toISOString(),
+        ...(nextPortraitUrl
+          ? {
+              portrait_url: nextPortraitUrl,
+              main_photo_url: nextPortraitUrl,
+              avatar_url: nextPortraitUrl,
+            }
+          : {}),
+        ...(nextBodyUrl ? { fullbody_url: nextBodyUrl } : {}),
+      };
+
+      if (nextPortraitUrl && uploadedPortraitStoredRef) {
+        console.log("[EDIT_PROFILE_SAVE_PAYLOAD_AUDIT]", {
+          hasNewPortraitUrl: true,
+          portraitPayloadMatchesUploaded: matchPhotoUrl(
+            typeof profileUpdate.portrait_url === "string" ? profileUpdate.portrait_url : null,
+            uploadedPortraitStoredRef,
+          ),
+          mainPhotoPayloadMatchesUploaded: matchPhotoUrl(
+            typeof profileUpdate.main_photo_url === "string" ? profileUpdate.main_photo_url : null,
+            uploadedPortraitStoredRef,
+          ),
+          avatarPayloadMatchesUploaded: matchPhotoUrl(
+            typeof profileUpdate.avatar_url === "string" ? profileUpdate.avatar_url : null,
+            uploadedPortraitStoredRef,
+          ),
+          portraitPayloadHasCacheVersion: /\?v=\d+/.test(
+            typeof profileUpdate.portrait_url === "string" ? profileUpdate.portrait_url : "",
+          ),
+        });
+      }
+
+      const { data: updatedRow, error: profileError } = await supabase
+        .from("profiles")
+        .update(profileUpdate)
+        .eq("id", user.id)
+        .select("id, portrait_url, main_photo_url, avatar_url")
+        .single();
+
+      if (profileError || !updatedRow) {
+        console.error("[EditProfile] profiles update error", {
+          profileId: user.id,
+          code: profileError?.code,
+          message: profileError?.message,
+          details: profileError?.details,
+          hint: profileError?.hint,
+          error: profileError,
+          rowReturned: Boolean(updatedRow),
+        });
+        throw profileError ?? new Error(t("edit_profile_save_error"));
+      }
+
+      if (nextPortraitUrl && uploadedPortraitStoredRef) {
+        const { data: readbackRow, error: readbackError } = await supabase
+          .from("profiles")
+          .select("id, portrait_url, main_photo_url, avatar_url")
+          .eq("id", user.id)
+          .single();
+        const row = readbackRow as {
+          portrait_url?: string | null;
+          main_photo_url?: string | null;
+          avatar_url?: string | null;
+        } | null;
+        console.log("[EDIT_PROFILE_SAVE_READBACK_AUDIT]", {
+          rowFound: Boolean(row && !readbackError),
+          portraitMatchesUploaded: matchPhotoUrl(row?.portrait_url, uploadedPortraitStoredRef),
+          mainPhotoMatchesUploaded: matchPhotoUrl(row?.main_photo_url, uploadedPortraitStoredRef),
+          avatarMatchesUploaded: matchPhotoUrl(row?.avatar_url, uploadedPortraitStoredRef),
+        });
       }
 
       const { error: delErr } = await supabase
@@ -1008,9 +1089,7 @@ export default function EditProfile() {
         if (rows.length > 0) {
           rows[0] = { ...rows[0], is_primary: true };
         }
-        const { error: insErr } = await supabase
-          .from("profile_sports")
-          .insert(rows);
+        const { error: insErr } = await supabase.from("profile_sports").insert(rows);
         if (insErr) {
           console.error("[EditProfile] profile_sports insert error", {
             profileId: user.id,
@@ -1026,8 +1105,8 @@ export default function EditProfile() {
         }
       }
 
-      await refetchProfile();
-      await syncProfileForScreen();
+      const refetched = await refetchProfile();
+
       if (nextPortraitUrl) {
         invalidateProfilePhotoDisplayCaches("edit_profile_portrait_upload");
         setPortraitUrl(nextPortraitUrl);
@@ -1040,15 +1119,23 @@ export default function EditProfile() {
         setBodyFile(null);
         setBodyPreviewUrl("");
       }
-      if (profile && (nextPortraitUrl || nextBodyUrl)) {
-        commitProfileRow({
-          ...profile,
-          ...(nextPortraitUrl
-            ? { portrait_url: nextPortraitUrl, main_photo_url: nextPortraitUrl }
-            : {}),
-          ...(nextBodyUrl ? { fullbody_url: nextBodyUrl } : {}),
-        });
-      }
+
+      // Force AuthContext to uploaded URLs — never re-spread a stale profile row alone,
+      // and do not call syncProfileForScreen here (it can race-merge old photo refs).
+      const baseRow = (refetched ?? profile ?? { id: user.id }) as Record<string, unknown>;
+      commitProfileRow({
+        ...baseRow,
+        id: user.id,
+        ...(nextPortraitUrl
+          ? {
+              portrait_url: nextPortraitUrl,
+              main_photo_url: nextPortraitUrl,
+              avatar_url: nextPortraitUrl,
+            }
+          : {}),
+        ...(nextBodyUrl ? { fullbody_url: nextBodyUrl } : {}),
+      });
+
       setPortraitFile(null);
       setBodyFile(null);
       navigate("/move", { replace: true });

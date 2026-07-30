@@ -14,8 +14,7 @@ export type HeaderNotificationButtonProps = {
 export function HeaderNotificationButton({ unreadCount = 0 }: HeaderNotificationButtonProps) {
   const { t } = useTranslation();
   const hasUnread = unreadCount > 0;
-  const showCounter = hasUnread && unreadCount > 1;
-  const badgeLabel = showCounter ? formatBadge(unreadCount) : null;
+  const badgeLabel = hasUnread ? formatBadge(unreadCount) : null;
 
   return (
     <Link
@@ -34,28 +33,17 @@ export function HeaderNotificationButton({ unreadCount = 0 }: HeaderNotification
         strokeWidth={1.5}
         color={hasUnread ? ACCENT : "rgba(255, 255, 255, 0.72)"}
       />
-      {hasUnread ? (
-        badgeLabel ? (
-          <span
-            className="pointer-events-none absolute -right-0.5 -top-0.5 flex min-h-[16px] min-w-[16px] items-center justify-center rounded-full px-1 text-[9px] font-bold leading-none text-white"
-            style={{
-              backgroundColor: ACCENT,
-              boxShadow: `0 0 0 2px ${RING_SURFACE}`,
-            }}
-            aria-hidden
-          >
-            {badgeLabel}
-          </span>
-        ) : (
-          <span
-            className="pointer-events-none absolute right-0.5 top-0.5 h-2 w-2 rounded-full"
-            style={{
-              backgroundColor: ACCENT,
-              boxShadow: `0 0 0 2px ${RING_SURFACE}`,
-            }}
-            aria-hidden
-          />
-        )
+      {badgeLabel ? (
+        <span
+          className="pointer-events-none absolute -right-0.5 -top-0.5 flex min-h-[16px] min-w-[16px] items-center justify-center rounded-full px-1 text-[9px] font-bold leading-none text-white"
+          style={{
+            backgroundColor: ACCENT,
+            boxShadow: `0 0 0 2px ${RING_SURFACE}`,
+          }}
+          aria-hidden
+        >
+          {badgeLabel}
+        </span>
       ) : null}
     </Link>
   );

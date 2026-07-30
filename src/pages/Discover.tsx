@@ -133,6 +133,7 @@ import {
   DISCOVER_BETA_SIMPLE_PIPELINE,
   filterDiscoverVisibilityWindow,
 } from "../lib/discoverBetaPipeline";
+import { createDiscoverLoadPerfRun } from "../lib/discoverLoadPerf";
 import {
   logDiscoverEmptyStateVisible,
   logDiscoverFirstCardVisible,
@@ -173,7 +174,7 @@ import {
 } from "../constants/discoverGeo";
 import { coerceProfileHeightCm, formatHeightCmForDisplay } from "../lib/profileHeightCm";
 import { deferSecondaryWork } from "../lib/deferSecondaryWork";
-import { usesNativeBottomNavigation, modalSheetHostClass, profileSheetClass } from "../lib/nativeBottomNav";
+import { modalSheetHostClass, profileSheetClass, usesNativeBottomNavigation } from "../lib/nativeBottomNav";
 import { clearOauthProcessingLock, isOauthProcessingLocked } from "../lib/oauthCallbackLock";
 import { DEFAULT_SPLOVE_PLAY, type SplovePlayType } from "../lib/splovePlay";
 import { useSplovePlayAccess } from "../hooks/useSplovePlayAccess";
@@ -988,9 +989,14 @@ const DISCOVER_FEED_SOURCE = "feed_profiles_ranked" as const;
 /** Message utilisateur sûr (aucun détail technique backend). */
 function discoverFetchFailedMsg(language: "fr" | "en"): string {
   return language === "en"
-    ? "Unable to load profiles. Check your connection and try again."
-    : "Impossible de charger les profils. Verifie ta connexion et reessaie.";
+    ? "Unable to load profiles right now."
+    : "Impossible de charger les profils pour le moment.";
 }
+
+/** Watchdog feed Move — retries silencieux avant message utilisateur. */
+const DISCOVER_LOAD_WATCHDOG_MS = 8_000;
+const DISCOVER_AUTO_RETRY_MAX = 2;
+const DISCOVER_AUTO_RETRY_DELAYS_MS = [500, 1_200] as const;
 
 const DiscoverStackSilhouette = memo(function DiscoverStackSilhouette({
   profile,
@@ -1292,7 +1298,6 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   const photo = photoState.displaySrc ?? "";
   const showMeetingIntentBadge = Boolean(viewerId && profile.id !== viewerId);
   const strongAffinity = profile.commonSportsCount >= 2;
-  const nativeBottomNav = usesNativeBottomNavigation();
 
   useEffect(() => {
     if (!photoRaw) return;
@@ -1328,19 +1333,40 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   const [dragging, setDragging] = useState(false);
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const swipeT0Ref = useRef<number | null>(null);
+  /** Scroll zone carte Move : différer setPointerCapture jusqu’à intent horizontal. */
+  const deferSwipeCaptureRef = useRef(false);
+
+  function isMoveCardScrollTarget(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement && Boolean(target.closest("[data-move-card-scroll]"));
+  }
 
   function onSwipeZonePointerDown(e: PointerEvent<HTMLDivElement>) {
     if ((e.target as HTMLElement).closest("button")) return;
     startRef.current = { x: e.clientX, y: e.clientY };
     swipeT0Ref.current = typeof performance !== "undefined" ? performance.now() : Date.now();
     setDragging(true);
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    deferSwipeCaptureRef.current = isMoveCardScrollTarget(e.target);
+    if (!deferSwipeCaptureRef.current) {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    }
   }
 
   function onSwipeZonePointerMove(e: PointerEvent<HTMLDivElement>) {
     if (startRef.current == null) return;
     const rdx = e.clientX - startRef.current.x;
     const rdy = e.clientY - startRef.current.y;
+    if (deferSwipeCaptureRef.current) {
+      if (Math.abs(rdx) > Math.abs(rdy) && Math.abs(rdx) > 8) {
+        deferSwipeCaptureRef.current = false;
+        try {
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+      } else if (Math.abs(rdy) > Math.abs(rdx)) {
+        return;
+      }
+    }
     if (Math.abs(rdx) > Math.abs(rdy) && Math.abs(rdx) > 6) {
       e.preventDefault();
     }
@@ -1357,6 +1383,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
     const totalDx = e.clientX - startRef.current.x;
     const totalDy = e.clientY - startRef.current.y;
     startRef.current = null;
+    deferSwipeCaptureRef.current = false;
     setDragging(false);
 
     const gesture = resolveDiscoverSwipeGesture(totalDx, totalDy);
@@ -1400,6 +1427,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
   function onSwipeZonePointerCancel(e: PointerEvent<HTMLDivElement>) {
     startRef.current = null;
     swipeT0Ref.current = null;
+    deferSwipeCaptureRef.current = false;
     setDragging(false);
     setDx(0);
     try {
@@ -1432,11 +1460,7 @@ const DiscoverSwipeCard = memo(function DiscoverSwipeCard({
         profile.is_boost_active
           ? "ring-2 ring-fuchsia-400/45 shadow-[0_0_28px_rgba(217,70,239,0.25)] animate-[pulse_2.8s_ease-in-out_infinite]"
           : ""
-      } ${
-        nativeBottomNav
-          ? "min-h-0 max-h-[calc(100dvh-11.5rem)]"
-          : "min-h-[min(76dvh,calc(100dvh-10rem))] max-h-[calc(100dvh-5.25rem)]"
-      }`
+      } min-h-0 max-h-[calc(100dvh-11rem)]`
     : `splove-content-reveal splove-card-premium mb-8 flex max-h-[min(94vh,880px)] min-h-[min(580px,90svh)] flex-col overflow-hidden rounded-[26px] bg-app-card ring-1 ring-white/[0.07] ${
         strongAffinity ? "ring-2 ring-[#FF1E2D]/35" : ""
       } ${
@@ -1497,11 +1521,11 @@ export default function Discover() {
   };
   const navigate = useNavigate();
   const location = useLocation();
-  const nativeBottomNav = usesNativeBottomNavigation();
   const isMoveRoute =
     location.pathname === "/move" ||
     location.pathname === "/discover" ||
     location.pathname === "/";
+  const usesNativeIosBottomNav = usesNativeBottomNavigation();
   const setDiscoverUndoNav = useDiscoverUndoNavRegistration();
   const handledPreviewNavKeyRef = useRef<string | null>(null);
   const loadProfilesInFlightRef = useRef(false);
@@ -1527,6 +1551,7 @@ export default function Discover() {
     return `${pr.preferred_age_min ?? "ø"}:${pr.preferred_age_max ?? "ø"}`;
   }, [profile]);
   const currentUserId = user?.id ?? session?.user?.id ?? "";
+
   const mountFeedCacheRef = useRef<DiscoverFeedSessionSnapshot | null>(null);
   const didReadMountCacheRef = useRef(false);
   if (!didReadMountCacheRef.current) {
@@ -1556,8 +1581,10 @@ export default function Discover() {
   }, [profile]);
   const [myDiscoveryRadiusKm] = useState<number | null>(null);
   const [loading, setLoading] = useState(() => !(mountFeedCache?.feedReady ?? false));
-  const [loadingTimedOut, setLoadingTimedOut] = useState(false);
   const [errorMessage, setErrorMessage] = useState(() => mountFeedCache?.errorMessage ?? "");
+  const [loadWatchdogEpoch, setLoadWatchdogEpoch] = useState(0);
+  const discoverAutoRetryCountRef = useRef(0);
+  const discoverLoadGenerationRef = useRef(0);
   /** Viewer sans lat/lng valides : aucun candidat, état vide dédié (pas d’erreur réseau). */
   const [viewerGeoBlocked, setViewerGeoBlocked] = useState(
     () => mountFeedCache?.viewerGeoBlocked ?? false,
@@ -1657,8 +1684,7 @@ export default function Discover() {
     ? false
     : !feedReady || moveFeedLoading || isProfileLoading;
   /** Skeleton neutre — aucune donnée utilisateur tant que le feed n’est pas prêt. */
-  const showMoveSkeleton =
-    !errorMessage && !loadingTimedOut && blockProfileUi;
+  const showMoveSkeleton = !errorMessage && blockProfileUi;
 
   /** Cartes réelles — jamais avant MOVE_FEED_READY ni pendant chargement. */
   const canRenderFeedCards =
@@ -2424,13 +2450,45 @@ export default function Discover() {
 
   useEffect(() => {
     if (!user?.id || !loading) return;
+
     const timer = window.setTimeout(() => {
+      const attempt = discoverAutoRetryCountRef.current;
+      console.warn("[Discover] feed load watchdog", {
+        ms: DISCOVER_LOAD_WATCHDOG_MS,
+        attempt,
+        inFlight: loadProfilesInFlightRef.current,
+      });
+
+      if (attempt < DISCOVER_AUTO_RETRY_MAX) {
+        discoverAutoRetryCountRef.current = attempt + 1;
+        const delay = DISCOVER_AUTO_RETRY_DELAYS_MS[attempt] ?? 1_200;
+        console.warn("[Discover] silent auto-retry scheduled", {
+          nextAttempt: attempt + 1,
+          delayMs: delay,
+        });
+        window.setTimeout(() => {
+          // Libère un éventuel loadProfiles bloqué pour permettre un nouvel essai.
+          loadProfilesInFlightRef.current = false;
+          loadProfilesPendingReloadRef.current = false;
+          void loadProfiles({ force: true }).catch((e) => {
+            console.warn("[Discover] silent auto-retry rejected", e);
+          });
+          setLoadWatchdogEpoch((n) => n + 1);
+        }, delay);
+        return;
+      }
+
+      console.warn("[Discover] feed load failed after auto-retries", {
+        attempts: discoverAutoRetryCountRef.current,
+      });
       loadProfilesInFlightRef.current = false;
       setLoading(false);
-      setLoadingTimedOut(true);
-    }, POST_LOGIN_BOOT_MAX_MS);
+      setFeedReady(true);
+      setErrorMessage(discoverFetchFailedMsg(language));
+    }, DISCOVER_LOAD_WATCHDOG_MS);
+
     return () => window.clearTimeout(timer);
-  }, [user?.id, loading]);
+  }, [user?.id, loading, loadWatchdogEpoch, language]);
 
   useEffect(() => {
     if (!hasPlus || !feedReady) return;
@@ -2451,8 +2509,9 @@ export default function Discover() {
       if (force) beginMoveFeedLoad();
       return;
     }
+    const loadGeneration = ++discoverLoadGenerationRef.current;
     loadProfilesInFlightRef.current = true;
-    console.log("MOVE_FEED_LOADING", { force });
+    console.log("MOVE_FEED_LOADING", { force, loadGeneration });
     beginMoveFeedLoad();
     if (!currentUserId) {
       if (import.meta.env.DEV) {
@@ -2467,11 +2526,30 @@ export default function Discover() {
       loadProfilesInFlightRef.current = false;
       return;
     }
-    setLoadingTimedOut(false);
     setErrorMessage("");
     setViewerGeoBlocked(false);
     let resultCount = 0;
-    const profileViewsOrderingPromise = fetchDiscoverProfileViewOrderingState(currentUserId);
+    const perf = createDiscoverLoadPerfRun({ loadGeneration, force });
+    const tProfileViewsStart = perf.markStart();
+    const profileViewsOrderingPromise = fetchDiscoverProfileViewOrderingState(currentUserId).then(
+      (state) => {
+        // Si plus lent que la race 400ms, le settle complet apparaît quand même en console.
+        console.info("[Discover perf]", {
+          step: "profile_views_full_settle",
+          ms: Math.round((perf.markStart() - tProfileViewsStart) * 10) / 10,
+          loadGeneration,
+        });
+        return state;
+      },
+    );
+    /** Exclusions démarrées immédiatement (chevauchement avec feed + scoring) — ne plus les enchaîner après. */
+    const exclusionsPromise = DISCOVER_BETA_SIMPLE_PIPELINE
+      ? Promise.all([
+          perf.measureAsync("likes", () => fetchOutgoingLikedUserIds(currentUserId)),
+          perf.measureAsync("matches", () => fetchMatchedUserIds(currentUserId)),
+          perf.measureAsync("blocks", () => fetchBlockExclusionDetail(currentUserId)),
+        ])
+      : null;
     try {
       console.log("[Discover feed] currentUserId:", currentUserId);
       void (async () => {
@@ -2504,12 +2582,29 @@ export default function Discover() {
       if (DISCOVER_BETA_SIMPLE_PIPELINE) {
         let feedLocal: Awaited<ReturnType<typeof fetchDiscoverFeedAlive>>;
         try {
-          const [meResLocal, meSportsResLocal, feedFetched] = await Promise.all([
-            authViewer
-              ? Promise.resolve({ data: authViewer, error: null })
-              : supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
-            supabase.from("profile_sports").select("sport_id, sports(id, slug, label)").eq("profile_id", viewerAuthId),
+          const mePromise = perf.measureAsync(
+            "viewer_profile",
+            async () =>
+              authViewer
+                ? { data: authViewer, error: null }
+                : await supabase
+                    .from("profiles")
+                    .select(DISCOVER_VIEWER_ME_SELECT)
+                    .eq("id", viewerAuthId)
+                    .maybeSingle(),
+            authViewer ? "from_auth_context_cache" : "profiles_select",
+          );
+          const sportsPromise = supabase
+            .from("profile_sports")
+            .select("sport_id, sports(id, slug, label)")
+            .eq("profile_id", viewerAuthId);
+          const feedPromise = perf.measureAsync("rpc_fetchDiscoverFeedAlive", () =>
             fetchDiscoverFeedAlive(12, currentUserId),
+          );
+          const [meResLocal, meSportsResLocal, feedFetched] = await Promise.all([
+            mePromise,
+            sportsPromise,
+            feedPromise,
           ]);
           meRes = meResLocal;
           meSportsRes = meSportsResLocal;
@@ -2521,13 +2616,22 @@ export default function Discover() {
         feedResultEarly = feedLocal;
       } else {
         const [likedLocal, matchedLocal, meResLocal, meSportsResLocal, blockLocal] = await Promise.all([
-          fetchOutgoingLikedUserIds(currentUserId),
-          fetchMatchedUserIds(currentUserId),
-          authViewer
-            ? Promise.resolve({ data: authViewer, error: null })
-            : supabase.from("profiles").select(DISCOVER_VIEWER_ME_SELECT).eq("id", viewerAuthId).maybeSingle(),
+          perf.measureAsync("likes", () => fetchOutgoingLikedUserIds(currentUserId)),
+          perf.measureAsync("matches", () => fetchMatchedUserIds(currentUserId)),
+          perf.measureAsync(
+            "viewer_profile",
+            async () =>
+              authViewer
+                ? { data: authViewer, error: null }
+                : await supabase
+                    .from("profiles")
+                    .select(DISCOVER_VIEWER_ME_SELECT)
+                    .eq("id", viewerAuthId)
+                    .maybeSingle(),
+            authViewer ? "from_auth_context_cache" : "profiles_select",
+          ),
           supabase.from("profile_sports").select("sport_id, sports(id, slug, label)").eq("profile_id", viewerAuthId),
-          fetchBlockExclusionDetail(currentUserId),
+          perf.measureAsync("blocks", () => fetchBlockExclusionDetail(currentUserId)),
         ]);
         likedIds = likedLocal;
         matchedIds = matchedLocal;
@@ -2605,8 +2709,11 @@ export default function Discover() {
         setStableProfiles([]);
         swipeHistoryRef.current = [];
         setSwipeHistory([]);
+        if (loadGeneration !== discoverLoadGenerationRef.current) return;
         setLoading(false);
         setFeedReady(true);
+        perf.scheduleReactRenderMeasure();
+        perf.finishCriticalPath({ early_return: "viewer_profile_missing" });
         return;
       }
 
@@ -2648,8 +2755,12 @@ export default function Discover() {
         setStableProfiles([]);
         setErrorMessage("");
         discoverLogStageCount("viewer geo/radius incomplete — skip feed", 0);
+        if (loadGeneration !== discoverLoadGenerationRef.current) return;
+        discoverAutoRetryCountRef.current = 0;
         setLoading(false);
         setFeedReady(true);
+        perf.scheduleReactRenderMeasure();
+        perf.finishCriticalPath({ early_return: "viewer_geo_blocked" });
         return;
       }
       if (typeof meProfile.city !== "string" || !meProfile.city.trim()) {
@@ -2663,7 +2774,9 @@ export default function Discover() {
         feedResult = feedResultEarly;
       } else {
         try {
-          feedResult = await fetchDiscoverFeedAlive(12, currentUserId);
+          feedResult = await perf.measureAsync("rpc_fetchDiscoverFeedAlive", () =>
+            fetchDiscoverFeedAlive(12, currentUserId),
+          );
         } catch (e) {
           console.warn("[Discover] loadProfiles feed fetch", e);
           throw e;
@@ -2682,8 +2795,11 @@ export default function Discover() {
         setViewerGeoBlocked(false);
         setStableProfiles([]);
         setProfiles([]);
+        if (loadGeneration !== discoverLoadGenerationRef.current) return;
         setLoading(false);
         setFeedReady(true);
+        perf.scheduleReactRenderMeasure();
+        perf.finishCriticalPath({ early_return: "feed_load_failed" });
         return;
       }
       if (DISCOVER_PIPELINE_AUDIT) {
@@ -2827,12 +2943,20 @@ export default function Discover() {
 
       const candidatesAfterQueryBeforeClientFilters = raw.length;
 
+      const tDist = perf.markStart();
       const distById =
         raw.length > 0
           ? DISCOVER_BETA_SIMPLE_PIPELINE
             ? buildClientDiscoverDistanceById(meProfile, raw)
             : await fetchProfileDistancesOptional(raw.map((p) => p.id))
           : new Map<string, number | null>();
+      perf.record(
+        "geolocation",
+        tDist,
+        DISCOVER_BETA_SIMPLE_PIPELINE
+          ? "client_haversine_from_profile_coords"
+          : "fetchProfileDistancesOptional",
+      );
 
       {
         const before = raw;
@@ -2954,10 +3078,18 @@ export default function Discover() {
 
       if (stage.length > 0) {
         const hydrationIds = stage.map((p) => p.id).filter(Boolean);
+        const tHydration = perf.markStart();
         const { data: hydrationRows, error: hydrationErr } = await supabase
           .from("profiles")
           .select(DISCOVER_CANDIDATE_HYDRATE_SELECT)
           .in("id", hydrationIds);
+        console.info("[Discover perf]", {
+          step: "candidate_hydration",
+          ms: Math.round((perf.markStart() - tHydration) * 10) / 10,
+          note: "diagnostic_hors_liste_demandée — batch profiles avant scoring",
+          candidates: hydrationIds.length,
+          loadGeneration,
+        });
         if (hydrationErr) {
           console.warn("[Discover feed] candidate hydration batch:", hydrationErr.message);
         } else {
@@ -3136,10 +3268,12 @@ export default function Discover() {
         ...p,
         has_shared_place: sharedPlaceById.get(p.id) === true,
       }));
+      const tScore = perf.markStart();
       const scoringRun =
         scoringInput.length > 0
           ? runDiscoverScoring(scoringInput, discoverScoringCtx)
           : { kept: [], audits: [] };
+      perf.record("scoring", tScore, `candidates=${scoringInput.length}`);
 
       logProfileExcludedAudits(scoringRun.audits);
 
@@ -3330,60 +3464,141 @@ export default function Discover() {
           });
         }
       }
-      const profileViewState = await profileViewsOrderingPromise;
+      const emptyViewState = createEmptyProfileViewOrderingState();
+      type ViewsRace =
+        | { ready: true; state: ReturnType<typeof createEmptyProfileViewOrderingState> }
+        | { ready: false };
+      const viewsRace = await Promise.race([
+        profileViewsOrderingPromise.then((state) => ({ ready: true as const, state })),
+        new Promise<ViewsRace>((resolve) => {
+          window.setTimeout(() => resolve({ ready: false }), 400);
+        }),
+      ]);
+      let profileViewState = emptyViewState;
+      if (viewsRace.ready) {
+        profileViewState = viewsRace.state;
+        perf.record("profile_views", tProfileViewsStart, "ready_before_paint");
+      } else {
+        perf.record("profile_views", tProfileViewsStart, "deferred_after_400ms_race");
+        void profileViewsOrderingPromise.then((state) => {
+          if (loadGeneration !== discoverLoadGenerationRef.current) return;
+          profileViewOrderingRef.current = state;
+          setProfileViewOrderTick((n) => n + 1);
+          patchDiscoverStackProfiles((prev) =>
+            orderDiscoverProfilesByProfileViews(
+              takeDiscoverProfilesWithValidGps(prev),
+              state,
+            ),
+          );
+        });
+      }
       profileViewOrderingRef.current = profileViewState;
       setProfileViewOrderTick((n) => n + 1);
       let commitProfiles = orderDiscoverProfilesByProfileViews(
         takeDiscoverProfilesWithValidGps(slice),
         profileViewState,
       );
-      if (DISCOVER_BETA_SIMPLE_PIPELINE && commitProfiles.length > 0) {
-        const [likedDeferred, matchedDeferred, blockDeferred] = await Promise.all([
-          fetchOutgoingLikedUserIds(currentUserId),
-          fetchMatchedUserIds(currentUserId),
-          fetchBlockExclusionDetail(currentUserId),
-        ]);
-        commitProfiles = takeDiscoverProfilesWithValidGps(
-          commitProfiles.filter(
-            (p) =>
-              !likedDeferred.has(p.id) &&
-              !matchedDeferred.has(p.id) &&
-              !blockDeferred.excluded.has(p.id),
+      if (DISCOVER_BETA_SIMPLE_PIPELINE && exclusionsPromise && commitProfiles.length > 0) {
+        const tExclWait = perf.markStart();
+        type ExclTuple = [Set<string>, Set<string>, BlockExclusionDetail];
+        type ExclRace = { ready: true; data: ExclTuple } | { ready: false };
+        const exclRace = await Promise.race([
+          exclusionsPromise.then(
+            ([likedDeferred, matchedDeferred, blockDeferred]) =>
+              ({
+                ready: true as const,
+                data: [likedDeferred, matchedDeferred, blockDeferred] as ExclTuple,
+              }),
           ),
-        );
+          new Promise<ExclRace>((resolve) => {
+            window.setTimeout(() => resolve({ ready: false }), 300);
+          }),
+        ]);
+        console.info("[Discover perf]", {
+          step: "exclusions_wait_before_paint",
+          ms: Math.round((perf.markStart() - tExclWait) * 10) / 10,
+          deferred: !exclRace.ready,
+          note: exclRace.ready
+            ? "likes/matches/blocks already timed individually"
+            : "filter applied after first paint (300ms race)",
+          loadGeneration,
+        });
+        if (exclRace.ready) {
+          const [likedDeferred, matchedDeferred, blockDeferred] = exclRace.data;
+          commitProfiles = takeDiscoverProfilesWithValidGps(
+            commitProfiles.filter(
+              (p) =>
+                !likedDeferred.has(p.id) &&
+                !matchedDeferred.has(p.id) &&
+                !blockDeferred.excluded.has(p.id),
+            ),
+          );
+        } else {
+          void exclusionsPromise.then(([likedDeferred, matchedDeferred, blockDeferred]) => {
+            if (loadGeneration !== discoverLoadGenerationRef.current) return;
+            patchDiscoverStackProfiles((prev) =>
+              takeDiscoverProfilesWithValidGps(
+                prev.filter(
+                  (p) =>
+                    !likedDeferred.has(p.id) &&
+                    !matchedDeferred.has(p.id) &&
+                    !blockDeferred.excluded.has(p.id),
+                ),
+              ),
+            );
+          });
+        }
       }
       const shouldReapplyRotation = reapplyRotationOnNextCommitRef.current;
       reapplyRotationOnNextCommitRef.current = false;
       commitProfiles = applyMoveProfileRotationForFeedCommit(currentUserId, commitProfiles, {
         reapplyPendingReload: shouldReapplyRotation,
       });
+      const tPhoto = perf.markStart();
+      prefetchMoveProfilePhotos(commitProfiles, { start: 0, count: 10 });
+      perf.record("photo_prefetch", tPhoto, "kickoff_only_non_blocking");
       setStableProfiles(commitProfiles);
       setProfiles(commitProfiles);
-      prefetchMoveProfilePhotos(commitProfiles, { start: 0, count: 10 });
       console.log("MOVE_FEED_READY", { count: commitProfiles.length });
       swipeHistoryRef.current = [];
       setSwipeHistory([]);
+      if (loadGeneration !== discoverLoadGenerationRef.current) {
+        console.warn("[Discover] ignoring stale loadProfiles success", { loadGeneration });
+        return;
+      }
+      discoverAutoRetryCountRef.current = 0;
       setLoading(false);
       setFeedReady(true);
+      setErrorMessage("");
+      perf.scheduleReactRenderMeasure();
+      perf.finishCriticalPath({ resultCount: commitProfiles.length });
     } catch (e) {
       console.warn("[Discover] loadProfiles erreur inattendue:", e);
       console.log("MOVE_FEED_ERROR", {
         message: e instanceof Error ? e.message : String(e),
       });
+      if (loadGeneration !== discoverLoadGenerationRef.current) {
+        console.warn("[Discover] ignoring stale loadProfiles error", { loadGeneration });
+        return;
+      }
       setViewerGeoBlocked(false);
       setStableProfiles([]);
       setProfiles([]);
       setErrorMessage(discoverFetchFailedMsg(language));
       setLoading(false);
       setFeedReady(true);
+      perf.scheduleReactRenderMeasure();
+      perf.finishCriticalPath({ error: true });
     } finally {
-      loadProfilesInFlightRef.current = false;
-      if (loadProfilesPendingReloadRef.current) {
-        loadProfilesPendingReloadRef.current = false;
-        reapplyRotationOnNextCommitRef.current = true;
-        void loadProfiles({ force: true }).catch((e) => {
-          console.warn("[Discover diagnostics] loadProfiles pending reload rejected", e);
-        });
+      if (loadGeneration === discoverLoadGenerationRef.current) {
+        loadProfilesInFlightRef.current = false;
+        if (loadProfilesPendingReloadRef.current) {
+          loadProfilesPendingReloadRef.current = false;
+          reapplyRotationOnNextCommitRef.current = true;
+          void loadProfiles({ force: true }).catch((e) => {
+            console.warn("[Discover diagnostics] loadProfiles pending reload rejected", e);
+          });
+        }
       }
     }
   }
@@ -3910,9 +4125,9 @@ export default function Discover() {
       <main
         className={`mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col px-2 pt-1 sm:px-3 ${
           currentUserId && !errorMessage && !loading && !viewerGeoBlocked
-            ? nativeBottomNav
-              ? "pb-4"
-              : "pb-24"
+            ? usesNativeIosBottomNav
+              ? "pb-6"
+              : "pb-4"
             : "pb-10"
         }`}
       >
@@ -4073,48 +4288,26 @@ export default function Discover() {
           </div>
         ) : (
           <>
-            {loadingTimedOut && (
-              <div
-                role="alert"
-                className="mb-5 flex min-h-0 flex-1 flex-col items-center justify-center rounded-2xl border border-app-border bg-white px-6 py-10 text-center shadow-sm"
-              >
-                <p className="text-lg font-semibold text-black">SPLove loading timeout</p>
-                <p className="mt-2 max-w-[22rem] text-sm text-neutral-600">
-                  Le chargement Discover a dépassé 8 secondes. Vérifiez les logs [STEP] dans Xcode.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoadingTimedOut(false);
-                    setErrorMessage("");
-                    void loadProfiles({ force: true }).catch((e) => console.warn("[Discover] loadProfiles retry", e));
-                  }}
-                  className="mt-5 rounded-xl bg-black px-5 py-2.5 text-sm font-semibold text-white"
-                >
-                  Retry
-                </button>
-              </div>
-            )}
-
             {errorMessage && (
               <div
                 role="alert"
-                className="mb-5 rounded-2xl border border-app-border bg-app-card px-5 py-6 text-center shadow-sm ring-1 ring-white/[0.04]"
+                className="mb-5 rounded-2xl border border-app-border bg-app-card px-5 py-8 text-center shadow-sm ring-1 ring-white/[0.04]"
               >
-                <p className="text-base font-semibold leading-snug text-app-text">{t("discovery_unavailable")}</p>
-                <p className="mx-auto mt-2 max-w-[22rem] text-sm leading-relaxed text-app-muted">
-                  {errorMessage}
+                <p className="mx-auto max-w-[22rem] text-base font-semibold leading-snug text-app-text">
+                  {errorMessage || t("discover.loadFailed")}
                 </p>
                 <button
                   type="button"
                   onClick={() => {
                     setErrorMessage("");
+                    discoverAutoRetryCountRef.current = 0;
+                    setLoadWatchdogEpoch((n) => n + 1);
                     void loadProfiles({ force: true });
                   }}
                   className="mx-auto mt-5 block w-full max-w-xs rounded-xl px-4 py-3 text-[15px] font-bold shadow-md transition hover:opacity-95 active:scale-[0.99]"
                   style={{ background: BRAND_BG, color: TEXT_ON_BRAND }}
                 >
-                  {t("discover.retryExplore")}
+                  {t("retry")}
                 </button>
               </div>
             )}
@@ -4197,13 +4390,7 @@ export default function Discover() {
             ) : null}
 
             {canRenderFeedCards ? (
-              <div
-                className={
-                  nativeBottomNav
-                    ? "relative mt-1 flex min-h-0 max-h-[calc(100dvh-11.5rem)] flex-1 flex-col"
-                    : "relative mt-1 flex min-h-[min(540px,calc(100dvh-10rem))] flex-1 flex-col"
-                }
-              >
+              <div className="relative mt-1 flex min-h-0 max-h-[calc(100dvh-11rem)] flex-1 flex-col">
                 {profilesCardStack[2] ? (
                   <DiscoverStackSilhouette key={profilesCardStack[2].id} profile={profilesCardStack[2]} layer="back" />
                 ) : null}

@@ -29,12 +29,12 @@ export const DiscoverSportLevelRow = memo(function DiscoverSportLevelRow({
   const pictogram = sportEmojiForRow(slug, label);
 
   return (
-    <div className="flex items-center justify-between gap-3 py-0.5">
-      <span className="flex min-w-0 items-center gap-2 text-[14px] font-semibold text-app-text">
-        <span className="shrink-0 text-base leading-none" aria-hidden>
+    <div className="flex items-center justify-between gap-2.5 py-0">
+      <span className="flex min-w-0 items-center gap-1.5 font-semibold leading-tight text-app-text">
+        <span className="shrink-0 text-[15px] leading-none" aria-hidden>
           {pictogram}
         </span>
-        <span className="truncate">{label}</span>
+        <span className="truncate text-[15px]">{label}</span>
       </span>
       <span className="inline-flex shrink-0 items-center gap-1" aria-hidden>
         {Array.from({ length: 5 }, (_, index) => (

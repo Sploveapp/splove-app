@@ -47,6 +47,14 @@ export default function OAuthGoogleStart() {
     let cancelled = false;
     const redirectToSupabase = () => {
       if (cancelled || redirectedRef.current) return;
+      // Android : cette page ne doit jamais rediriger vers *.supabase.co (Custom Tab / WebView).
+      if (Capacitor.getPlatform() === "android") {
+        console.log("SUPABASE_OAUTH_BROWSER_START", {
+          blocked: true,
+          reason: "oauth_google_start_android_forbidden",
+        });
+        return;
+      }
       redirectedRef.current = true;
       logOAuthMaskProtectedTechnicalUrl(authUrl, "oauth_google_start_redirect");
       logOAuthMaskShow("oauth_google_start_redirect");

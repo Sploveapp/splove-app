@@ -236,6 +236,57 @@ async function fetchIncomingLikeRows(currentUserId: string): Promise<{
 }
 
 /**
+ * Play premium échangé entre deux utilisateurs (reçus en priorité, sinon envoyés).
+ * Lecture seule — pas de mutation.
+ */
+export async function fetchPlayTypeBetweenUsers(
+  viewerId: string,
+  partnerId: string,
+): Promise<{ playType: string; inbound: boolean } | null> {
+  if (!viewerId.trim() || !partnerId.trim()) return null;
+
+  const pickPremium = (playType: unknown): string | null => {
+    if (typeof playType !== "string" || !playType.trim()) return null;
+    const v = playType.trim().toLowerCase();
+    if (v === "classic") return null;
+    return v;
+  };
+
+  try {
+    const inbound = await supabase
+      .from("likes")
+      .select("play_type")
+      .eq("liker_id", partnerId)
+      .eq("liked_id", viewerId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!isMissingPlayTypeColumn(inbound.error)) {
+      const fromInbound = pickPremium(inbound.data?.play_type);
+      if (fromInbound) return { playType: fromInbound, inbound: true };
+    }
+
+    const outbound = await supabase
+      .from("likes")
+      .select("play_type")
+      .eq("liker_id", viewerId)
+      .eq("liked_id", partnerId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!isMissingPlayTypeColumn(outbound.error)) {
+      const fromOutbound = pickPremium(outbound.data?.play_type);
+      if (fromOutbound) return { playType: fromOutbound, inbound: false };
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/**
  * Récupère les likes reçus avec profils ; **liste finale = uniquement** via
  * `filterLikeRowsByViewerPreference` → `isPreferenceCompatible` (même pipeline que Discover / SPLove+).
  *

@@ -10,10 +10,23 @@ private final class SploveNativeShellMessageHandler: NSObject, WKScriptMessageHa
         didReceive message: WKScriptMessage
     ) {
         guard message.name == "sploveNativeShell",
-              let body = message.body as? [String: Any],
-              let visible = body["bottomNavVisible"] as? Bool
+              let body = message.body as? [String: Any]
         else { return }
-        NativeNavigationBridge.setBottomNavigationBarVisible(visible)
+
+        if let visible = body["bottomNavVisible"] as? Bool {
+            NativeNavigationBridge.setBottomNavigationBarVisible(visible)
+        }
+        if let badge = body["iconBadgeCount"] as? Int {
+            DispatchQueue.main.async {
+                UIApplication.shared.applicationIconBadgeNumber = max(0, badge)
+            }
+        }
+        // Toujours resynchroniser l’onglet actif depuis le pathname React (post-login → /move).
+        if let activePath = body["activePath"] as? String {
+            DispatchQueue.main.async {
+                NativeShellState.shared.setSelectedTabFromPath(activePath)
+            }
+        }
     }
 }
 
@@ -91,10 +104,11 @@ final class SPLoveBridgeViewController: CAPBridgeViewController {
         )
     }
 
-    /// Expose la hauteur réelle de la barre native à la WebView (0 si non authentifié).
+    /// Expose la hauteur contenu barre native à la WebView (0 si non authentifié).
+    /// Contenu = pilule seule ; safe area ajoutée une seule fois (layoutHeight / CSS).
     func syncBottomNavWebMetrics() {
         let visible = NativeShellState.shared.showBottomNavigationBar
-        let contentHeight = visible ? BottomNavigationBar.barContentHeight : 0
+        let contentHeight: CGFloat = visible ? BottomNavigationBar.barContentHeight : 0
         webView?.evaluateJavaScript(
             """
             window.__SPLOVE_NATIVE_BOTTOM_NAV__=\(visible);

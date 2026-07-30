@@ -15,7 +15,8 @@ export async function fetchDiscoverProfileViewOrderingState(
     .from("profile_views")
     .select("viewed_profile_id, viewed_at, action_taken")
     .eq("viewer_id", viewerId)
-    .order("viewed_at", { ascending: false });
+    .order("viewed_at", { ascending: false })
+    .limit(200);
 
   if (error) {
     console.warn("[profile_views] fetch ordering state failed", error.message);

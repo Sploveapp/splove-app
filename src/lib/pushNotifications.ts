@@ -10,10 +10,13 @@ import { isNativeCapacitorApp } from "./authRedirect";
 import { navigateFromPushRoute } from "./pushNavigate";
 import {
   readPushPayload,
+  resolvePushRoute,
   shouldSuppressForegroundPush,
 } from "./pushNotificationRoutes";
 import {
+  deleteDevicePushToken,
   fetchDevicePushTokenStatus,
+  reclaimDevicePushTokenForUser,
   upsertDevicePushToken,
   type DeviceTokenPlatform,
 } from "../services/deviceTokens.service";
@@ -58,7 +61,7 @@ function logPush(event: string, detail?: Record<string, unknown>): void {
 }
 
 function readRouteFromPayload(notification: PushNotificationSchema): string | null {
-  return readPushPayload(notification).route;
+  return resolvePushRoute(readPushPayload(notification));
 }
 
 async function persistToken(userId: string, token: string): Promise<void> {
@@ -72,6 +75,8 @@ async function persistToken(userId: string, token: string): Promise<void> {
     });
     return;
   }
+
+  await reclaimDevicePushTokenForUser(token, platform, userId);
 
   const result = await upsertDevicePushToken(userId, token, platform);
   if (result.ok) {
@@ -96,9 +101,9 @@ async function flushPendingPushToken(): Promise<void> {
   await persistToken(uid, token);
 }
 
-async function attachPushListenersOnce(userId: string): Promise<void> {
+async function attachPushListenersOnce(userId?: string): Promise<void> {
   if (!isPushSupportedNative()) return;
-  activeUserId = userId;
+  if (userId) activeUserId = userId;
 
   if (listenersAttached) {
     await flushPendingPushToken();
@@ -162,10 +167,15 @@ async function attachPushListenersOnce(userId: string): Promise<void> {
       if (route) navigateFromPushRoute(route);
     },
   );
-
   listenerHandles = [onRegistration, onRegistrationError, onReceived, onAction];
   listenersAttached = true;
   await flushPendingPushToken();
+}
+
+/** Enregistre les listeners dès le bootstrap (cold start / token avant auth). */
+export async function initPushNotificationHandlersEarly(): Promise<void> {
+  if (!isPushSupportedNative() || listenersAttached) return;
+  await attachPushListenersOnce();
 }
 
 /** Évite la course init / syncPushTokenIfGranted (register avant addListener). */
@@ -297,7 +307,10 @@ export async function getPushRegistrationSummary(
   return { permission, savedInDb: hasToken };
 }
 
-export async function teardownPushNotificationHandlers(): Promise<void> {
+export async function teardownPushNotificationHandlers(userId?: string | null): Promise<void> {
+  if (userId) {
+    await deleteDevicePushToken(userId).catch(() => undefined);
+  }
   if (attachListenersPromise) {
     await attachListenersPromise.catch(() => undefined);
   }

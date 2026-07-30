@@ -396,8 +396,8 @@ export default function MesRencontres() {
   }, [rows, uid, nowTick]);
 
   const pendingActionCount = useMemo(
-    () => rows.filter((p) => activityProposalNeedsUserAction(uid, p)).length,
-    [rows, uid],
+    () => rows.filter((p) => activityProposalNeedsUserAction(uid, p, nowTick)).length,
+    [rows, uid, nowTick],
   );
 
   function partnerForProposal(p: ProposalRow): ProfileLite | null {

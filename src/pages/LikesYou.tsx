@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { useLikesReceived } from "../hooks/useLikesReceived";
 import { LikesYouProfileCard } from "../components/LikesYouProfileCard";
@@ -39,6 +39,7 @@ export default function LikesYou() {
   const { t } = useTranslation();
   const { user, profile, isAuthInitialized } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const currentUserId = isAuthInitialized && user?.id ? user.id : null;
   const legacyProfilePrefs = profile as {
     preferred_age_min?: number | string | null;
@@ -179,6 +180,17 @@ export default function LikesYou() {
   function closeProfilePreview() {
     setSelectedProfile(null);
   }
+
+  useEffect(() => {
+    const likerId = searchParams.get("liker")?.trim();
+    if (!likerId || !currentUserId || loading) return;
+    const like = likesForRender.find((item) => item.liker_id === likerId);
+    if (!like) return;
+    void handleViewProfile(like);
+    const next = new URLSearchParams(searchParams);
+    next.delete("liker");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, currentUserId, loading, likesForRender, setSearchParams]);
 
   return (
     <div

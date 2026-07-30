@@ -4,10 +4,15 @@ import { useTranslation } from "../../i18n/useTranslation";
 export type ChatMessageMetaProps = {
   createdAt: string;
   align: "left" | "right" | "center";
+  /** Accusé de lecture backend (`read_at`) — jamais simulé. */
   readAt?: string | null;
   showReadStatus?: boolean;
 };
 
+/**
+ * Accusés : Envoyé / Lu uniquement si `read_at` existe côté backend.
+ * Pas de « Distribué » : aucune colonne `delivered_at` n’existe.
+ */
 export function ChatMessageMeta({
   createdAt,
   align,

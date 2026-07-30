@@ -1,8 +1,11 @@
-import type { InAppNotificationRow } from "../services/inAppNotifications.service";
+import {
+  BELL_NOTIFICATION_KINDS,
+  type InAppNotificationRow,
+} from "../services/inAppNotifications.service";
 import {
   SPLOVE_PLAY_META,
+  formatPlaySentNotificationLine,
   resolveSplovePlayType,
-  splovePlayNotificationLabel,
 } from "./splovePlay";
 
 export type SploveNotificationPayload = {
@@ -17,6 +20,8 @@ export type SploveNotificationPayload = {
   place?: string;
   location?: string;
   scheduled_at?: string;
+  /** Horodatage source de l'événement (backfill client). */
+  event_at?: string;
   /** SPLove Play (`play_sent`). */
   play_type?: string;
 };
@@ -48,8 +53,22 @@ export function parseNotificationPayload(raw: unknown): SploveNotificationPayloa
   if (typeof o.place === "string") out.place = o.place.trim();
   if (typeof o.location === "string") out.location = o.location.trim();
   if (typeof o.scheduled_at === "string") out.scheduled_at = o.scheduled_at;
+  if (typeof o.event_at === "string" && o.event_at.trim()) out.event_at = o.event_at.trim();
   if (typeof o.play_type === "string" && o.play_type.trim()) out.play_type = o.play_type.trim();
   return out;
+}
+
+function likesYouRoute(actorId: string | undefined): string {
+  if (actorId?.trim()) return `/likes-you?liker=${encodeURIComponent(actorId.trim())}`;
+  return "/likes-you";
+}
+
+/** Timestamp d'affichage : event_at (source) puis created_at (insertion). */
+export function notificationDisplayTimestamp(row: InAppNotificationRow): string {
+  const payload = parseNotificationPayload(row.payload);
+  const eventAt = payload.event_at?.trim();
+  if (eventAt) return eventAt;
+  return row.created_at;
 }
 
 export function isSocialNotificationKind(kind: string): boolean {
@@ -64,20 +83,32 @@ export function resolveNotificationRoute(
   kind: string,
   payload: SploveNotificationPayload,
 ): string {
-  if (payload.route) return payload.route.startsWith("/") ? payload.route : `/${payload.route}`;
+  if (payload.route) {
+    const base = payload.route.startsWith("/") ? payload.route : `/${payload.route}`;
+    if ((kind === "new_like" || kind === "play_sent") && payload.actor_id?.trim()) {
+      const pathOnly = base.split("?")[0];
+      if (pathOnly === "/likes-you") {
+        return likesYouRoute(payload.actor_id);
+      }
+    }
+    return base;
+  }
   switch (kind) {
     case "new_like":
-      return "/likes-you";
     case "play_sent":
-      return "/likes-you";
+      return likesYouRoute(payload.actor_id);
     case "new_match":
       return payload.conversation_id ? `/match/${payload.conversation_id}` : "/messages";
     case "new_message":
-    case "activity_proposed":
-    case "activity_accepted":
-    case "activity_counter":
-    case "activity_reminder":
       return payload.conversation_id ? `/chat/${payload.conversation_id}` : "/messages";
+    case "activity_proposed":
+    case "activity_counter":
+      if (payload.conversation_id) return `/chat/${payload.conversation_id}`;
+      if (payload.proposal_id) return `/mes-rencontres?tab=to_confirm`;
+      return "/mes-rencontres?tab=to_confirm";
+    case "activity_accepted":
+    case "activity_reminder":
+      return payload.conversation_id ? `/chat/${payload.conversation_id}` : "/mes-rencontres";
     case "meetup_confirmed":
       return "/mes-rencontres?tab=confirmed";
     default:
@@ -93,6 +124,8 @@ export type NotificationPresentation = {
   isSocial: boolean;
   actorId: string | null;
   actorAvatarUrl: string | null;
+  /** Si true, n’affiche pas l’emoji en préfixe de ligne (déjà dans `line`). */
+  omitLineEmoji?: boolean;
 };
 
 const KIND_EMOJI: Record<string, string> = {
@@ -125,15 +158,15 @@ export function presentNotification(
   if (row.kind === "play_sent") {
     const play = resolveSplovePlayType(payload.play_type);
     const meta = SPLOVE_PLAY_META[play];
-    const intentLabel = splovePlayNotificationLabel(t, play);
     return {
       emoji: meta.emoji,
-      line: `${name} — ${intentLabel}`,
-      subtitle: `« ${t(meta.lineKey)} »`,
+      line: formatPlaySentNotificationLine(t, play, name),
+      subtitle: null,
       route,
       isSocial: true,
       actorId: payload.actor_id ?? null,
       actorAvatarUrl: payload.actor_avatar?.trim() || null,
+      omitLineEmoji: true,
     };
   }
 
@@ -163,9 +196,9 @@ export function presentNotification(
   };
 }
 
-/** Masque les notifs chat (Phase 1 : cloche ≠ Messages). */
+/** Lignes affichées dans le centre cloche (kinds produit). */
 export function isBellCenterNotificationRow(row: { kind: string }): boolean {
-  return row.kind !== "new_message";
+  return (BELL_NOTIFICATION_KINDS as readonly string[]).includes(row.kind);
 }
 
 function legacyLinesForKind(
@@ -195,10 +228,13 @@ function legacyLinesForKind(
   return { title: t(keys.titleKey), message: t(keys.messageKey) };
 }
 
-/** Non lues d’abord, puis plus récentes. */
+import { parseSupabaseTimestamp } from "./parseSupabaseTimestamp";
+
+/** Plus récent → plus ancien. */
 export function sortNotifications(rows: InAppNotificationRow[]): InAppNotificationRow[] {
   return [...rows].sort((a, b) => {
-    if (a.read !== b.read) return a.read ? 1 : -1;
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    const tb = parseSupabaseTimestamp(notificationDisplayTimestamp(b));
+    const ta = parseSupabaseTimestamp(notificationDisplayTimestamp(a));
+    return tb - ta;
   });
 }

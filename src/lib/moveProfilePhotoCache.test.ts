@@ -70,4 +70,14 @@ describe("moveProfilePhotoCache", () => {
     expect(mod.getMoveProfilePhotoDisplaySync(ref, lindaId)).toBeTruthy();
     expect(mod.getMoveProfilePhotoDisplaySync(ref, otherId)).toBeNull();
   });
+
+  it("conserve le cache-buster ?v= dans la clé (évite réutiliser un ancien displaySrc)", async () => {
+    const mod = await import("./moveProfilePhotoCache");
+    const base =
+      "https://example.supabase.co/storage/v1/object/public/profile-photos/u/portrait.jpg";
+    const keyOld = mod.refKeyFromStoredRef(`${base}?v=111`);
+    const keyNew = mod.refKeyFromStoredRef(`${base}?v=222`);
+    expect(keyOld).not.toBe(keyNew);
+    expect(keyNew).toContain("v=222");
+  });
 });

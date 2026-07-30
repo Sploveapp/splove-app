@@ -1,5 +1,6 @@
 import { supabase } from "../lib/supabase";
 import { resolvePushEnvironment } from "../lib/pushEnvironment";
+import { Capacitor } from "@capacitor/core";
 
 export type DeviceTokenPlatform = "ios" | "android";
 
@@ -59,6 +60,50 @@ export async function upsertDevicePushToken(
     };
   }
   return { ok: true };
+}
+
+/** Supprime le token push de l’utilisateur courant (déconnexion / changement de compte). */
+export async function deleteDevicePushToken(userId: string): Promise<void> {
+  const platform = Capacitor.getPlatform();
+  if (platform !== "ios" && platform !== "android") return;
+
+  const pushEnvironment = resolvePushEnvironment();
+  const { error } = await supabase
+    .from("device_tokens")
+    .delete()
+    .eq("user_id", userId)
+    .eq("platform", platform)
+    .eq("push_environment", pushEnvironment);
+
+  if (error) {
+    console.warn("[device_tokens] delete failed", error.message);
+  }
+}
+
+/**
+ * Un même appareil ne doit pas rester associé à un ancien compte après reconnexion.
+ * Supprime les lignes portant ce token pour d’autres user_id avant upsert.
+ */
+export async function reclaimDevicePushTokenForUser(
+  token: string,
+  platform: DeviceTokenPlatform,
+  userId: string,
+): Promise<void> {
+  const trimmed = token.trim();
+  if (!trimmed) return;
+
+  const pushEnvironment = resolvePushEnvironment();
+  const { error } = await supabase
+    .from("device_tokens")
+    .delete()
+    .eq("token", trimmed)
+    .eq("platform", platform)
+    .eq("push_environment", pushEnvironment)
+    .neq("user_id", userId);
+
+  if (error) {
+    console.warn("[device_tokens] reclaim token failed", error.message);
+  }
 }
 
 export async function fetchDevicePushTokenStatus(

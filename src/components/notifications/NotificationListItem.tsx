@@ -85,9 +85,11 @@ export function NotificationListItem({ presentation, relativeTime, unread, onOpe
                 unread ? "font-semibold text-white" : "font-medium text-app-text/70"
               }`}
             >
-              <span className="mr-1" aria-hidden>
-                {presentation.emoji}
-              </span>
+              {!presentation.omitLineEmoji ? (
+                <span className="mr-1" aria-hidden>
+                  {presentation.emoji}
+                </span>
+              ) : null}
               {presentation.line}
             </p>
             {presentation.subtitle ? (

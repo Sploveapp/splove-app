@@ -45,7 +45,6 @@ type SploveFeature = {
   title: { fr: string; en: string };
   description: { fr: string; en: string };
   price: SploveFeaturePrice;
-  ctaFootnote?: { fr: string; en: string };
   recommended?: boolean;
   hero?: boolean;
   creditType?: SploveCreditType;
@@ -98,7 +97,6 @@ const SECONDARY_FEATURES: SploveFeature[] = [
       en: "Bring back a profile you passed too quickly",
     },
     price: { fr: "0,99 EUR", en: "€0.99" },
-    ctaFootnote: { fr: "Crédits", en: "Credits" },
     creditType: "undo_swipe",
     durationMinutesUi: 0,
     timedSurface: false,
@@ -686,17 +684,19 @@ export default function SplovePlusScreen() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, ease: "easeOut" }}
-        className="mx-auto w-full max-w-md space-y-5"
+        className="mx-auto w-full max-w-md space-y-6"
       >
         <header className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#ff6b74]">SPLove+</p>
           <h1 className="text-3xl font-semibold leading-tight text-white">
-            {isFr ? "Passe à l’action. Rencontre plus vite." : "Take action. Meet faster."}
+            {isFr
+              ? "Parce qu'une vraie rencontre mérite plus qu'un simple like."
+              : "Because a real connection deserves more than a simple like."}
           </h1>
           <p className="text-sm text-white/65">
             {isFr
-              ? "Tes chances augmentent quand tu agis."
-              : "Your chances improve when you take action."}
+              ? "Exprime ton intention avant même les premiers mots."
+              : "Express your intention before the first words."}
           </p>
         </header>
 
@@ -710,12 +710,18 @@ export default function SplovePlusScreen() {
           <p className="mt-2 text-[14px] leading-snug text-white/75">
             {t("splovePlay.plusTagline")}
           </p>
+          <p className="mt-1.5 text-[12px] leading-snug text-white/55">
+            {t("splovePlay.plusSubline")}
+          </p>
           <ul className="mt-4 space-y-3">
             {SPLOVE_PLAY_PREMIUM_TYPES.map((play) => {
               const meta = SPLOVE_PLAY_META[play];
               return (
                 <li key={play} className="text-[13px] leading-snug text-white/88">
-                  <p className="font-semibold text-white">{t(meta.titleKey)}</p>
+                  <p className="font-semibold text-white">
+                    <span aria-hidden>{meta.emoji} </span>
+                    {t(meta.titleKey)}
+                  </p>
                   <p className="mt-0.5 text-white/72">{t(meta.lineKey)}</p>
                 </li>
               );
@@ -740,26 +746,37 @@ export default function SplovePlusScreen() {
           aria-labelledby="splove-plus-pack-title"
           className="rounded-3xl border border-[#ff2433]/55 bg-gradient-to-b from-[#221016] to-[#12121a] p-5 shadow-[0_18px_40px_rgba(255,36,51,0.18)]"
         >
-          <div className="flex items-center justify-between gap-3">
+          <p className="text-[12px] leading-snug text-[#ffb3bc]/75">
+            {t("splove_plus_pack_choice_label")}
+          </p>
+          <div className="mt-1.5 flex items-center justify-between gap-3">
             <p className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#ffb3bc]">
               <SploveSparkIcon color="currentColor" size={12} />
               {t("splove_plus_pack_label")}
             </p>
-            {packBetaActive ? (
-              <span className="rounded-full border border-emerald-400/45 bg-emerald-500/15 px-2.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-200">
-                {t("splove_plus_pack_active_badge")}
-              </span>
-            ) : null}
           </div>
           <h2 id="splove-plus-pack-title" className="mt-2 text-xl font-semibold text-white">
             {isFr ? "Pack bêta fondateur" : "Beta founder pack"}
           </h2>
+          <p className="mt-1 text-[12px] leading-snug text-white/52">
+            {t("splove_plus_pack_includes_all")}
+          </p>
           <p className="mt-2 text-[13px] leading-snug text-white/75">
             {isFr
               ? "Toutes les options SPLove+ réunies dans une seule activation. Pendant la bêta, l’abonnement est simulé."
               : "All SPLove+ perks bundled in a single activation. During beta the subscription is simulated."}
           </p>
           <ul className="mt-4 grid gap-2 text-[13px] text-white/88">
+            <li className="flex items-start gap-2">
+              <span className="mt-0.5 inline-flex shrink-0 text-base leading-none" aria-hidden>
+                💜
+              </span>
+              <span>
+                <span className="font-semibold">{t("splove_plus_pack_feature_play_title")}</span>
+                <span className="text-white/62"> · </span>
+                <span className="text-white/70">{t("splove_plus_pack_feature_play_description")}</span>
+              </span>
+            </li>
             {[heroFeature, ...secondaryFeatures].map((f) => (
               <li key={f.key} className="flex items-start gap-2">
                 <span
@@ -777,6 +794,10 @@ export default function SplovePlusScreen() {
             ))}
           </ul>
 
+          <p className="mt-4 text-[12px] leading-snug text-white/52">
+            {t("splove_plus_pack_benefit_line")}
+          </p>
+
           <div className="mt-5 flex items-end justify-between gap-3">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#ffb3bc]">
@@ -784,6 +805,9 @@ export default function SplovePlusScreen() {
               </p>
               <p className="mt-1 text-2xl font-semibold leading-none text-white">
                 {t("splove_plus_pack_price")}
+              </p>
+              <p className="mt-1.5 text-[12px] leading-snug text-white/52">
+                {t("splove_plus_pack_value_line")}
               </p>
             </div>
           </div>
@@ -800,6 +824,10 @@ export default function SplovePlusScreen() {
             {t("splove_plus_pack_pricing_note")}
           </p>
         </section>
+
+        <p className="px-1 text-center text-[12px] leading-relaxed text-white/48">
+          {t("splove_plus_individual_reassurance")}
+        </p>
 
         <div className="flex items-center gap-3" role="separator" aria-orientation="horizontal">
           <span aria-hidden className="h-px flex-1 bg-white/10" />
@@ -833,11 +861,8 @@ export default function SplovePlusScreen() {
               {heroFeature.title[language]}
             </span>
             {heroFeature.recommended ? (
-              <span className="inline-flex items-center gap-1 rounded-full border border-[#ffb3bc]/45 bg-[#ff2433]/15 px-2 py-0.5 text-[10px] font-semibold text-[#ffd0d3]">
-                <span aria-hidden className="inline-flex">
-                  <SploveSparkIcon color="currentColor" size={10} />
-                </span>
-                {isFr ? "Populaire" : "Popular"}
+              <span className="rounded-full border border-[#ffb3bc]/35 bg-[#ff2433]/10 px-2 py-0.5 text-[10px] font-semibold text-[#ffd0d3]">
+                {t("splove_plus_badge_popular")}
               </span>
             ) : null}
           </div>
@@ -911,16 +936,10 @@ export default function SplovePlusScreen() {
                   {feature.icon({ color: "currentColor", size: 18 })}
                 </span>
                 <span>{feature.title[language]}</span>
-                {feature.comingSoon ? (
-                  betaActive ? (
-                    <span className="ml-1 rounded-md border border-emerald-400/45 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-200">
-                      {t("splove_plus_beta_active_badge")}
-                    </span>
-                  ) : (
-                    <span className="ml-1 rounded-md border border-[#ffb3bc]/45 bg-[#ff2433]/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-[#ffd0d3]">
-                      {t("splove_plus_beta_badge")}
-                    </span>
-                  )
+                {feature.comingSoon && !betaActive ? (
+                  <span className="ml-1 rounded-md border border-[#ffb3bc]/35 bg-[#ff2433]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#ffd0d3]">
+                    {t("splove_plus_badge_new")}
+                  </span>
                 ) : null}
               </p>
               <p className="mt-2 text-xs text-white/65">{feature.description[language]}</p>
@@ -934,10 +953,6 @@ export default function SplovePlusScreen() {
                 {greenBadgeMinutes(feature) != null ? (
                   <span className="max-w-[min(140px,calc(100%-4rem))] rounded-full border border-emerald-400/45 bg-emerald-500/20 px-2 py-0.5 text-center text-[10px] font-semibold leading-snug text-emerald-200">
                     {greenBadgeLabel(greenBadgeMinutes(feature))}
-                  </span>
-                ) : feature.ctaFootnote ? (
-                  <span className="shrink-0 rounded-xl bg-[#ff2433] px-3 py-1 text-[11px] font-bold text-white">
-                    {feature.ctaFootnote[language]}
                   </span>
                 ) : null}
               </div>

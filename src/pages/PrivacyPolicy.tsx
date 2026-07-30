@@ -72,7 +72,7 @@ export default function PrivacyPolicy() {
         },
         {
           h: "Contact privacy",
-          p: ["Privacy : à remplacer par l’email officiel SPLove (ex. privacy@splove.app)."],
+          p: ["Pour toute question relative à la protection de vos données personnelles ou pour exercer vos droits RGPD, vous pouvez nous contacter à l'adresse suivante : contact@sploveapp.com."],
         },
       ];
     }
@@ -138,7 +138,7 @@ export default function PrivacyPolicy() {
       },
       {
         h: "Privacy contact",
-        p: ["Privacy: replace with SPLove’s official email (e.g. privacy@splove.app)."],
+        p: ["Privacy: replace with SPLove’s official email (e.g. contact@sploveapp.com)."],
       },
     ];
   }, [language]);
@@ -167,11 +167,6 @@ export default function PrivacyPolicy() {
             <h1 className="text-lg font-bold">{title}</h1>
             <p className="text-xs text-app-muted">
               {language === "fr" ? "Dernière mise à jour" : "Last updated"} : {lastUpdated}
-            </p>
-            <p className="text-xs text-app-muted">
-              {language === "fr"
-                ? "Document à faire relire par un professionnel du droit avant publication officielle."
-                : "Internal note: this document must be reviewed by a legal professional before official publication."}
             </p>
           </div>
 

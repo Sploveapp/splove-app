@@ -1,16 +1,27 @@
 import { type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { formatBadge } from "../../lib/formatBadge";
+import { resolveBottomNavActiveTab } from "../../lib/bottomNavActiveTab";
 import { useTranslation } from "../../i18n/useTranslation";
 import {
   useDiscoverUndoNavState,
   type DiscoverUndoNavState,
 } from "../../contexts/DiscoverUndoNavContext";
+import {
+  SPLOVE_BOTTOM_NAV_LABEL_TO_SAFE_GAP_PX,
+  SPLOVE_BOTTOM_NAV_PILL_HEIGHT_PX,
+} from "../../constants/appBottomNavLayout";
 
 const ACTIVE = "#FF3B3B";
 const INACTIVE = "#6B6B76";
-const NAV_BACKGROUND = "#0B0B0F";
-const NAV_BORDER_TOP = "rgba(255,255,255,0.08)";
+/**
+ * Chrome flottant discret SPLove — fond presque opaque, blur faible.
+ * La photo / le profil restent le focus ; la barre ne doit pas « crier » glass Instagram.
+ */
+const NAV_PILL_BG = "rgba(12, 12, 16, 0.86)";
+const NAV_PILL_BORDER = "rgba(255, 255, 255, 0.06)";
+const NAV_PILL_SHADOW = "0 2px 12px rgba(0, 0, 0, 0.22)";
+const NAV_PILL_BLUR_PX = 5;
 /** Badges compteur : discret en production, rouge réservé à l’onglet actif */
 const BADGE_BG = "rgba(255,59,59,0.16)";
 const BADGE_TEXT = "#FCA5A5";
@@ -19,11 +30,21 @@ const UNDO_BADGE_BG = "rgba(199,125,255,0.22)";
 const UNDO_BADGE_TEXT = "#E9D4FF";
 const UNDO_BADGE_BORDER = "rgba(199,125,255,0.45)";
 
+/** Pictogrammes — alignés sur iOS `BottomNavigationBar` (icon 24 / label 10 / pilule 44). */
 const ICON_PX = 24;
 const STROKE = 1.65;
+/** Hauteur pilule = constante unique (icônes / libellés inchangés). */
+const PILL_HEIGHT_PX = SPLOVE_BOTTOM_NAV_PILL_HEIGHT_PX;
+/** Gap libellés → safe area ; safe area appliquée une seule fois en padding-bottom. */
+const LABEL_TO_SAFE_GAP_PX = SPLOVE_BOTTOM_NAV_LABEL_TO_SAFE_GAP_PX;
+const NAV_PADDING_BOTTOM = `calc(${LABEL_TO_SAFE_GAP_PX}px + env(safe-area-inset-bottom, 0px))`;
+/** Zone tactile Apple HIG (≥ 44×44). */
+const ITEM_MIN_CLASS = "min-h-[44px] min-w-[44px]";
+/** Libellé — taille + line-box fixes (parity iOS 10pt, anti-décalage métriques Android). */
+const NAV_LABEL_CLASS =
+  "flex h-[12px] max-w-full items-center justify-center truncate text-center text-[10px] font-medium leading-none tracking-tight transition-colors duration-150";
 
 export type SPLoveBottomNavProps = {
-  activeRoute: string;
   unreadMessagesCount: number;
   likesCount: number;
   profileNeedsAction: boolean;
@@ -31,24 +52,7 @@ export type SPLoveBottomNavProps = {
   onProfileTabClick: () => void;
 };
 
-function matchActiveDiscover(pathname: string): boolean {
-  return pathname === "/" || pathname === "/move" || pathname === "/discover";
-}
-
-function matchActiveMessages(pathname: string): boolean {
-  return pathname === "/messages" || pathname.startsWith("/chat/");
-}
-
-function matchActiveLikes(pathname: string): boolean {
-  return pathname === "/likes-you" || pathname === "/likes";
-}
-
-function matchActiveProfile(pathname: string): boolean {
-  return pathname === "/profile" || pathname.startsWith("/profile/");
-}
-
 export function SPLoveBottomNav({
-  activeRoute,
   unreadMessagesCount,
   likesCount,
   profileNeedsAction,
@@ -56,14 +60,16 @@ export function SPLoveBottomNav({
   onProfileTabClick,
 }: SPLoveBottomNavProps) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { t } = useTranslation();
-  const path = activeRoute;
   const discoverUndoNav = useDiscoverUndoNavState();
 
-  const isDiscover = matchActiveDiscover(path);
-  const isMessages = matchActiveMessages(path);
-  const isLikes = matchActiveLikes(path);
-  const isProfile = matchActiveProfile(path);
+  // Onglet actif = pathname courant uniquement (jamais un state mémorisé).
+  const activeTab = resolveBottomNavActiveTab(pathname);
+  const isDiscover = activeTab === "move";
+  const isMessages = activeTab === "messages";
+  const isLikes = activeTab === "likes";
+  const isProfile = activeTab === "profile";
 
   const msgBadgeShown = unreadMessagesCount > 0;
   const likesBadgeShown = likesCount > 0;
@@ -73,77 +79,90 @@ export function SPLoveBottomNav({
   return (
     <nav
       id="splove-bottom-nav"
-      className="w-full border-t"
-      style={{ backgroundColor: NAV_BACKGROUND, borderTopColor: NAV_BORDER_TOP }}
+      className="pointer-events-none w-full"
       role="navigation"
       aria-label={navLabel}
+      data-floating="true"
     >
+      {/* Conteneur flottant : gap 10px + safe area une seule fois (pas de double inset). */}
       <div
-        className="mx-auto flex w-full max-w-lg items-stretch justify-between gap-1 px-1.5"
+        className="mx-auto w-full max-w-lg px-3"
         style={{
-          paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))",
-          paddingTop: 10,
+          paddingBottom: NAV_PADDING_BOTTOM,
+          paddingTop: 0,
           boxSizing: "border-box",
         }}
       >
-        <BottomItem
-          label={t("nav_tab_discover")}
-          ariaLabel={t("nav_tab_discover")}
-          active={isDiscover}
-          icon={(c) => <DiscoverIcon color={c} />}
-          onActivate={() => navigate("/move")}
-        />
-        <UndoBottomItem undo={discoverUndoNav} label={t("nav_tab_undo")} />
-        <BottomItem
-          label={t("nav_tab_likes")}
-          ariaLabel={
-            likesCount <= 0
-              ? t("nav_tab_likes")
-              : likesCount > 9
-                ? `${t("nav_tab_likes")}, 9+`
-                : `${t("nav_tab_likes")}, ${likesCount}`
-          }
-          active={isLikes}
-          badge={likesBadgeShown ? formatBadge(likesCount) : null}
-          icon={(c) => <PulsesIcon color={c} />}
-          onActivate={() => navigate("/likes-you")}
-        />
-        <BottomItem
-          label={t("messages_title")}
-          ariaLabel={
-            unreadMessagesCount <= 0
-              ? t("messages_title")
-              : unreadMessagesCount > 9
-                ? `${t("messages_title")}, 9+`
-                : `${t("messages_title")}, ${unreadMessagesCount}`
-          }
-          active={isMessages}
-          badge={msgBadgeShown ? formatBadge(unreadMessagesCount) : null}
-          icon={(c) => <MessagesIcon color={c} />}
-          onActivate={() => navigate("/messages")}
-        />
-        <BottomItem
-          label={t("nav_tab_profile")}
-          ariaLabel={
-            profileNeedsAction
-              ? `${t("nav_tab_profile")}, ${t("nav_profile_action_aria")}`
-              : activityProposalsNeedAction
-                ? `${t("nav_tab_profile")}, ${t("to_confirm")}`
-                : t("nav_tab_profile")
-          }
-          active={isProfile}
-          icon={(c) => <ProfileIcon color={c} />}
-          indicator={profileNeedsAction || activityProposalsNeedAction}
-          onActivate={() => {
-            console.log("[REAL_PROFILE_CLICK]", {
-              currentPath: path,
-              targetPath: "/profile",
-              activityProposalsNeedAction,
-              handler: "SPLoveBottomNav.profileTab",
-            });
-            onProfileTabClick();
+        <div
+          className="pointer-events-auto flex w-full items-stretch justify-between gap-0.5 overflow-hidden rounded-[22px] border px-1.5 py-0"
+          style={{
+            height: PILL_HEIGHT_PX,
+            background: NAV_PILL_BG,
+            borderColor: NAV_PILL_BORDER,
+            boxShadow: NAV_PILL_SHADOW,
+            backdropFilter: `blur(${NAV_PILL_BLUR_PX}px)`,
+            WebkitBackdropFilter: `blur(${NAV_PILL_BLUR_PX}px)`,
           }}
-        />
+        >
+          <BottomItem
+            label={t("nav_tab_discover")}
+            ariaLabel={t("nav_tab_discover")}
+            active={isDiscover}
+            icon={(c) => <DiscoverIcon color={c} />}
+            onActivate={() => navigate("/move")}
+          />
+          <UndoBottomItem undo={discoverUndoNav} label={t("nav_tab_undo")} />
+          <BottomItem
+            label={t("nav_tab_likes")}
+            ariaLabel={
+              likesCount <= 0
+                ? t("nav_tab_likes")
+                : likesCount > 9
+                  ? `${t("nav_tab_likes")}, 9+`
+                  : `${t("nav_tab_likes")}, ${likesCount}`
+            }
+            active={isLikes}
+            badge={likesBadgeShown ? formatBadge(likesCount) : null}
+            icon={(c) => <PulsesIcon color={c} />}
+            onActivate={() => navigate("/likes-you")}
+          />
+          <BottomItem
+            label={t("messages_title")}
+            ariaLabel={
+              unreadMessagesCount <= 0
+                ? t("messages_title")
+                : unreadMessagesCount > 9
+                  ? `${t("messages_title")}, 9+`
+                  : `${t("messages_title")}, ${unreadMessagesCount}`
+            }
+            active={isMessages}
+            badge={msgBadgeShown ? formatBadge(unreadMessagesCount) : null}
+            icon={(c) => <MessagesIcon color={c} />}
+            onActivate={() => navigate("/messages")}
+          />
+          <BottomItem
+            label={t("nav_tab_profile")}
+            ariaLabel={
+              profileNeedsAction
+                ? `${t("nav_tab_profile")}, ${t("nav_profile_action_aria")}`
+                : activityProposalsNeedAction
+                  ? `${t("nav_tab_profile")}, ${t("to_confirm")}`
+                  : t("nav_tab_profile")
+            }
+            active={isProfile}
+            icon={(c) => <ProfileIcon color={c} />}
+            indicator={profileNeedsAction || activityProposalsNeedAction}
+            onActivate={() => {
+              console.log("[REAL_PROFILE_CLICK]", {
+                currentPath: pathname,
+                targetPath: "/profile",
+                activityProposalsNeedAction,
+                handler: "SPLoveBottomNav.profileTab",
+              });
+              onProfileTabClick();
+            }}
+          />
+        </div>
       </div>
     </nav>
   );
@@ -210,12 +229,12 @@ function UndoBottomItem({
       }}
       aria-label={ariaLabel}
       aria-busy={ariaBusy ? "true" : undefined}
-      className="flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 py-1 transition-[transform,opacity] duration-150 ease-out active:scale-[0.94] disabled:active:scale-100 [&:focus-visible]:outline [&:focus-visible]:outline-2 [&:focus-visible]:outline-offset-[-2px] [&:focus-visible]:outline-[#C77DFF]/35"
+      className={`flex ${ITEM_MIN_CLASS} min-w-0 flex-1 flex-col items-center justify-center gap-0 px-0.5 py-0 transition-[transform,opacity] duration-150 ease-out active:scale-[0.94] disabled:active:scale-100 [&:focus-visible]:outline [&:focus-visible]:outline-2 [&:focus-visible]:outline-offset-[-2px] [&:focus-visible]:outline-[#C77DFF]/35`}
       onClick={() => {
         undo.triggerUndo();
       }}
     >
-      <span className="relative inline-flex shrink-0 items-center justify-center pb-1">
+      <span className="relative inline-flex h-6 w-6 shrink-0 items-center justify-center">
         <UndoRewindIcon color={stroke} />
         {badge ? (
           <span
@@ -231,10 +250,7 @@ function UndoBottomItem({
           </span>
         ) : null}
       </span>
-      <span
-        className="max-w-full truncate text-center text-[11px] font-medium tracking-tight transition-colors duration-150"
-        style={{ color: labelColor }}
-      >
+      <span className={NAV_LABEL_CLASS} style={{ color: labelColor }}>
         {label}
       </span>
     </button>
@@ -256,7 +272,7 @@ function BottomItem({
   return (
     <button
       type="button"
-      className="flex min-h-[56px] min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 py-1 transition-[transform,color] duration-150 ease-out active:scale-[0.94] [&:focus-visible]:outline [&:focus-visible]:outline-2 [&:focus-visible]:outline-offset-[-2px] [&:focus-visible]:outline-white/30"
+      className={`flex ${ITEM_MIN_CLASS} min-w-0 flex-1 flex-col items-center justify-center gap-0 px-0.5 py-0 transition-[transform,color] duration-150 ease-out active:scale-[0.94] [&:focus-visible]:outline [&:focus-visible]:outline-2 [&:focus-visible]:outline-offset-[-2px] [&:focus-visible]:outline-white/30`}
       style={{
         WebkitTapHighlightColor: "transparent",
         background: "transparent",
@@ -268,7 +284,7 @@ function BottomItem({
       aria-label={ariaLabel}
       onClick={onActivate}
     >
-      <span className="relative inline-flex shrink-0 items-center justify-center pb-1">
+      <span className="relative inline-flex h-6 w-6 shrink-0 items-center justify-center">
         <span aria-hidden>{icon(stroke)}</span>
         {badge ? (
           <span
@@ -286,7 +302,7 @@ function BottomItem({
         {!badge && indicator ? (
           <span
             aria-hidden
-            className="pointer-events-none absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-[#0B0B0F]"
+            className="pointer-events-none absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-[rgba(20,20,25,0.9)]"
             style={{
               backgroundColor: ACTIVE,
               boxShadow: `0 0 0 1px rgba(255,59,59,0.45)`,
@@ -294,10 +310,7 @@ function BottomItem({
           />
         ) : null}
       </span>
-      <span
-        className="max-w-full truncate text-center text-[11px] font-medium tracking-tight transition-colors duration-150"
-        style={{ color: labelColor }}
-      >
+      <span className={NAV_LABEL_CLASS} style={{ color: labelColor }}>
         {label}
       </span>
     </button>
