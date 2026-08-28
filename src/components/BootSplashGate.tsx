@@ -19,10 +19,13 @@ import {
 } from "../lib/oauthLoadingScreenDiag";
 import { OAuthLoadingScreenOverlay } from "./SploveOAuthLoadingScreen";
 import { SplashScreen } from "./SplashScreen";
+import { AuthBootstrapError } from "./AuthBootstrapError";
+import { useTranslation } from "../i18n/useTranslation";
 import {
   isOAuthSessionVerifiedLatch,
   subscribeOAuthSessionVerifiedLatch,
 } from "../lib/oauthSessionVerifiedLatch";
+import { isPasswordRecoveryFlowActive } from "../lib/passwordRecoveryDeepLink";
 
 type Props = {
   children: ReactNode;
@@ -40,6 +43,7 @@ function isBooting(auth: ReturnType<typeof useAuth>, oauthUxActive: boolean, isA
  */
 export function BootSplashGate({ children }: Props) {
   const auth = useAuth();
+  const { t } = useTranslation();
   const location = useLocation();
   const [minElapsed, setMinElapsed] = useState(false);
   const sessionLatch = useSyncExternalStore(
@@ -50,6 +54,9 @@ export function BootSplashGate({ children }: Props) {
 
   const hash = location.hash || "";
   const pathname = location.pathname || "/";
+  const isResetPasswordRoute =
+    pathname === "/reset-password" || hash.startsWith("#/reset-password");
+  const recoveryGate = isResetPasswordRoute || isPasswordRecoveryFlowActive();
   const authSessionVerified =
     auth.isAuthInitialized && Boolean(auth.session?.user?.id);
   const isAuthCallbackRoute = isOAuthCallbackRouteBlocking(pathname, hash);
@@ -77,8 +84,12 @@ export function BootSplashGate({ children }: Props) {
     ((oauthUxActive || isAuthCallbackRoute || isOAuthGoogleStartRoute) &&
       !suppressOAuthOnMove &&
       !sessionLatch);
-  const booting = isBooting(auth, oauthUxActive || oauthVisualMask, isAuthCallbackRoute);
-  const showSplash = sessionOnFinalRoute
+  const booting = recoveryGate
+    ? false
+    : isBooting(auth, oauthUxActive || oauthVisualMask, isAuthCallbackRoute);
+  const showSplash = recoveryGate
+    ? false
+    : sessionOnFinalRoute
     ? oauthLoadingVisible
     : sessionLatch && suppressOAuthOnMove && !oauthVisualMask
       ? false
@@ -108,6 +119,12 @@ export function BootSplashGate({ children }: Props) {
     }
 
     if (!showSplash) {
+      console.log("BOOT_SPLASH_RELEASED", {
+        booting,
+        minElapsed,
+        pathname,
+        hash,
+      });
       logOAuthLoaderDiag("WhiteScreenGuard/BootSplashGate", "render children (splash hidden)", {
         booting,
         minElapsed,
@@ -153,6 +170,21 @@ export function BootSplashGate({ children }: Props) {
 
   if (!showSplash) {
     return <>{children}</>;
+  }
+
+  if (auth.authBootstrapFailed && !auth.session?.user?.id && !oauthLoadingVisible) {
+    return (
+      <AuthBootstrapError
+        title={t("auth_bootstrap_error_title")}
+        message={t("auth_bootstrap_error_message")}
+        retryLabel={t("auth_bootstrap_retry")}
+        signOutLabel={t("auth_bootstrap_sign_out")}
+        onRetry={auth.retryAuthBootstrap}
+        onSignOut={() => {
+          void auth.signOut();
+        }}
+      />
+    );
   }
 
   return (

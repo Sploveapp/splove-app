@@ -21,7 +21,11 @@ import { useTranslation } from "../i18n/useTranslation";
 import { stashPendingReferralCodeFromSearch } from "../services/referral.service";
 import { clearOnboardingUiLocalCache } from "../lib/onboardingUiLocalCache";
 import { resolveBootRoute } from "../lib/bootRouteDecision";
+import { hasSeenAppIntro } from "../lib/appIntroStorage";
+import { isPasswordRecoveryFlowActive } from "../lib/passwordRecoveryDeepLink";
 import { SplashScreen } from "../components/SplashScreen";
+import { runSignInWithPasswordDiagnostics } from "../lib/supabaseAuthTransportDiagnostics";
+import { KeyboardAwareScrollShell } from "../components/KeyboardAwareScrollShell";
 function signupModeFromSearchParams(sp: URLSearchParams): boolean {
   return sp.get("signup") === "1" || sp.get("mode") === "signup";
 }
@@ -39,17 +43,17 @@ function AuthSportShell({ children }: { children: React.ReactNode }) {
     <div
       style={{
         position: "relative",
-        minHeight: "100vh",
+        minHeight: "100dvh",
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        boxSizing: "border-box",
         backgroundColor: "#050509",
         backgroundImage: `url(${AUTH_SPORT_BG_IMAGE})`,
         backgroundSize: "cover",
         backgroundPosition: "center 38%",
         backgroundRepeat: "no-repeat",
         overflow: "hidden",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        padding: "20px 18px 36px",
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
       }}
     >
@@ -64,7 +68,26 @@ function AuthSportShell({ children }: { children: React.ReactNode }) {
             "linear-gradient(to bottom, rgba(0,0,0,0.35), rgba(0,0,0,0.65), rgba(0,0,0,0.82))",
         }}
       />
-      <div style={{ position: "relative", zIndex: 2, width: "100%" }}>{children}</div>
+      <KeyboardAwareScrollShell
+        style={{
+          position: "relative",
+          zIndex: 2,
+          padding:
+            "20px max(18px, env(safe-area-inset-right, 0px)) 36px max(18px, env(safe-area-inset-left, 0px))",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: "100%",
+            minWidth: 0,
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+          }}
+        >
+          {children}
+        </div>
+      </KeyboardAwareScrollShell>
     </div>
   );
 }
@@ -243,7 +266,18 @@ export default function Auth() {
   const showEmailFormBlock = showEmailForm || emailDirect;
   const authBootstrapping = !isAuthInitialized || isLoading;
 
+  if (isPasswordRecoveryFlowActive()) {
+    return <Navigate to="/reset-password" replace />;
+  }
+
+  if (!user && !hasSeenAppIntro()) {
+    return <Navigate to="/app-intro" replace />;
+  }
+
   if (user) {
+    if (isPasswordRecoveryFlowActive()) {
+      return <Navigate to="/reset-password" replace />;
+    }
     const pr = profile as Record<string, unknown> | null | undefined;
     const bootDecision = resolveBootRoute({
       isAuthInitialized,
@@ -402,7 +436,11 @@ export default function Auth() {
         }
         setMessage({ type: "success", text: t("auth_signup_success") });
       } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = (
+          await runSignInWithPasswordDiagnostics(email, () =>
+            supabase.auth.signInWithPassword({ email, password }),
+          )
+        );
         if (error) throw error;
       }
     } catch (err: unknown) {
@@ -565,15 +603,29 @@ export default function Auth() {
                   outline: "none",
                 }}
               />
-              <div style={{ position: "relative" }}>
+              <div>
+                <label
+                  htmlFor="auth-password"
+                  style={{
+                    display: "block",
+                    marginBottom: 6,
+                    fontSize: "13px",
+                    fontWeight: 600,
+                    color: "rgba(255, 255, 255, 0.72)",
+                  }}
+                >
+                  {t("password")}
+                </label>
+                <div style={{ position: "relative" }}>
                 <input
+                  id="auth-password"
                   type={showPassword ? "text" : "password"}
-                  placeholder={t("password")}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
                   autoComplete={isSignUp ? "new-password" : "current-password"}
-                  className="placeholder:text-[rgba(255,255,255,0.38)]"
+                  name="password"
+                  aria-label={t("password")}
                   style={{
                     width: "100%",
                     boxSizing: "border-box",
@@ -604,6 +656,7 @@ export default function Auth() {
                 >
                   {showPassword ? <IconEyeOff size={20} /> : <IconEye size={20} />}
                 </button>
+                </div>
               </div>
               {!isSignUp && (
                 <div style={{ textAlign: "right", marginTop: -6 }}>
@@ -688,6 +741,10 @@ export default function Auth() {
             padding: "0 8px",
             position: "relative",
             zIndex: 3,
+            maxWidth: "100%",
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+            whiteSpace: "normal",
           }}
         >
           {t("welcome_legal_part1")}

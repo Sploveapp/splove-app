@@ -16,36 +16,64 @@ import { isNativeCapacitorApp } from "./lib/authRedirect";
 import { initPushNotificationHandlersEarly } from "./lib/pushNotifications";
 import { initGoogleNativeSignIn } from "./lib/googleNativeSignIn";
 import { probeSupabaseAuthHealth } from "./lib/supabaseDiagnostics";
+import { probeSupabaseAuthTokenPostTransport } from "./lib/supabaseAuthTransportDiagnostics";
 import {
   isWebOAuthSplashRequested,
   restoreWebOAuthSplashFromStorage,
   shouldRestoreWebOAuthSplashFromStorage,
 } from "./lib/webOAuthSplash";
 import { showGoogleSignInOverlay } from "./lib/googleSignInOverlay";
+import { initViewportShell } from "./lib/viewportShell";
+import { installLegalResumeDebugListeners } from "./lib/legalResumeDebug";
+import { bootstrapPasswordRecoveryFromUrl } from "./lib/passwordRecoveryBootstrap";
 
 console.log("[main bootstrap]", "profile-tab-fix-v2");
 
+initViewportShell();
 initTheme();
+installLegalResumeDebugListeners();
 
-initCapacitorAuthBridge();
-if (isNativeCapacitorApp()) {
-  void initPushNotificationHandlersEarly();
-  void initGoogleNativeSignIn();
+async function bootApp(): Promise<void> {
+  const recoveryBoot = await bootstrapPasswordRecoveryFromUrl();
+  console.log("[PASSWORD_RECOVERY] bootstrap complete =", recoveryBoot);
+
+  initCapacitorAuthBridge();
+  if (isNativeCapacitorApp()) {
+    void initPushNotificationHandlersEarly();
+    void initGoogleNativeSignIn();
+  }
+  if (shouldRestoreWebOAuthSplashFromStorage()) {
+    restoreWebOAuthSplashFromStorage();
+  }
+  if (isWebOAuthSplashRequested()) {
+    showGoogleSignInOverlay();
+  }
+  if (isOauthProcessingLocked()) {
+    console.log("[main bootstrap] oauth processing lock active");
+  }
+  if (isNativeCapacitorApp()) {
+    void probeSupabaseAuthHealth().then((probe) => {
+      console.log("[main] supabase health probe (native)", probe);
+    });
+    void probeSupabaseAuthTokenPostTransport().then((probe) => {
+      console.log("[main] supabase token POST transport probe (native)", probe);
+    });
+  }
+
+  const rootEl = document.getElementById("root");
+  if (rootEl) {
+    console.log("BOOT_APP_RENDERED");
+    createRoot(rootEl).render(
+      <StrictMode>
+        <AppErrorBoundary>
+          <App />
+        </AppErrorBoundary>
+      </StrictMode>,
+    );
+  }
 }
-if (shouldRestoreWebOAuthSplashFromStorage()) {
-  restoreWebOAuthSplashFromStorage();
-}
-if (isWebOAuthSplashRequested()) {
-  showGoogleSignInOverlay();
-}
-if (isOauthProcessingLocked()) {
-  console.log("[main bootstrap] oauth processing lock active");
-}
-if (isNativeCapacitorApp()) {
-  void probeSupabaseAuthHealth().then((probe) => {
-    console.log("[main] supabase health probe (native)", probe);
-  });
-}
+
+void bootApp();
 
 class AppErrorBoundary extends Component<
   { children: ReactNode },
@@ -103,15 +131,4 @@ class AppErrorBoundary extends Component<
     }
     return this.props.children;
   }
-}
-
-const rootEl = document.getElementById("root");
-if (rootEl) {
-  createRoot(rootEl).render(
-    <StrictMode>
-      <AppErrorBoundary>
-        <App />
-      </AppErrorBoundary>
-    </StrictMode>,
-  );
 }

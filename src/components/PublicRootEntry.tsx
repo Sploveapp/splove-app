@@ -2,7 +2,9 @@ import { useEffect } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { logBootDecision, resolveBootRoute } from "../lib/bootRouteDecision";
+import { hasSeenAppIntro } from "../lib/appIntroStorage";
 import { RouteBootLoader } from "./RouteBootLoader";
+import { isPasswordRecoveryFlowActive } from "../lib/passwordRecoveryDeepLink";
 
 /** Point d’entrée `#/` : splash → une seule redirection auth / onboarding / move. */
 export function PublicRootEntry() {
@@ -13,12 +15,19 @@ export function PublicRootEntry() {
     logBootDecision(decision, "/");
   }, [decision]);
 
+  if (isPasswordRecoveryFlowActive()) {
+    return <Navigate to="/reset-password" replace />;
+  }
+
   if (decision.status === "loading") {
     return <RouteBootLoader />;
   }
 
   if (decision.route === "/auth") {
     console.log("AUTH_NO_SESSION");
+    if (!hasSeenAppIntro()) {
+      return <Navigate to="/app-intro" replace />;
+    }
     return <Navigate to="/auth" replace />;
   }
 

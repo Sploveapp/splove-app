@@ -1,12 +1,14 @@
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./contexts/AuthContext";
+import { LegalNoticeProvider } from "./contexts/LegalNoticeContext";
 import { AppLayout } from "./components/AppLayout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import Auth from "./pages/Auth";
+import AppIntro from "./pages/AppIntro";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import { RecoveryRedirect } from "./components/RecoveryRedirect";
-import Onboarding from "./pages/Onboarding";
+import { OnboardingRouteGate } from "./components/OnboardingRouteGate";
 import Discover from "./pages/Discover";
 import LikesYou from "./pages/LikesYou";
 import Profile from "./pages/Profile";
@@ -34,6 +36,7 @@ import { isNativeCapacitorApp } from "./lib/authRedirect";
 import OAuthGoogleStart from "./pages/OAuthGoogleStart";
 import { OAUTH_GOOGLE_START_PATH } from "./lib/oauthGoogleStartUrl";
 import { PushNotificationsBridge } from "./components/PushNotificationsBridge";
+import { LegalNoticeGate } from "./components/legal/LegalNoticeGate";
 import { NativeShellVisibilityBridge } from "./components/NativeShellVisibilityBridge";
 import { SplashScreen } from "./components/SplashScreen";
 
@@ -93,17 +96,21 @@ function App() {
     }
     return <AppRouteRedirectFallback />;
   }
+  /** Recovery URL : bootstrapApp.tsx établit la session avant le render — ne pas stripper les tokens ici. */
 
   return (
     <HashRouter>
       <AuthProvider>
+        <LegalNoticeProvider>
         <NativeShellVisibilityBridge />
         <PushNotificationsBridge />
+        <LegalNoticeGate />
         <BootSplashGate>
         <PostOAuthSplashGate>
           <RecoveryRedirect />
           <Routes>
           <Route path="/" element={<PublicRootEntry />} />
+          <Route path="/app-intro" element={<AppIntro />} />
           <Route path="/auth" element={<Auth />} />
           {/* OAuth return: outside ProtectedRoute; AuthContext must not force /auth on this path */}
           <Route path="/auth/callback" element={<AuthCallback />} />
@@ -111,7 +118,6 @@ function App() {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/bienvenue" element={<Navigate to="/" replace />} />
-          <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/cgu" element={<LegalCGU />} />
           <Route path="/privacy" element={<PrivacyPolicy />} />
           <Route
@@ -120,7 +126,7 @@ function App() {
               <ProtectedRoute>
                 <Routes>
                   <Route element={<AppLayout />}>
-                    <Route path="/onboarding" element={<Onboarding />} />
+                    <Route path="/onboarding" element={<OnboardingRouteGate />} />
                     <Route path="/discover" element={<Navigate to="/move" replace />} />
                     <Route path="/move" element={<Discover />} />
                     <Route path="/notifications" element={<Notifications />} />
@@ -147,6 +153,7 @@ function App() {
         </Routes>
         </PostOAuthSplashGate>
         </BootSplashGate>
+        </LegalNoticeProvider>
       </AuthProvider>
     </HashRouter>
   );

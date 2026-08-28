@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { GlobalHeader } from "../components/GlobalHeader";
+import { KeyboardAwareScrollShell } from "../components/KeyboardAwareScrollShell";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
+import { markPasswordRecoveryFlowActive } from "../lib/passwordRecoveryDeepLink";
 
 export default function ResetPassword() {
   const navigate = useNavigate();
@@ -13,9 +15,23 @@ export default function ResetPassword() {
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
   useEffect(() => {
+    markPasswordRecoveryFlowActive(true);
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSessionReady(!!session);
     });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN" || event === "INITIAL_SESSION") {
+        setSessionReady(!!session);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -33,10 +49,15 @@ export default function ResetPassword() {
     try {
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
-      setMessage({ type: "success", text: "Mot de passe mis à jour. Redirection…" });
+      markPasswordRecoveryFlowActive(false);
+      await supabase.auth.signOut();
+      setMessage({
+        type: "success",
+        text: "Ton mot de passe a bien été modifié.",
+      });
       setTimeout(() => {
-        navigate("/discover", { replace: true });
-      }, 800);
+        navigate("/auth", { replace: true });
+      }, 1500);
     } catch (err: unknown) {
       setMessage({
         type: "error",
@@ -50,7 +71,7 @@ export default function ResetPassword() {
   return (
     <div
       style={{
-        minHeight: "100vh",
+        minHeight: "100dvh",
         background: "#0F0F14",
         display: "flex",
         flexDirection: "column",
@@ -59,20 +80,13 @@ export default function ResetPassword() {
       }}
     >
       <GlobalHeader />
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "24px",
-        }}
-      >
+      <KeyboardAwareScrollShell style={{ flex: 1, minHeight: 0, padding: "24px" }}>
         <div
+          className="splove-auth-light-card"
           style={{
             width: "100%",
             maxWidth: "360px",
+            margin: "0 auto",
             background: "#ffffff",
             borderRadius: "20px",
             padding: "32px",
@@ -160,7 +174,7 @@ export default function ResetPassword() {
                   opacity: loading || sessionReady === null ? 0.8 : 1,
                 }}
               >
-                {loading ? "Chargement…" : "Enregistrer"}
+                {loading ? "Chargement…" : "Valider le nouveau mot de passe"}
               </button>
             </form>
           )}
@@ -190,7 +204,7 @@ export default function ResetPassword() {
             Retour à la connexion
           </Link>
         </div>
-      </div>
+      </KeyboardAwareScrollShell>
     </div>
   );
 }
