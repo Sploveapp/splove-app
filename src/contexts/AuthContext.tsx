@@ -41,6 +41,13 @@ import type { AppProfile } from "../lib/appProfile";
 import { isProfileRecord } from "../lib/appProfile";
 import { isProfileReadyForDiscover } from "../lib/onboardingDiscoverReadiness";
 import { DISCOVER_BETA_SIMPLE_PIPELINE } from "../lib/discoverBetaPipeline";
+import { logLegalProfileMutation } from "../lib/legalNoticeDebug";
+import {
+  captureLegalResumeProfileBefore,
+  logLegalResumeProfileAfter,
+  subscribeLegalResumeDebug,
+} from "../lib/legalResumeDebug";
+import { hydrateLegalAcceptanceFromDbIfMissing } from "../lib/legalAcceptanceHydrate";
 
 import type { User, Session } from "@supabase/supabase-js";
 import { clearAllOAuthSessionLocks, isOAuthCallbackInProgress, isOauthProcessingLocked } from "../lib/oauthCallbackLock";
@@ -50,6 +57,7 @@ import {
   logOAuthSessionReceived,
   logOAuthUserReceived,
 } from "../lib/oauthSessionRecoveryDiag";
+import { isPasswordRecoveryFlowActive, markPasswordRecoveryFlowActive } from "../lib/passwordRecoveryDeepLink";
 
 export type Profile = {
   id: string;
@@ -61,6 +69,8 @@ export type Profile = {
   intent?: string | null;
   accepted_terms_at?: string | null;
   accepted_privacy_at?: string | null;
+  accepted_terms_version?: string | null;
+  accepted_privacy_version?: string | null;
   portrait_url?: string | null;
   fullbody_url?: string | null;
   main_photo_url?: string | null;
@@ -117,6 +127,9 @@ type AuthState = {
   signOut: (options?: { scope?: "global" | "local" | "others" }) => Promise<void>;
   retryProfileLoad: () => void;
   profileLoadError: string | null;
+  /** Session bootstrap timeout ou échec réseau avant toute session utilisable. */
+  authBootstrapFailed: boolean;
+  retryAuthBootstrap: () => void;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -294,14 +307,18 @@ async function enrichProfileOptionalFields(userId: string, base: Profile): Promi
       return base;
     }
     const [extra, adapted] = raced;
-    const merged = { ...base };
+    const patch: Record<string, unknown> = {};
     if (extra && typeof extra === "object") {
-      Object.assign(merged, extra);
+      Object.assign(patch, extra);
     }
     if (adapted && typeof adapted === "object") {
-      Object.assign(merged, adapted);
+      Object.assign(patch, adapted);
     }
-    return merged;
+    const merged = mergeAuthProfileRow(
+      base as unknown as Record<string, unknown>,
+      { ...(base as unknown as Record<string, unknown>), ...patch },
+    );
+    return profileRowToProfile(merged as AppProfile);
   } catch (e) {
     console.warn("[AuthContext] enrichProfileOptionalFields error — skipped", e);
     return base;
@@ -363,6 +380,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const sessionRef = useRef<Session | null>(null);
   const signOutInFlightRef = useRef(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [authBootstrapFailed, setAuthBootstrapFailed] = useState(false);
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
 
   useEffect(() => {
     console.log("[AuthContext] global loading", isLoading ? "start" : "end");
@@ -371,6 +390,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     profileRef.current = profile;
   }, [profile]);
+
+  useEffect(() => {
+    return subscribeLegalResumeDebug((phase) => {
+      if (phase === "background") {
+        captureLegalResumeProfileBefore(
+          profileRef.current as Record<string, unknown> | null,
+          "AuthContext.background",
+        );
+        return;
+      }
+      logLegalResumeProfileAfter(
+        profileRef.current as Record<string, unknown> | null,
+        "AuthContext.foreground",
+      );
+    });
+  }, []);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -383,7 +418,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       lastLoadedUserIdRef.current = null;
       return;
     }
+    if (!userId) return;
     if (fetchProfileInFlightRef.current) return;
+    const hasCachedProfile =
+      lastLoadedUserIdRef.current === userId && profileRef.current?.id === userId;
+    if (hasCachedProfile) {
+      if (import.meta.env.DEV) {
+        console.log("[AuthContext] loadProfile skipped — profil déjà en cache", {
+          userId: userId.slice(0, 8),
+        });
+      }
+      setProfileBootstrapSettled(true);
+      setIsProfileLoading(false);
+      return;
+    }
 
     fetchProfileInFlightRef.current = true;
     const gen = ++profileLoadGenRef.current;
@@ -398,14 +446,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (fast?.id) {
           setProfileLoadError(null);
           lastLoadedUserIdRef.current = fast.id;
-          setProfile((prev) =>
-            profileRowToProfile(
-              mergeAuthProfileRow(
-                prev as Record<string, unknown> | null,
-                fast as unknown as Record<string, unknown>,
-              ) as AppProfile,
-            ),
+          const hydratedRow = await hydrateLegalAcceptanceFromDbIfMissing(
+            userId,
+            fast as unknown as Record<string, unknown>,
+            "loadProfile_committed",
           );
+          setProfile((prev) => {
+            const merged = mergeAuthProfileRow(
+              prev as Record<string, unknown> | null,
+              hydratedRow,
+            );
+            logLegalProfileMutation({
+              source: "loadProfile_committed",
+              userId,
+              before: prev as Record<string, unknown> | null,
+              after: merged,
+            });
+            return profileRowToProfile(merged as AppProfile);
+          });
           console.error("[SELF_PROFILE_AUDIT] loadProfile_committed", {
             auth_user_id: userId,
             fetched_profile_id: fast.id,
@@ -429,14 +487,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             void enrichProfileOptionalFields(userId, fast)
               .then((enriched) => {
                 if (gen !== profileLoadGenRef.current) return;
-                setProfile((prev) =>
-                  profileRowToProfile(
-                    mergeAuthProfileRow(
-                      prev as Record<string, unknown> | null,
-                      enriched as unknown as Record<string, unknown>,
-                    ) as AppProfile,
-                  ),
-                );
+                setProfile((prev) => {
+                  const merged = mergeAuthProfileRow(
+                    prev as Record<string, unknown> | null,
+                    enriched as unknown as Record<string, unknown>,
+                  );
+                  logLegalProfileMutation({
+                    source: "enrichProfileOptionalFields",
+                    userId,
+                    before: prev as Record<string, unknown> | null,
+                    after: merged,
+                  });
+                  return profileRowToProfile(merged as AppProfile);
+                });
               })
               .catch(() => undefined);
           }, 5_000);
@@ -463,12 +526,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     flushSync(() => {
       setProfile((prev) => {
         if (!prev?.id || prev.id !== normalized.id) {
+          logLegalProfileMutation({
+            source: "commitProfileRow.replace",
+            userId: normalized.id ?? null,
+            before: prev as Record<string, unknown> | null,
+            after: normalized as Record<string, unknown>,
+          });
           return normalized;
         }
         const merged = mergeProfileScreenRowPreservingPhotos(
           prev as Record<string, unknown>,
           normalized as Record<string, unknown>,
         );
+        logLegalProfileMutation({
+          source: "commitProfileRow.merge",
+          userId: normalized.id ?? null,
+          before: prev as Record<string, unknown>,
+          after: merged,
+        });
         return profileRowToProfile(merged as AppProfile);
       });
     });
@@ -483,7 +558,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return null;
     }
     fetchProfileInFlightRef.current = true;
-    setProfileBootstrapSettled(false);
+    if (!profileRef.current?.id) {
+      setProfileBootstrapSettled(false);
+    }
     setIsProfileLoading(true);
     try {
       const p = await fetchProfileFastWithTimeout(user.id);
@@ -491,15 +568,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         lastLoadedUserIdRef.current = p.id;
       }
       if (p) {
+        const hydratedRow = await hydrateLegalAcceptanceFromDbIfMissing(
+          user.id,
+          p as unknown as Record<string, unknown>,
+          "refetchProfile",
+        );
         flushSync(() => {
-          setProfile((prev) =>
-            profileRowToProfile(
-              mergeAuthProfileRow(
-                prev as Record<string, unknown> | null,
-                p as unknown as Record<string, unknown>,
-              ) as AppProfile,
-            ),
-          );
+          setProfile((prev) => {
+            const merged = mergeAuthProfileRow(
+              prev as Record<string, unknown> | null,
+              hydratedRow,
+            );
+            logLegalProfileMutation({
+              source: "refetchProfile",
+              userId: user.id,
+              before: prev as Record<string, unknown> | null,
+              after: merged,
+            });
+            return profileRowToProfile(merged as AppProfile);
+          });
         });
       } else if (import.meta.env.DEV) {
         console.log("[PROFILE_CORE_LOAD_FAILED]", {
@@ -632,7 +719,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const raced = await raceWithTimeout(supabase.auth.getSession(), sessionTimeoutMs);
         if (!mounted) return;
         if (raced === "timeout") {
-          console.warn("[AuthContext] getSession timeout", AUTH_BOOTSTRAP_MAX_MS);
+          console.warn("[AuthContext] getSession timeout", sessionTimeoutMs);
+          if (!sessionRef.current?.user?.id) {
+            setAuthBootstrapFailed(true);
+            setError("auth_bootstrap_timeout");
+          }
           return;
         }
         const { data, error: sessionError } = raced;
@@ -663,6 +754,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
         setSession(data.session);
         setUser(data.session?.user ?? null);
+        setAuthBootstrapFailed(false);
       } finally {
         if (mounted) {
           setIsLoading(false);
@@ -686,6 +778,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
       console.log("[AuthContext] state change", formatAuthStateChangeLog(event, nextSession));
       if (!mounted) return;
+
+      if (event === "PASSWORD_RECOVERY" || isPasswordRecoveryFlowActive()) {
+        console.log("[PASSWORD_RECOVERY] auth event =", event);
+        if (event === "PASSWORD_RECOVERY") {
+          markPasswordRecoveryFlowActive(true);
+          console.log("[PASSWORD_RECOVERY] recovery detected = true (auth event)");
+        }
+        console.log("[AuthContext] PASSWORD_RECOVERY — skip post-login routing");
+        sessionRef.current = nextSession;
+        setSession(nextSession);
+        setUser(nextSession?.user ?? null);
+        setError(null);
+        setIsLoading(false);
+        setIsAuthInitialized(true);
+        return;
+      }
 
       if (isOauthProcessingLocked() && !nextSession?.user?.id) {
         console.log("[AuthContext] ignore null session during oauth lock", event);
@@ -779,6 +887,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(bootstrapSafetyTimer);
       subscription.unsubscribe();
     };
+  }, [bootstrapAttempt]);
+
+  const retryAuthBootstrap = useCallback(() => {
+    setAuthBootstrapFailed(false);
+    setError(null);
+    setIsLoading(true);
+    setIsAuthInitialized(false);
+    setBootstrapAttempt((n) => n + 1);
   }, []);
 
   useEffect(() => {
@@ -787,6 +903,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       lastLoadedUserIdRef.current = null;
       setIsProfileLoading(false);
       setProfile(null);
+      return;
+    }
+
+    if (isPasswordRecoveryFlowActive()) {
+      setIsProfileLoading(false);
       return;
     }
 
@@ -871,6 +992,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, [profile, isProfileComplete]);
 
+  const bootSessionReadyLoggedRef = useRef(false);
+  useEffect(() => {
+    if (!isAuthInitialized || isLoading) return;
+    if (bootSessionReadyLoggedRef.current) return;
+    bootSessionReadyLoggedRef.current = true;
+    console.log("BOOT_SESSION_READY", {
+      hasUser: Boolean(session?.user?.id),
+      userId: session?.user?.id?.slice(0, 8) ?? null,
+    });
+  }, [isAuthInitialized, isLoading, session?.user?.id]);
+
   const value: AuthState = {
     user,
     session,
@@ -890,6 +1022,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signOut,
     retryProfileLoad,
     profileLoadError,
+    authBootstrapFailed,
+    retryAuthBootstrap,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
