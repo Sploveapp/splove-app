@@ -33,6 +33,8 @@ import { BootSplashGate } from "./components/BootSplashGate";
 import { PostOAuthSplashGate } from "./components/PostOAuthSplashGate";
 import { isOauthProcessingLocked } from "./lib/oauthCallbackLock";
 import { isNativeCapacitorApp } from "./lib/authRedirect";
+import { isWebPasswordRecoveryBridgePage } from "./lib/passwordRecoveryWebBridge";
+import ResetPasswordWebBridge from "./pages/ResetPasswordWebBridge";
 import OAuthGoogleStart from "./pages/OAuthGoogleStart";
 import { OAUTH_GOOGLE_START_PATH } from "./lib/oauthGoogleStartUrl";
 import { PushNotificationsBridge } from "./components/PushNotificationsBridge";
@@ -96,7 +98,11 @@ function App() {
     }
     return <AppRouteRedirectFallback />;
   }
-  /** Recovery URL : bootstrapApp.tsx établit la session avant le render — ne pas stripper les tokens ici. */
+  /** Pont HTTPS email → splove:// : ne pas charger HashRouter ni consommer le token. */
+  if (!native && isWebPasswordRecoveryBridgePage()) {
+    return <ResetPasswordWebBridge />;
+  }
+  /** Recovery URL native : bootstrapApp.tsx établit la session avant le render. */
 
   return (
     <HashRouter>

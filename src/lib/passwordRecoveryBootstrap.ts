@@ -1,15 +1,14 @@
+import { App } from "@capacitor/app";
 import { supabase } from "./supabase";
 import { getPublicAppOrigin, isNativeCapacitorApp } from "./authRedirect";
 import {
   handlePasswordRecoveryDeepLink,
   isPasswordRecoveryDeepLinkActionable,
   isPasswordRecoveryFlowActive,
-  markPasswordRecoveryFlowActive,
+  wasPasswordRecoveryDeepLinkHandled,
 } from "./passwordRecoveryDeepLink";
-import {
-  establishSupabaseSessionFromOAuthCallbackUrl,
-  parseCallbackAuthType,
-} from "./oauthCallbackParams";
+import { isPasswordRecoveryErrorUrl, parsePasswordRecoveryUrl } from "./passwordRecoveryVerifyOtp";
+import { isWebPasswordRecoveryBridgePage } from "./passwordRecoveryWebBridge";
 
 let bootstrapPromise: Promise<boolean> | null = null;
 
@@ -51,6 +50,11 @@ export function urlIndicatesPasswordRecovery(url?: string): boolean {
   if (/type=recovery/.test(combined)) return true;
   if (/token_hash=/.test(combined)) return true;
   if (/#\/reset-password/.test(combined)) return true;
+  if (/error_code=otp_expired/.test(combined)) return true;
+
+  const recoveryParams = parsePasswordRecoveryUrl(href);
+  if (recoveryParams.tokenHash) return true;
+  if (isPasswordRecoveryErrorUrl(href)) return true;
 
   const hasAuthPayload =
     /access_token=/.test(combined) ||
@@ -63,12 +67,10 @@ export function urlIndicatesPasswordRecovery(url?: string): boolean {
     return true;
   }
 
-  /** PKCE / implicit à la racine du site (Site URL Supabase sans hash route). */
   if (pathname === "/" || pathname === "" || pathname.endsWith("/index.html")) {
     if (!/^#\/auth\/callback/i.test(hash)) return true;
   }
 
-  /** Hash Supabase brut (#access_token=…) sans route HashRouter — recovery email web. */
   if (hash && /^#(access_token|code)=/i.test(hash)) return true;
 
   return false;
@@ -86,8 +88,43 @@ function scrubToResetPasswordRoute(): void {
   window.history.replaceState(null, "", `${base}${target}`);
 }
 
+async function processRecoveryUrl(incoming: string): Promise<boolean> {
+  if (wasPasswordRecoveryDeepLinkHandled()) {
+    if (!/^#\/reset-password/.test(window.location.hash)) {
+      scrubToResetPasswordRoute();
+    }
+    console.log("[PASSWORD_RECOVERY] showing reset screen = true (already handled)");
+    return true;
+  }
+
+  if (
+    isPasswordRecoveryDeepLinkActionable(incoming, { nativeOAuthProviderActive: false }) ||
+    isPasswordRecoveryErrorUrl(incoming) ||
+    urlIndicatesPasswordRecovery(incoming)
+  ) {
+    console.log("[PASSWORD_RECOVERY] recovery detected = true");
+    return handlePasswordRecoveryDeepLink(incoming);
+  }
+
+  return false;
+}
+
+/** Cold start natif : splove://… via App.getLaunchUrl (pas dans window.location). */
+export async function bootstrapPasswordRecoveryFromLaunchUrl(): Promise<boolean> {
+  if (!isNativeCapacitorApp()) return false;
+  try {
+    const launch = await App.getLaunchUrl();
+    const url = launch?.url?.trim() ?? "";
+    if (!url) return false;
+    console.log("[PASSWORD_RECOVERY] launch URL =", url.slice(0, 512));
+    return processRecoveryUrl(url);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Au boot : inspecte l’URL + session, établit la session recovery si besoin, force /reset-password.
+ * Au boot : inspecte l’URL + session, verifyOtp si token_hash, force /reset-password.
  * Idempotent — safe avant le montage React.
  */
 export async function bootstrapPasswordRecoveryFromUrl(): Promise<boolean> {
@@ -95,6 +132,11 @@ export async function bootstrapPasswordRecoveryFromUrl(): Promise<boolean> {
 
   bootstrapPromise = (async () => {
     if (typeof window === "undefined") return false;
+
+    if (isWebPasswordRecoveryBridgePage()) {
+      console.log("[PASSWORD_RECOVERY] web bridge page — skip verifyOtp (native only)");
+      return false;
+    }
 
     const incoming = bootIncomingHref || window.location.href;
     console.log("[PASSWORD_RECOVERY] incoming URL =", incoming);
@@ -108,51 +150,21 @@ export async function bootstrapPasswordRecoveryFromUrl(): Promise<boolean> {
       return true;
     }
 
-    const looksLikeRecovery =
-      urlIndicatesPasswordRecovery(incoming) ||
-      parseCallbackAuthType(incoming) === "recovery";
-    if (!looksLikeRecovery && !isPasswordRecoveryDeepLinkActionable(incoming)) {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user?.id && isPasswordRecoveryFlowActive()) {
-        scrubToResetPasswordRoute();
-        console.log("[PASSWORD_RECOVERY] showing reset screen = true (session active)");
-        return true;
-      }
-      console.log("[PASSWORD_RECOVERY] recovery detected = false");
-      return false;
+    const fromWindow = await processRecoveryUrl(incoming);
+    if (fromWindow) return fromWindow;
+
+    const fromLaunch = await bootstrapPasswordRecoveryFromLaunchUrl();
+    if (fromLaunch) return fromLaunch;
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user?.id && isPasswordRecoveryFlowActive()) {
+      scrubToResetPasswordRoute();
+      console.log("[PASSWORD_RECOVERY] showing reset screen = true (session active)");
+      return true;
     }
 
-    console.log("[PASSWORD_RECOVERY] recovery detected = true");
-    markPasswordRecoveryFlowActive(true);
-
-    if (
-      isNativeCapacitorApp() &&
-      isPasswordRecoveryDeepLinkActionable(incoming, { nativeOAuthProviderActive: false })
-    ) {
-      const handled = await handlePasswordRecoveryDeepLink(incoming);
-      console.log("[PASSWORD_RECOVERY] showing reset screen =", handled);
-      return handled;
-    }
-
-    const authType = parseCallbackAuthType(incoming);
-    console.log("[PASSWORD_RECOVERY] auth event = (pre-session)", { authType });
-
-    const outcome = await establishSupabaseSessionFromOAuthCallbackUrl(incoming);
-    console.log("[PASSWORD_RECOVERY] session establish", outcome);
-
-    if (!outcome.ok) {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.user?.id) {
-        console.warn("[PASSWORD_RECOVERY] session missing after establish");
-        markPasswordRecoveryFlowActive(false);
-        return false;
-      }
-      console.log("[PASSWORD_RECOVERY] session present via detectSessionInUrl fallback");
-    }
-
-    scrubToResetPasswordRoute();
-    console.log("[PASSWORD_RECOVERY] showing reset screen = true");
-    return true;
+    console.log("[PASSWORD_RECOVERY] recovery detected = false");
+    return false;
   })();
 
   return bootstrapPromise;

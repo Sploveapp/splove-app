@@ -4,7 +4,11 @@ import { supabase } from "../lib/supabase";
 import { GlobalHeader } from "../components/GlobalHeader";
 import { KeyboardAwareScrollShell } from "../components/KeyboardAwareScrollShell";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
-import { markPasswordRecoveryFlowActive } from "../lib/passwordRecoveryDeepLink";
+import {
+  getPasswordRecoveryError,
+  markPasswordRecoveryFlowActive,
+  setPasswordRecoveryError,
+} from "../lib/passwordRecoveryDeepLink";
 
 export default function ResetPassword() {
   const navigate = useNavigate();
@@ -12,13 +16,23 @@ export default function ResetPassword() {
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [sessionReady, setSessionReady] = useState<boolean | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(() => getPasswordRecoveryError());
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
   useEffect(() => {
     markPasswordRecoveryFlowActive(true);
+    setRecoveryError(getPasswordRecoveryError());
+
+    if (getPasswordRecoveryError()) {
+      setSessionReady(false);
+      return;
+    }
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSessionReady(!!session);
+      if (!session) {
+        setRecoveryError((prev) => prev ?? "Ce lien de réinitialisation n'est plus valide.");
+      }
     });
 
     const {
@@ -26,6 +40,10 @@ export default function ResetPassword() {
     } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN" || event === "INITIAL_SESSION") {
         setSessionReady(!!session);
+        if (session) {
+          setRecoveryError(null);
+          setPasswordRecoveryError(null);
+        }
       }
     });
 
@@ -50,6 +68,7 @@ export default function ResetPassword() {
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
       markPasswordRecoveryFlowActive(false);
+      setPasswordRecoveryError(null);
       await supabase.auth.signOut();
       setMessage({
         type: "success",
@@ -67,6 +86,8 @@ export default function ResetPassword() {
       setLoading(false);
     }
   }
+
+  const linkInvalid = Boolean(recoveryError) || sessionReady === false;
 
   return (
     <div
@@ -93,116 +114,143 @@ export default function ResetPassword() {
             boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
           }}
         >
-          <h1
-            style={{
-              margin: "0 0 8px 0",
-              fontSize: "20px",
-              fontWeight: 700,
-              color: "#0f172a",
-              textAlign: "center",
-            }}
-          >
-            Nouveau mot de passe
-          </h1>
-          <p style={{ margin: "0 0 24px 0", fontSize: "14px", color: "#64748b", textAlign: "center", lineHeight: 1.5 }}>
-            Choisissez un mot de passe sécurisé pour votre compte.
-          </p>
-
-          {sessionReady === false && (
-            <p style={{ margin: "0 0 16px 0", fontSize: "14px", color: "#dc2626", lineHeight: 1.4 }}>
-              Lien invalide ou expiré. Demandez un nouveau lien depuis la page mot de passe oublié.
-            </p>
-          )}
-
-          {sessionReady !== false && (
-            <form onSubmit={(e) => void handleSubmit(e)} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-              <input
-                type="password"
-                placeholder="Nouveau mot de passe"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={6}
-                autoComplete="new-password"
+          {linkInvalid ? (
+            <>
+              <h1
                 style={{
-                  padding: "14px 16px",
-                  borderRadius: "12px",
-                  border: "1px solid #2A2A2E",
-                  fontSize: "16px",
-                  outline: "none",
+                  margin: "0 0 8px 0",
+                  fontSize: "20px",
+                  fontWeight: 700,
+                  color: "#0f172a",
+                  textAlign: "center",
                 }}
-              />
-              <input
-                type="password"
-                placeholder="Confirmer le mot de passe"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                required
-                minLength={6}
-                autoComplete="new-password"
+              >
+                Lien expiré
+              </h1>
+              <p
                 style={{
-                  padding: "14px 16px",
-                  borderRadius: "12px",
-                  border: "1px solid #2A2A2E",
-                  fontSize: "16px",
-                  outline: "none",
+                  margin: "0 0 24px 0",
+                  fontSize: "14px",
+                  color: "#dc2626",
+                  textAlign: "center",
+                  lineHeight: 1.5,
                 }}
-              />
-              {message && (
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: "14px",
-                    color: message.type === "error" ? "#dc2626" : "#059669",
-                  }}
-                >
-                  {message.text}
-                </p>
-              )}
-              <button
-                type="submit"
-                disabled={loading || sessionReady === null}
+              >
+                {recoveryError ?? "Ce lien de réinitialisation n'est plus valide."}
+              </p>
+              <Link
+                to="/forgot-password"
                 style={{
+                  display: "block",
                   padding: "14px",
                   borderRadius: "12px",
-                  border: "none",
                   background: BRAND_BG,
                   color: TEXT_ON_BRAND,
                   fontWeight: 600,
                   fontSize: "16px",
-                  cursor: loading || sessionReady === null ? "not-allowed" : "pointer",
-                  opacity: loading || sessionReady === null ? 0.8 : 1,
+                  textAlign: "center",
+                  textDecoration: "none",
+                }}
+                onClick={() => {
+                  markPasswordRecoveryFlowActive(false);
+                  setPasswordRecoveryError(null);
                 }}
               >
-                {loading ? "Chargement…" : "Valider le nouveau mot de passe"}
-              </button>
-            </form>
-          )}
+                Demander un nouveau lien
+              </Link>
+            </>
+          ) : (
+            <>
+              <h1
+                style={{
+                  margin: "0 0 8px 0",
+                  fontSize: "20px",
+                  fontWeight: 700,
+                  color: "#0f172a",
+                  textAlign: "center",
+                }}
+              >
+                Nouveau mot de passe
+              </h1>
+              <p
+                style={{
+                  margin: "0 0 24px 0",
+                  fontSize: "14px",
+                  color: "#64748b",
+                  textAlign: "center",
+                  lineHeight: 1.5,
+                }}
+              >
+                Choisissez un mot de passe sécurisé pour votre compte.
+              </p>
 
-          <Link
-            to="/forgot-password"
-            style={{
-              display: "block",
-              marginTop: "20px",
-              textAlign: "center",
-              fontSize: "14px",
-              color: "#64748b",
-            }}
-          >
-            Demander un nouveau lien
-          </Link>
-          <Link
-            to="/auth"
-            style={{
-              display: "block",
-              marginTop: "8px",
-              textAlign: "center",
-              fontSize: "14px",
-              color: "#64748b",
-            }}
-          >
-            Retour à la connexion
-          </Link>
+              <form
+                onSubmit={(e) => void handleSubmit(e)}
+                style={{ display: "flex", flexDirection: "column", gap: "16px" }}
+              >
+                <input
+                  type="password"
+                  placeholder="Nouveau mot de passe"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
+                  autoComplete="new-password"
+                  style={{
+                    padding: "14px 16px",
+                    borderRadius: "12px",
+                    border: "1px solid #2A2A2E",
+                    fontSize: "16px",
+                    outline: "none",
+                  }}
+                />
+                <input
+                  type="password"
+                  placeholder="Confirmer le nouveau mot de passe"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  required
+                  minLength={6}
+                  autoComplete="new-password"
+                  style={{
+                    padding: "14px 16px",
+                    borderRadius: "12px",
+                    border: "1px solid #2A2A2E",
+                    fontSize: "16px",
+                    outline: "none",
+                  }}
+                />
+                {message && (
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: "14px",
+                      color: message.type === "error" ? "#dc2626" : "#059669",
+                    }}
+                  >
+                    {message.text}
+                  </p>
+                )}
+                <button
+                  type="submit"
+                  disabled={loading || sessionReady === null}
+                  style={{
+                    padding: "14px",
+                    borderRadius: "12px",
+                    border: "none",
+                    background: BRAND_BG,
+                    color: TEXT_ON_BRAND,
+                    fontWeight: 600,
+                    fontSize: "16px",
+                    cursor: loading || sessionReady === null ? "not-allowed" : "pointer",
+                    opacity: loading || sessionReady === null ? 0.8 : 1,
+                  }}
+                >
+                  {loading ? "Chargement…" : "Valider le nouveau mot de passe"}
+                </button>
+              </form>
+            </>
+          )}
         </div>
       </KeyboardAwareScrollShell>
     </div>

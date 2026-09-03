@@ -5,6 +5,10 @@ import { isOauthProcessingLocked } from "./oauthCallbackLock";
 export const NATIVE_OAUTH_SCHEME = "splove";
 /** Deep link OAuth natif — host `auth`, path `/callback` (pas de localhost). */
 export const NATIVE_OAUTH_CALLBACK = `${NATIVE_OAUTH_SCHEME}://auth/callback`;
+/** Deep link récupération mot de passe natif — distinct du callback OAuth. */
+export const NATIVE_PASSWORD_RECOVERY_CALLBACK = `${NATIVE_OAUTH_SCHEME}://auth/recovery`;
+/** Deep link reset password via token_hash + verifyOtp (parcours principal iOS). */
+export const NATIVE_PASSWORD_RESET_CALLBACK = `${NATIVE_OAUTH_SCHEME}://auth/reset-password`;
 /** Ancien deep link — conservé pour compatibilité Supabase / builds précédents. */
 export const NATIVE_OAUTH_CALLBACK_LEGACY = `${NATIVE_OAUTH_SCHEME}://login-callback`;
 
@@ -15,6 +19,35 @@ export function isGoogleOAuthNativePlatform(): boolean {
   if (platform === "ios" || platform === "android") return true;
   if (Capacitor.isNativePlatform()) return true;
   return isNativeCapacitorApp();
+}
+
+/** True si l’URL est splove://auth/reset-password (token_hash recovery). */
+export function isNativePasswordResetUrl(url: string | null | undefined): boolean {
+  if (!url?.trim()) return false;
+  const trimmed = url.trim();
+  if (trimmed.startsWith(NATIVE_PASSWORD_RESET_CALLBACK)) return true;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "splove:") return false;
+    return parsed.hostname === "auth" && /^\/reset-password\/?$/i.test(parsed.pathname);
+  } catch {
+    return /splove:\/\/auth\/reset-password/i.test(trimmed);
+  }
+}
+
+/** True si l’URL est un retour récupération mot de passe natif (splove://auth/recovery). */
+export function isNativePasswordRecoveryUrl(url: string | null | undefined): boolean {
+  if (!url?.trim()) return false;
+  const trimmed = url.trim();
+  if (isNativePasswordResetUrl(trimmed)) return true;
+  if (trimmed.startsWith(NATIVE_PASSWORD_RECOVERY_CALLBACK)) return true;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "splove:") return false;
+    return parsed.hostname === "auth" && /^\/recovery\/?$/i.test(parsed.pathname);
+  } catch {
+    return /splove:\/\/auth\/recovery/i.test(trimmed);
+  }
 }
 
 /** True si l’URL est un retour OAuth natif (splove://auth/callback ou legacy login-callback). */
@@ -94,9 +127,24 @@ export function oauthRedirectUrl(): string {
   return `${window.location.origin}/auth/callback`;
 }
 
-/** Lien dans l’email « mot de passe oublié ». */
+/** Origine web publique (email recovery → Safari). Sur natif : env ou prod Render. */
+export function getPublicAppOrigin(): string {
+  const fromEnv = import.meta.env.VITE_PUBLIC_APP_URL?.trim();
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  if (typeof window !== "undefined" && !isNativeCapacitorApp()) {
+    return window.location.origin.replace(/\/$/, "");
+  }
+  return "https://splove-app.onrender.com";
+}
+
+/** URL HTTPS pont email → app native (Gmail / Safari). */
+export function passwordRecoveryHttpsBridgeUrl(): string {
+  return `${getPublicAppOrigin()}/reset-password`;
+}
+
+/** Lien HTTPS dans l’email Supabase — pont Safari → splove:// (verifyOtp dans l’app). */
 export function passwordRecoveryRedirectUrl(): string {
-  return `${authRedirectBase()}#/reset-password`;
+  return passwordRecoveryHttpsBridgeUrl();
 }
 
 /** HashRouter: route lives in `location.hash` (`#/auth/callback?...`); or full path for direct loads. */
