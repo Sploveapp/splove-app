@@ -19,8 +19,6 @@ import {
 } from "../lib/oauthLoadingScreenDiag";
 import { OAuthLoadingScreenOverlay } from "./SploveOAuthLoadingScreen";
 import { SplashScreen } from "./SplashScreen";
-import { AuthBootstrapError } from "./AuthBootstrapError";
-import { useTranslation } from "../i18n/useTranslation";
 import {
   isOAuthSessionVerifiedLatch,
   subscribeOAuthSessionVerifiedLatch,
@@ -43,7 +41,6 @@ function isBooting(auth: ReturnType<typeof useAuth>, oauthUxActive: boolean, isA
  */
 export function BootSplashGate({ children }: Props) {
   const auth = useAuth();
-  const { t } = useTranslation();
   const location = useLocation();
   const [minElapsed, setMinElapsed] = useState(false);
   const sessionLatch = useSyncExternalStore(
@@ -170,21 +167,6 @@ export function BootSplashGate({ children }: Props) {
 
   if (!showSplash) {
     return <>{children}</>;
-  }
-
-  if (auth.authBootstrapFailed && !auth.session?.user?.id && !oauthLoadingVisible) {
-    return (
-      <AuthBootstrapError
-        title={t("auth_bootstrap_error_title")}
-        message={t("auth_bootstrap_error_message")}
-        retryLabel={t("auth_bootstrap_retry")}
-        signOutLabel={t("auth_bootstrap_sign_out")}
-        onRetry={auth.retryAuthBootstrap}
-        onSignOut={() => {
-          void auth.signOut();
-        }}
-      />
-    );
   }
 
   return (

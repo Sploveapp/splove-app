@@ -6,7 +6,6 @@ import {
 } from "./authRedirect";
 import {
   establishSupabaseSessionFromOAuthCallbackUrl,
-  parseCallbackAuthType,
   parseOAuthCallbackParams,
 } from "./oauthCallbackParams";
 import { scrubOAuthTokensFromNativeWindow } from "./scrubOAuthUrlFromWindow";
@@ -95,7 +94,7 @@ export function isPasswordRecoveryDeepLinkActionable(
   if (isNativePasswordRecoveryUrl(trimmed)) return true;
 
   if (isNativeOAuthCallbackUrl(trimmed)) {
-    const authType = parseCallbackAuthType(trimmed);
+    const authType = parsePasswordRecoveryUrl(trimmed).type;
     if (authType === "recovery") return true;
     const params = parseOAuthCallbackParams(trimmed);
     if (params.hasCode && !params.hasAccessToken) return true;

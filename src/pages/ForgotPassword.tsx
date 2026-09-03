@@ -10,7 +10,6 @@ import {
   logPasswordRecoveryRedirectTo,
 } from "../lib/passwordRecoveryBootstrap";
 import { GlobalHeader } from "../components/GlobalHeader";
-import { KeyboardAwareScrollShell } from "../components/KeyboardAwareScrollShell";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import "./ForgotPasswordEmailInput.css";
 
@@ -127,7 +126,7 @@ export default function ForgotPassword() {
       }}
     >
       <GlobalHeader />
-      <KeyboardAwareScrollShell style={{ flex: 1, minHeight: 0, padding: "24px" }}>
+      <div style={{ flex: 1, minHeight: 0, padding: "24px" }}>
         <div
           className="splove-auth-light-card"
           style={{
@@ -232,7 +231,7 @@ export default function ForgotPassword() {
             Retour à la connexion
           </Link>
         </div>
-      </KeyboardAwareScrollShell>
+      </div>
     </div>
   );
 }

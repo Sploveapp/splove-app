@@ -21,11 +21,8 @@ import { useTranslation } from "../i18n/useTranslation";
 import { stashPendingReferralCodeFromSearch } from "../services/referral.service";
 import { clearOnboardingUiLocalCache } from "../lib/onboardingUiLocalCache";
 import { resolveBootRoute } from "../lib/bootRouteDecision";
-import { hasSeenAppIntro } from "../lib/appIntroStorage";
 import { isPasswordRecoveryFlowActive } from "../lib/passwordRecoveryDeepLink";
 import { SplashScreen } from "../components/SplashScreen";
-import { runSignInWithPasswordDiagnostics } from "../lib/supabaseAuthTransportDiagnostics";
-import { KeyboardAwareScrollShell } from "../components/KeyboardAwareScrollShell";
 function signupModeFromSearchParams(sp: URLSearchParams): boolean {
   return sp.get("signup") === "1" || sp.get("mode") === "signup";
 }
@@ -54,6 +51,10 @@ function AuthSportShell({ children }: { children: React.ReactNode }) {
         backgroundPosition: "center 38%",
         backgroundRepeat: "no-repeat",
         overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        padding: "20px 18px 36px",
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
       }}
     >
@@ -68,26 +69,7 @@ function AuthSportShell({ children }: { children: React.ReactNode }) {
             "linear-gradient(to bottom, rgba(0,0,0,0.35), rgba(0,0,0,0.65), rgba(0,0,0,0.82))",
         }}
       />
-      <KeyboardAwareScrollShell
-        style={{
-          position: "relative",
-          zIndex: 2,
-          padding:
-            "20px max(18px, env(safe-area-inset-right, 0px)) 36px max(18px, env(safe-area-inset-left, 0px))",
-        }}
-      >
-        <div
-          style={{
-            width: "100%",
-            maxWidth: "100%",
-            minWidth: 0,
-            overflowWrap: "anywhere",
-            wordBreak: "break-word",
-          }}
-        >
-          {children}
-        </div>
-      </KeyboardAwareScrollShell>
+      <div style={{ position: "relative", zIndex: 2, width: "100%" }}>{children}</div>
     </div>
   );
 }
@@ -270,10 +252,6 @@ export default function Auth() {
     return <Navigate to="/reset-password" replace />;
   }
 
-  if (!user && !hasSeenAppIntro()) {
-    return <Navigate to="/app-intro" replace />;
-  }
-
   if (user) {
     if (isPasswordRecoveryFlowActive()) {
       return <Navigate to="/reset-password" replace />;
@@ -436,11 +414,7 @@ export default function Auth() {
         }
         setMessage({ type: "success", text: t("auth_signup_success") });
       } else {
-        const { error } = (
-          await runSignInWithPasswordDiagnostics(email, () =>
-            supabase.auth.signInWithPassword({ email, password }),
-          )
-        );
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       }
     } catch (err: unknown) {

@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { GlobalHeader } from "../components/GlobalHeader";
-import { KeyboardAwareScrollShell } from "../components/KeyboardAwareScrollShell";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import {
   getPasswordRecoveryError,
@@ -101,7 +100,7 @@ export default function ResetPassword() {
       }}
     >
       <GlobalHeader />
-      <KeyboardAwareScrollShell style={{ flex: 1, minHeight: 0, padding: "24px" }}>
+      <div style={{ flex: 1, minHeight: 0, padding: "24px" }}>
         <div
           className="splove-auth-light-card"
           style={{
@@ -252,7 +251,7 @@ export default function ResetPassword() {
             </>
           )}
         </div>
-      </KeyboardAwareScrollShell>
+      </div>
     </div>
   );
 }

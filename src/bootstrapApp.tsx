@@ -16,22 +16,17 @@ import { isNativeCapacitorApp } from "./lib/authRedirect";
 import { initPushNotificationHandlersEarly } from "./lib/pushNotifications";
 import { initGoogleNativeSignIn } from "./lib/googleNativeSignIn";
 import { probeSupabaseAuthHealth } from "./lib/supabaseDiagnostics";
-import { probeSupabaseAuthTokenPostTransport } from "./lib/supabaseAuthTransportDiagnostics";
 import {
   isWebOAuthSplashRequested,
   restoreWebOAuthSplashFromStorage,
   shouldRestoreWebOAuthSplashFromStorage,
 } from "./lib/webOAuthSplash";
 import { showGoogleSignInOverlay } from "./lib/googleSignInOverlay";
-import { initViewportShell } from "./lib/viewportShell";
-import { installLegalResumeDebugListeners } from "./lib/legalResumeDebug";
 import { bootstrapPasswordRecoveryFromUrl } from "./lib/passwordRecoveryBootstrap";
 
 console.log("[main bootstrap]", "profile-tab-fix-v2");
 
-initViewportShell();
 initTheme();
-installLegalResumeDebugListeners();
 
 async function bootApp(): Promise<void> {
   const recoveryBoot = await bootstrapPasswordRecoveryFromUrl();
@@ -54,9 +49,6 @@ async function bootApp(): Promise<void> {
   if (isNativeCapacitorApp()) {
     void probeSupabaseAuthHealth().then((probe) => {
       console.log("[main] supabase health probe (native)", probe);
-    });
-    void probeSupabaseAuthTokenPostTransport().then((probe) => {
-      console.log("[main] supabase token POST transport probe (native)", probe);
     });
   }
 
