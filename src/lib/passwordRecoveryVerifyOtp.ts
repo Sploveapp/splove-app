@@ -17,6 +17,22 @@ function appendSearchParams(target: URLSearchParams, raw: string): void {
   });
 }
 
+/** Nettoie token_hash (espaces, retours ligne mail, etc.). */
+export function sanitizeRecoveryTokenHash(value: string | null): string | null {
+  if (value == null) return null;
+  let trimmed = value.trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") return null;
+  trimmed = trimmed.replace(/[\r\n\t ]+/g, "");
+  if (!trimmed) return null;
+  try {
+    trimmed = decodeURIComponent(trimmed);
+  } catch {
+    /* conserve la valeur brute si décodage impossible */
+  }
+  trimmed = trimmed.replace(/[\r\n\t ]+/g, "");
+  return trimmed || null;
+}
+
 /** Extrait token_hash, type, error depuis deep link ou URL web recovery. */
 export function parsePasswordRecoveryUrl(inputUrl: string): PasswordRecoveryUrlParams {
   const url = inputUrl.trim();
@@ -46,8 +62,8 @@ export function parsePasswordRecoveryUrl(inputUrl: string): PasswordRecoveryUrlP
   }
 
   return {
-    tokenHash: merged.get("token_hash"),
-    type: merged.get("type"),
+    tokenHash: sanitizeRecoveryTokenHash(merged.get("token_hash")),
+    type: merged.get("type")?.trim() ?? null,
     error: merged.get("error"),
     errorCode: merged.get("error_code"),
     errorDescription: merged.get("error_description"),
@@ -73,6 +89,16 @@ export function passwordRecoveryInvalidLinkMessage(params?: PasswordRecoveryUrlP
   return "Ce lien de réinitialisation n'est plus valide.";
 }
 
+function tokenHashPreview(tokenHash: string): string {
+  return tokenHash.length > 8 ? `${tokenHash.slice(0, 8)}…` : tokenHash;
+}
+
+/** Une seule invocation Supabase verifyOtp par token_hash (filet de sécurité). */
+const verifyOtpByToken = new Map<
+  string,
+  Promise<{ ok: boolean; error: string | null }>
+>();
+
 /**
  * Vérifie le token_hash côté client — ne consomme pas ConfirmationURL serveur avant l’ouverture app.
  */
@@ -80,27 +106,49 @@ export async function verifyPasswordRecoveryOtp(tokenHash: string): Promise<{
   ok: boolean;
   error: string | null;
 }> {
-  const preview = tokenHash.length > 8 ? `${tokenHash.slice(0, 8)}…` : tokenHash;
-  console.log("[PASSWORD_RECOVERY] incoming token hash =", preview);
-  console.log("[PASSWORD_RECOVERY] verifyOtp start");
+  const normalized = sanitizeRecoveryTokenHash(tokenHash);
+  if (!normalized) {
+    console.log("[PASSWORD_RECOVERY] verifyOtp error = missing token_hash");
+    return { ok: false, error: "missing token_hash" };
+  }
 
-  const { data, error } = await supabase.auth.verifyOtp({
-    token_hash: tokenHash,
-    type: "recovery",
-  });
+  const preview = tokenHashPreview(normalized);
+  const existing = verifyOtpByToken.get(normalized);
+  if (existing) {
+    console.log("[PASSWORD_RECOVERY] verifyOtp deduped — join in-flight", { token: preview });
+    return existing;
+  }
 
-  if (error) {
-    console.log("[PASSWORD_RECOVERY] verifyOtp error =", error.message, {
-      code: error.code ?? null,
+  const work = (async () => {
+    console.log("[PASSWORD_RECOVERY] token_hash detected =", preview);
+    console.log("[PASSWORD_RECOVERY] verifyOtp start", { token: preview });
+
+    const { data, error } = await supabase.auth.verifyOtp({
+      token_hash: normalized,
+      type: "recovery",
     });
-    return { ok: false, error: error.message };
-  }
 
-  const ok = Boolean(data.session?.user?.id);
-  if (ok) {
-    console.log("[PASSWORD_RECOVERY] verifyOtp success", { userId: data.session?.user?.id });
-  } else {
-    console.log("[PASSWORD_RECOVERY] verifyOtp error = no session returned");
-  }
-  return { ok, error: ok ? null : "verifyOtp returned no session" };
+    if (error) {
+      console.log("[PASSWORD_RECOVERY] verifyOtp error =", error.message, {
+        token: preview,
+        code: error.code ?? null,
+        status: error.status ?? null,
+      });
+      return { ok: false, error: error.message };
+    }
+
+    const ok = Boolean(data.session?.user?.id);
+    if (ok) {
+      console.log("[PASSWORD_RECOVERY] verifyOtp success", {
+        token: preview,
+        userId: data.session?.user?.id?.slice(0, 8) ?? null,
+      });
+    } else {
+      console.log("[PASSWORD_RECOVERY] verifyOtp error = no session returned", { token: preview });
+    }
+    return { ok, error: ok ? null : "verifyOtp returned no session" };
+  })();
+
+  verifyOtpByToken.set(normalized, work);
+  return work;
 }

@@ -7,6 +7,7 @@ import {
   isGoogleOAuthNativePlatform,
   isNativeCapacitorApp,
   isNativeOAuthCallbackUrl,
+  isNativePasswordRecoveryUrl,
   NATIVE_OAUTH_CALLBACK,
   oauthRedirectUrl,
 } from "./authRedirect";
@@ -41,6 +42,11 @@ import {
   resolveIosGoogleOAuthBrowserTarget,
 } from "./iosGoogleOAuthBrowserTarget";
 import { parseOAuthCallbackParams } from "./oauthCallbackParams";
+import {
+  handlePasswordRecoveryDeepLink,
+  isPasswordRecoveryDeepLinkActionable,
+} from "./passwordRecoveryDeepLink";
+import { isPasswordRecoveryErrorUrl } from "./passwordRecoveryVerifyOtp";
 import { hideIosGoogleOAuthConnectingOverlay } from "./iosGoogleOAuthDisplay";
 import { markOAuthBrowserOpen, resetOAuthBrowserOpenStateForTests } from "./oauthBrowserOpenState";
 import {
@@ -250,6 +256,16 @@ async function closeOAuthBrowserOnceOnCallback(): Promise<void> {
 function isNativeOAuthCallbackActionable(url: string): boolean {
   const trimmed = url.trim();
   if (!trimmed) return false;
+  if (
+    isPasswordRecoveryDeepLinkActionable(trimmed, {
+      nativeOAuthProviderActive: activeNativeOAuthProvider !== null,
+    })
+  ) {
+    return false;
+  }
+  if (isNativePasswordRecoveryUrl(trimmed)) {
+    return false;
+  }
   const params = parseOAuthCallbackParams(trimmed);
   const hasOAuthPayload =
     params.hasCode || params.hasAccessToken || oauthCallbackErrorFromUrl(trimmed).hasError;
@@ -300,6 +316,17 @@ async function handleNativeOAuthCallback(
   const trimmed = deepLinkUrl.trim();
   const callbackParams = parseOAuthCallbackParams(trimmed);
   const isAppleFlow = activeNativeOAuthProvider === "apple";
+
+  if (
+    activeNativeOAuthProvider === null &&
+    (isPasswordRecoveryDeepLinkActionable(trimmed, {
+      nativeOAuthProviderActive: false,
+    }) ||
+      isPasswordRecoveryErrorUrl(trimmed))
+  ) {
+    console.log("[PasswordRecovery] oauth_callback_bypass", { reason: "password_recovery" });
+    return handlePasswordRecoveryDeepLink(trimmed);
+  }
 
   const callbackError = oauthCallbackErrorFromUrl(trimmed);
   if (callbackError.hasError) {
@@ -941,6 +968,19 @@ let capacitorAuthBridgeReady = false;
 async function processAppUrlOpenCandidate(url: string): Promise<void> {
   const trimmed = url.trim();
   if (!trimmed) return;
+
+  if (
+    isPasswordRecoveryDeepLinkActionable(trimmed, {
+      nativeOAuthProviderActive: activeNativeOAuthProvider !== null,
+    }) ||
+    (isPasswordRecoveryErrorUrl(trimmed) && activeNativeOAuthProvider === null)
+  ) {
+    console.log("[PASSWORD_RECOVERY] app_url_open_recovery_skipped", {
+      url: trimmed.slice(0, 512),
+      reason: "recovery_listener_owns_verifyOtp",
+    });
+    return;
+  }
 
   logOAuthCallbackAppUrlOpen(trimmed);
 

@@ -12,24 +12,24 @@ const AUTO_OPEN_DELAY_MS = 400;
  * Aucun verifyOtp ici — le token est consommé uniquement dans l’app native.
  */
 export default function ResetPasswordWebBridge() {
-  const openedRef = useRef(false);
+  const autoOpenedRef = useRef(false);
   const { tokenHash, type, deepLink } = readWebBridgeRecoveryParams();
 
-  const openApp = useCallback(() => {
-    if (!deepLink || openedRef.current) return;
-    openedRef.current = true;
+  const triggerAutoOpen = useCallback(() => {
+    if (!deepLink || autoOpenedRef.current) return;
+    autoOpenedRef.current = true;
     console.log("[PASSWORD_RECOVERY] incoming token hash =", tokenHash?.slice(0, 8) ?? null);
-    console.log("[PASSWORD_RECOVERY] web bridge open app", { type });
+    console.log("[PASSWORD_RECOVERY] web bridge auto open", { type });
     openNativePasswordRecoveryApp(deepLink);
   }, [deepLink, tokenHash, type]);
 
   useEffect(() => {
     if (!deepLink) return;
     const timer = window.setTimeout(() => {
-      openApp();
+      triggerAutoOpen();
     }, AUTO_OPEN_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [deepLink, openApp]);
+  }, [deepLink, triggerAutoOpen]);
 
   if (!tokenHash || type !== "recovery" || !deepLink) {
     return (
@@ -99,8 +99,9 @@ export default function ResetPasswordWebBridge() {
         </p>
         <button
           type="button"
-          onClick={openApp}
+          onClick={() => openNativePasswordRecoveryApp(deepLink)}
           style={{
+            display: "block",
             width: "100%",
             padding: "14px",
             borderRadius: 12,
@@ -110,6 +111,8 @@ export default function ResetPasswordWebBridge() {
             fontWeight: 600,
             fontSize: 16,
             cursor: "pointer",
+            textDecoration: "none",
+            boxSizing: "border-box",
           }}
         >
           Ouvrir SPLove

@@ -11,6 +11,86 @@ import { isPasswordRecoveryErrorUrl, parsePasswordRecoveryUrl } from "./password
 import { isWebPasswordRecoveryBridgePage } from "./passwordRecoveryWebBridge";
 
 let bootstrapPromise: Promise<boolean> | null = null;
+let passwordRecoveryListenerReady = false;
+let pendingPasswordRecoveryUrl: string | null = null;
+
+export function getPendingPasswordRecoveryUrl(): string | null {
+  return pendingPasswordRecoveryUrl;
+}
+
+/**
+ * Écoute appUrlOpen le plus tôt possible — avant bootstrap OAuth/React.
+ * Indispensable quand l’app reprend depuis ForgotPassword (Safari → splove://).
+ */
+export function initPasswordRecoveryDeepLinkListener(): void {
+  if (passwordRecoveryListenerReady || !isNativeCapacitorApp()) return;
+  passwordRecoveryListenerReady = true;
+  console.log("[PASSWORD_RECOVERY] deep link listener init");
+
+  void App.addListener("appUrlOpen", (event) => {
+    const url = event.url?.trim() ?? "";
+    if (!url) return;
+    console.log("[PASSWORD_RECOVERY] appUrlOpen received =", url.slice(0, 512));
+    if (
+      !isPasswordRecoveryDeepLinkActionable(url, { nativeOAuthProviderActive: false }) &&
+      !isPasswordRecoveryErrorUrl(url)
+    ) {
+      return;
+    }
+    pendingPasswordRecoveryUrl = url;
+    void handlePasswordRecoveryDeepLink(url).then((handled) => {
+      if (handled && wasPasswordRecoveryDeepLinkHandled()) {
+        pendingPasswordRecoveryUrl = null;
+      }
+    });
+  });
+
+  void App.addListener("appStateChange", ({ isActive }) => {
+    if (!isActive) return;
+    console.log("[PASSWORD_RECOVERY] app foreground", {
+      flowActive: isPasswordRecoveryFlowActive(),
+      pending: Boolean(pendingPasswordRecoveryUrl),
+      handled: wasPasswordRecoveryDeepLinkHandled(),
+      hash: window.location.hash,
+    });
+    if (wasPasswordRecoveryDeepLinkHandled()) {
+      pendingPasswordRecoveryUrl = null;
+      if (isPasswordRecoveryFlowActive() && !/^#\/reset-password/.test(window.location.hash)) {
+        scrubToResetPasswordRoute();
+      }
+      window.dispatchEvent(new CustomEvent("splove:password-recovery:navigate"));
+      return;
+    }
+    if (pendingPasswordRecoveryUrl) {
+      void handlePasswordRecoveryDeepLink(pendingPasswordRecoveryUrl).then((handled) => {
+        if (handled && wasPasswordRecoveryDeepLinkHandled()) {
+          pendingPasswordRecoveryUrl = null;
+        }
+      });
+      return;
+    }
+    if (isPasswordRecoveryFlowActive()) {
+      if (!/^#\/reset-password/.test(window.location.hash)) {
+        scrubToResetPasswordRoute();
+      }
+      window.dispatchEvent(new CustomEvent("splove:password-recovery:navigate"));
+    }
+  });
+}
+
+export async function processPendingPasswordRecoveryDeepLink(): Promise<boolean> {
+  const url = pendingPasswordRecoveryUrl;
+  if (!url) return false;
+  if (wasPasswordRecoveryDeepLinkHandled()) {
+    pendingPasswordRecoveryUrl = null;
+    return true;
+  }
+  const handled = await handlePasswordRecoveryDeepLink(url);
+  if (handled && wasPasswordRecoveryDeepLinkHandled()) {
+    pendingPasswordRecoveryUrl = null;
+  }
+  return handled;
+}
 
 /** URL capturée au chargement du module — avant toute mutation HashRouter / redirect. */
 const bootIncomingHref =

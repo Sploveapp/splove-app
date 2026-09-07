@@ -13,6 +13,7 @@ import {
   isPasswordRecoveryErrorUrl,
   parsePasswordRecoveryUrl,
   passwordRecoveryInvalidLinkMessage,
+  sanitizeRecoveryTokenHash,
   verifyPasswordRecoveryOtp,
 } from "./passwordRecoveryVerifyOtp";
 
@@ -20,15 +21,56 @@ import {
 let passwordRecoveryFlowActive = false;
 let passwordRecoveryError: string | null = null;
 let passwordRecoveryDeepLinkHandled = false;
+/** token_hash déjà validé par verifyOtp durant cette session app. */
+let verifiedRecoveryTokenHash: string | null = null;
+/** Promesses en cours par token_hash — empêche double verifyOtp concurrent. */
+const recoveryHandlerByToken = new Map<string, Promise<boolean>>();
+const passwordRecoveryFlowListeners = new Set<() => void>();
+
+function tokenHashPreview(tokenHash: string): string {
+  return tokenHash.length > 8 ? `${tokenHash.slice(0, 8)}…` : tokenHash;
+}
+
+function replayVerifiedRecovery(tokenHash: string): boolean {
+  markPasswordRecoveryFlowActive(true);
+  setPasswordRecoveryError(null);
+  passwordRecoveryDeepLinkHandled = true;
+  navigateToResetPasswordRoute();
+  console.log("[PASSWORD_RECOVERY] verifyOtp skipped — token already verified", {
+    token: tokenHashPreview(tokenHash),
+  });
+  return true;
+}
+
+function notifyPasswordRecoveryFlowListeners(): void {
+  for (const listener of passwordRecoveryFlowListeners) {
+    listener();
+  }
+}
+
+export function subscribePasswordRecoveryFlow(listener: () => void): () => void {
+  passwordRecoveryFlowListeners.add(listener);
+  return () => {
+    passwordRecoveryFlowListeners.delete(listener);
+  };
+}
+
+export function getPasswordRecoveryFlowSnapshot(): boolean {
+  return passwordRecoveryFlowActive;
+}
 
 export function isPasswordRecoveryFlowActive(): boolean {
   return passwordRecoveryFlowActive;
 }
 
 export function markPasswordRecoveryFlowActive(active: boolean): void {
+  const changed = passwordRecoveryFlowActive !== active;
   passwordRecoveryFlowActive = active;
   if (!active) {
     passwordRecoveryError = null;
+  }
+  if (changed || active) {
+    notifyPasswordRecoveryFlowListeners();
   }
 }
 
@@ -45,10 +87,17 @@ export function wasPasswordRecoveryDeepLinkHandled(): boolean {
 }
 
 function navigateToResetPasswordRoute(): void {
+  notifyPasswordRecoveryFlowListeners();
   const hashTarget = "#/reset-password";
   if (window.location.hash !== hashTarget) {
     window.location.hash = hashTarget;
   }
+  window.dispatchEvent(new CustomEvent("splove:password-recovery:navigate"));
+}
+
+/** Navigation reset — utilisable hors React (appUrlOpen, retour foreground). */
+export function ensurePasswordRecoveryNavigation(): void {
+  navigateToResetPasswordRoute();
 }
 
 function recoveryUrlHasActionablePayload(url: string): boolean {
@@ -111,6 +160,7 @@ export function isPasswordRecoveryDeepLinkActionable(
 /**
  * token_hash + verifyOtp, ou erreur otp_expired → écran reset (pas login).
  * Fallback legacy : access_token / code via establishSupabaseSessionFromOAuthCallbackUrl.
+ * Idempotent par token_hash : un seul verifyOtp même si plusieurs appUrlOpen.
  */
 export async function handlePasswordRecoveryDeepLink(url: string): Promise<boolean> {
   const trimmed = url.trim();
@@ -121,20 +171,54 @@ export async function handlePasswordRecoveryDeepLink(url: string): Promise<boole
     return false;
   }
 
-  if (passwordRecoveryDeepLinkHandled && isPasswordRecoveryFlowActive()) {
+  const parsed = parsePasswordRecoveryUrl(trimmed);
+  const tokenHash = parsed.tokenHash ? sanitizeRecoveryTokenHash(parsed.tokenHash) : null;
+
+  if (tokenHash && verifiedRecoveryTokenHash === tokenHash) {
+    return replayVerifiedRecovery(tokenHash);
+  }
+
+  if (tokenHash) {
+    const inFlight = recoveryHandlerByToken.get(tokenHash);
+    if (inFlight) {
+      console.log("[PASSWORD_RECOVERY] handle deduped — join in-flight verifyOtp", {
+        token: tokenHashPreview(tokenHash),
+      });
+      return inFlight;
+    }
+  }
+
+  if (passwordRecoveryDeepLinkHandled && isPasswordRecoveryFlowActive() && !tokenHash) {
     navigateToResetPasswordRoute();
     console.log("[PASSWORD_RECOVERY] showing reset screen = true (already handled)");
     return true;
   }
 
-  const parsed = parsePasswordRecoveryUrl(trimmed);
-  console.log("[PasswordRecovery] deep_link_received", {
+  const work = executePasswordRecoveryDeepLink(trimmed, parsed, tokenHash);
+  if (tokenHash) {
+    recoveryHandlerByToken.set(tokenHash, work);
+    console.log("[PASSWORD_RECOVERY] verifyOtp scheduled — single handler", {
+      token: tokenHashPreview(tokenHash),
+    });
+  }
+  return work;
+}
+
+async function executePasswordRecoveryDeepLink(
+  trimmed: string,
+  parsed: ReturnType<typeof parsePasswordRecoveryUrl>,
+  tokenHash: string | null,
+): Promise<boolean> {
+  console.log("[PASSWORD_RECOVERY] deep link received", {
     urlLength: trimmed.length,
-    hasTokenHash: Boolean(parsed.tokenHash),
+    hasTokenHash: Boolean(tokenHash),
     errorCode: parsed.errorCode,
+    token: tokenHash ? tokenHashPreview(tokenHash) : null,
   });
 
   markPasswordRecoveryFlowActive(true);
+  navigateToResetPasswordRoute();
+  console.log("[PASSWORD_RECOVERY] showing reset screen = true (deep link received)");
 
   if (isPasswordRecoveryErrorUrl(trimmed)) {
     const message = passwordRecoveryInvalidLinkMessage(parsed);
@@ -146,7 +230,7 @@ export async function handlePasswordRecoveryDeepLink(url: string): Promise<boole
     return true;
   }
 
-  if (parsed.tokenHash) {
+  if (tokenHash) {
     if (parsed.type && parsed.type !== "recovery") {
       setPasswordRecoveryError("Ce lien de réinitialisation n'est plus valide.");
       passwordRecoveryDeepLinkHandled = true;
@@ -155,8 +239,16 @@ export async function handlePasswordRecoveryDeepLink(url: string): Promise<boole
       return true;
     }
 
-    const outcome = await verifyPasswordRecoveryOtp(parsed.tokenHash);
+    if (verifiedRecoveryTokenHash === tokenHash) {
+      return replayVerifiedRecovery(tokenHash);
+    }
+
+    const outcome = await verifyPasswordRecoveryOtp(tokenHash);
     if (!outcome.ok) {
+      // Ne pas écraser un succès obtenu entre-temps par un handler dédupliqué.
+      if (verifiedRecoveryTokenHash === tokenHash) {
+        return replayVerifiedRecovery(tokenHash);
+      }
       setPasswordRecoveryError(
         outcome.error?.toLowerCase().includes("expired") ||
           outcome.error?.toLowerCase().includes("invalid")
@@ -165,15 +257,20 @@ export async function handlePasswordRecoveryDeepLink(url: string): Promise<boole
       );
       passwordRecoveryDeepLinkHandled = true;
       navigateToResetPasswordRoute();
-      console.log("[PASSWORD_RECOVERY] showing reset screen = true (verifyOtp failed)");
+      console.log("[PASSWORD_RECOVERY] showing reset screen = true (verifyOtp failed)", {
+        token: tokenHashPreview(tokenHash),
+      });
       return true;
     }
 
+    verifiedRecoveryTokenHash = tokenHash;
     passwordRecoveryDeepLinkHandled = true;
     setPasswordRecoveryError(null);
     scrubOAuthTokensFromNativeWindow();
     navigateToResetPasswordRoute();
-    console.log("[PASSWORD_RECOVERY] showing reset screen = true");
+    console.log("[PASSWORD_RECOVERY] showing reset screen = true", {
+      token: tokenHashPreview(tokenHash),
+    });
     return true;
   }
 

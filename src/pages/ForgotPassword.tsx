@@ -13,15 +13,30 @@ import { GlobalHeader } from "../components/GlobalHeader";
 import { BRAND_BG, TEXT_ON_BRAND } from "../constants/theme";
 import "./ForgotPasswordEmailInput.css";
 
-function formatResetPasswordError(err: unknown): string {
+function formatForgotPasswordError(err: unknown): string {
+  let message = "";
   if (err instanceof Error && err.message.trim()) {
-    return err.message;
+    message = err.message;
+  } else if (err && typeof err === "object" && "message" in err) {
+    const raw = (err as { message?: unknown }).message;
+    if (typeof raw === "string" && raw.trim()) message = raw;
   }
-  if (err && typeof err === "object" && "message" in err) {
-    const message = (err as { message?: unknown }).message;
-    if (typeof message === "string" && message.trim()) return message;
+  if (!message) return "Une erreur s'est produite.";
+
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("only request this after") ||
+    lower.includes("security purposes") ||
+    lower.includes("rate limit") ||
+    lower.includes("too many requests") ||
+    lower.includes("over_email_send_rate_limit")
+  ) {
+    return "Pour des raisons de sécurité, vous devez attendre quelques instants avant de redemander un lien. Réessayez dans une minute.";
   }
-  return "Une erreur s'est produite.";
+  if (lower.includes("invalid email") || lower.includes("unable to validate email")) {
+    return "Adresse e-mail invalide.";
+  }
+  return message;
 }
 
 function logResetPasswordError(err: unknown): void {
@@ -52,6 +67,7 @@ export default function ForgotPassword() {
   const submitInFlightRef = useRef(false);
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
   const [message, setMessage] = useState<{ type: "error" | "success"; text: string } | null>(null);
 
   const syncEmailInputColors = useCallback(() => {
@@ -96,17 +112,15 @@ export default function ForgotPassword() {
       }
 
       console.log("[RESET] accepted:", true);
-      setMessage({
-        type: "success",
-        text: "E-mail envoyé. Consultez votre boîte mail pour choisir un nouveau mot de passe.",
-      });
+      setEmailSent(true);
+      setMessage(null);
     } catch (err: unknown) {
       console.log("[RESET] caught:", err);
       logResetPasswordError(err);
       console.log("[RESET] accepted:", false);
       setMessage({
         type: "error",
-        text: formatResetPasswordError(err),
+        text: formatForgotPasswordError(err),
       });
     } finally {
       submitInFlightRef.current = false;
@@ -139,6 +153,50 @@ export default function ForgotPassword() {
             boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
           }}
         >
+          {emailSent ? (
+            <>
+              <h1
+                style={{
+                  margin: "0 0 8px 0",
+                  fontSize: "20px",
+                  fontWeight: 700,
+                  color: "#0f172a",
+                  textAlign: "center",
+                }}
+              >
+                E-mail envoyé
+              </h1>
+              <p
+                style={{
+                  margin: "0 0 24px 0",
+                  fontSize: "14px",
+                  color: "#64748b",
+                  textAlign: "center",
+                  lineHeight: 1.5,
+                }}
+              >
+                Si un compte correspond à cette adresse, un lien de réinitialisation vient de vous être
+                envoyé. Consultez votre boîte mail.
+              </p>
+              <Link
+                to="/auth"
+                style={{
+                  display: "block",
+                  padding: "14px",
+                  borderRadius: "12px",
+                  background: BRAND_BG,
+                  color: TEXT_ON_BRAND,
+                  fontWeight: 600,
+                  fontSize: "16px",
+                  textAlign: "center",
+                  textDecoration: "none",
+                }}
+              >
+                Retour à la connexion
+              </Link>
+            </>
+          ) : (
+            <>
           <h1
             style={{
               margin: "0 0 8px 0",
@@ -230,6 +288,8 @@ export default function ForgotPassword() {
           >
             Retour à la connexion
           </Link>
+            </>
+          )}
         </div>
       </div>
     </div>

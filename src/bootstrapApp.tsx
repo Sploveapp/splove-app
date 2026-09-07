@@ -22,13 +22,17 @@ import {
   shouldRestoreWebOAuthSplashFromStorage,
 } from "./lib/webOAuthSplash";
 import { showGoogleSignInOverlay } from "./lib/googleSignInOverlay";
-import { bootstrapPasswordRecoveryFromUrl } from "./lib/passwordRecoveryBootstrap";
+import {
+  bootstrapPasswordRecoveryFromUrl,
+  initPasswordRecoveryDeepLinkListener,
+} from "./lib/passwordRecoveryBootstrap";
 
 console.log("[main bootstrap]", "profile-tab-fix-v2");
 
 initTheme();
 
 async function bootApp(): Promise<void> {
+  initPasswordRecoveryDeepLinkListener();
   const recoveryBoot = await bootstrapPasswordRecoveryFromUrl();
   console.log("[PASSWORD_RECOVERY] bootstrap complete =", recoveryBoot);
 
