@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { dispatchActivityProposalsRefresh, INBOX_REFRESH_EVENT } from "../constants";
 import { CHAT_MESSAGES_TABLE, logSupabaseTableError, supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
@@ -101,6 +101,7 @@ import {
 } from "../lib/chatFirstMessagePolicy";
 import { ReportModal } from "../components/ReportModal";
 import { VerifiedBadge } from "../components/VerifiedBadge";
+import { ChatSessionErrorScreen } from "../components/chat/ChatSessionErrorScreen";
 import { messageContainsDisallowedContent } from "../lib/chatMessagePolicy";
 import { moderateChatComposerText } from "../lib/chatComposerModeration";
 import {
@@ -1948,14 +1949,7 @@ export default function Chat() {
   }
 
   if (!conversationId) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col bg-app-bg p-6 font-sans">
-        <p className="text-sm text-red-600">{t("chat_err_no_conversation")}</p>
-        <Link className="mt-6 text-sm font-semibold text-[#FF1E2D] underline" to="/discover">
-          {t("chat_back_to_discover")}
-        </Link>
-      </div>
-    );
+    return <ChatSessionErrorScreen message={t("chat_err_no_conversation")} />;
   }
 
   if (authLoading && !authGateError) {
@@ -1967,25 +1961,11 @@ export default function Chat() {
   }
 
   if (authGateError) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col bg-app-bg p-6 font-sans">
-        <p className="text-sm text-red-600">{authGateError}</p>
-        <Link className="mt-6 text-sm font-semibold text-[#FF1E2D] underline" to="/discover">
-          {t("chat_back_to_discover")}
-        </Link>
-      </div>
-    );
+    return <ChatSessionErrorScreen message={authGateError} />;
   }
 
   if (!user?.id) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col bg-app-bg p-6 font-sans">
-        <p className="text-sm text-red-600">{t("chat_err_login")}</p>
-        <Link className="mt-6 text-sm font-semibold text-[#FF1E2D] underline" to="/discover">
-          {t("chat_back_to_discover")}
-        </Link>
-      </div>
-    );
+    return <ChatSessionErrorScreen message={t("chat_err_login")} />;
   }
 
   if (loading) {
@@ -1997,14 +1977,7 @@ export default function Chat() {
   }
 
   if (loadError) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col bg-app-bg p-6 font-sans">
-        <p className="text-sm text-red-600">{loadError}</p>
-        <Link className="mt-6 text-sm font-semibold text-[#FF1E2D] underline" to="/discover">
-          {t("chat_back_to_discover")}
-        </Link>
-      </div>
-    );
+    return <ChatSessionErrorScreen message={loadError} />;
   }
 
   return (

@@ -54,7 +54,7 @@ export function GlobalHeader({ variant = "default", inAppUnreadCount = 0 }: Glob
 
   function goToMove() {
     if (location.pathname === "/move" || location.pathname.startsWith("/move/")) return;
-    navigate("/move");
+    navigate("/move", { replace: true });
   }
 
   const headerSafePaddingTop = compact

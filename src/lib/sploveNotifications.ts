@@ -112,7 +112,7 @@ export function resolveNotificationRoute(
     case "meetup_confirmed":
       return "/mes-rencontres?tab=confirmed";
     default:
-      return "/discover";
+      return "/move";
   }
 }
 
