@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Language } from "../../i18n";
 import { BRAND_BG, TEXT_ON_BRAND } from "../../constants/theme";
 
-/** URL publique SPLove (hash router). */
-export const REFERRAL_PUBLIC_APP_URL = "https://splove-app.onrender.com/#/";
+/** URL publique visible dans le partage « Inviter des amis ». */
+export const REFERRAL_PUBLIC_APP_URL = "https://sploveapp.com";
 
 const COPY: Record<
   Language,
@@ -31,7 +31,7 @@ const COPY: Record<
     copyToast: "Lien copié",
     shareTitle: "SPLove - Trouve l’amour par le sport",
     shareText:
-      "Rejoins-moi sur SPLove ❤️ Une nouvelle façon de rencontrer des sportifs célibataires.",
+      "Rejoins-moi sur SPLove ❤️\nUne nouvelle façon de rencontrer des sportifs célibataires.",
   },
   en: {
     title: "The more athletes join SPLove, the more real connections begin.",
@@ -60,7 +60,7 @@ export function ReferralEmptyState({ language }: ReferralEmptyStateProps) {
   const [toastVisible, setToastVisible] = useState(false);
 
   const fullShareBody = useMemo(
-    () => `${c.shareText}\n\n${REFERRAL_PUBLIC_APP_URL}`,
+    () => `${c.shareText}\n${REFERRAL_PUBLIC_APP_URL}`,
     [c.shareText],
   );
 

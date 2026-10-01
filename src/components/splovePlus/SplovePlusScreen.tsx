@@ -294,7 +294,7 @@ export default function SplovePlusScreen() {
   const navigate = useNavigate();
   const location = useLocation();
   const undoReturnCardRef = useRef<HTMLButtonElement | null>(null);
-  const commonPlacesCardRef = useRef<HTMLButtonElement | null>(null);
+  const commonPlacesCardRef = useRef<HTMLDivElement | null>(null);
   const smartReminderCardRef = useRef<HTMLButtonElement | null>(null);
 
   const [userId, setUserId] = useState<string | null>(null);
@@ -321,7 +321,10 @@ export default function SplovePlusScreen() {
 
   const isFr = language === "fr";
   const heroFeature = useMemo(() => HERO_FEATURE, []);
-  const secondaryFeatures = useMemo(() => SECONDARY_FEATURES, []);
+  const secondaryFeatures = useMemo(
+    () => SECONDARY_FEATURES.filter((feature) => feature.key !== "smart_reminder"),
+    [],
+  );
 
   const refreshWallet = useMemo(() => {
     return async (uid: string) => {
@@ -427,10 +430,6 @@ export default function SplovePlusScreen() {
             ? commonPlacesCardRef
             : smartReminderCardRef;
       ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      /** Pour les options bêta on ouvre directement la modale d’activation. */
-      if (target === "common_places" || target === "smart_reminder") {
-        setBetaFeatureKey(target);
-      }
       navigate(location.pathname, { replace: true, state: {} });
     }, 80);
     return () => window.clearTimeout(id);
@@ -895,6 +894,7 @@ export default function SplovePlusScreen() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {secondaryFeatures.map((feature, index) => {
             const betaActive = feature.comingSoon ? Boolean(betaActiveMap[feature.key]) : false;
+            const comingSoonLocked = feature.key === "common_places";
             const cardRef =
               feature.key === "undo_swipe_return"
                 ? undoReturnCardRef
@@ -903,17 +903,19 @@ export default function SplovePlusScreen() {
                   : feature.key === "smart_reminder"
                     ? smartReminderCardRef
                     : undefined;
+            const CardTag = comingSoonLocked ? motion.div : motion.button;
             return (
-            <motion.button
+            <CardTag
               key={feature.key}
               ref={cardRef}
-              type="button"
-              disabled={!feature.comingSoon && isTimedWindowBlocking(feature)}
-              whileTap={!feature.comingSoon && isTimedWindowBlocking(feature) ? undefined : { scale: 0.97 }}
-              initial={{ opacity: 0, y: 18 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.06 * index, duration: 0.35 }}
-              onClick={() => {
+              {...(comingSoonLocked
+                ? {}
+                : {
+                    type: "button" as const,
+                    disabled: !feature.comingSoon && isTimedWindowBlocking(feature),
+                    whileTap:
+                      !feature.comingSoon && isTimedWindowBlocking(feature) ? undefined : { scale: 0.97 },
+                    onClick: () => {
                 if (feature.comingSoon) {
                   setBetaFeatureKey(feature.key);
                   return;
@@ -924,7 +926,8 @@ export default function SplovePlusScreen() {
                 }
                 if (isTimedWindowBlocking(feature)) return;
                 openActivateConfirm(feature);
-              }}
+              },
+                  })}
               className={`rounded-2xl border bg-[#111118] p-4 text-left ${
                 feature.key === "undo_swipe_return"
                   ? "border-[#ffb3bc]/55 ring-1 ring-[#ff2433]/20"
@@ -950,13 +953,21 @@ export default function SplovePlusScreen() {
                 <span className="text-sm font-semibold text-[#ff9aa1]">
                   {formatFeaturePrice(feature.price, language)}
                 </span>
-                {greenBadgeMinutes(feature) != null ? (
+                {comingSoonLocked ? (
+                  <button
+                    type="button"
+                    disabled
+                    className="shrink-0 cursor-not-allowed rounded-xl bg-white/15 px-3 py-1 text-[11px] font-semibold text-white/55"
+                  >
+                    {t("splove_plus_coming_soon")}
+                  </button>
+                ) : greenBadgeMinutes(feature) != null ? (
                   <span className="max-w-[min(140px,calc(100%-4rem))] rounded-full border border-emerald-400/45 bg-emerald-500/20 px-2 py-0.5 text-center text-[10px] font-semibold leading-snug text-emerald-200">
                     {greenBadgeLabel(greenBadgeMinutes(feature))}
                   </span>
                 ) : null}
               </div>
-            </motion.button>
+            </CardTag>
             );
           })}
         </div>
