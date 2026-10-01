@@ -707,7 +707,29 @@ export default function Auth() {
 
         <p
           style={{
-            marginTop: 24,
+            marginTop: 22,
+            marginBottom: 0,
+            textAlign: "center",
+            position: "relative",
+            zIndex: 3,
+          }}
+        >
+          <Link
+            to="/assistance"
+            style={{
+              color: BRAND_BG,
+              fontWeight: 600,
+              fontSize: "14px",
+              textDecoration: "underline",
+              textUnderlineOffset: "3px",
+            }}
+          >
+            Assistance
+          </Link>
+        </p>
+        <p
+          style={{
+            marginTop: 12,
             textAlign: "center",
             fontSize: "11px",
             lineHeight: 1.5,

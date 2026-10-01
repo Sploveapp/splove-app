@@ -26,6 +26,7 @@ import InviteFriendScreen from "./screens/InviteFriendScreen";
 import Notifications from "./pages/Notifications";
 import LegalCGU from "./pages/LegalCGU.tsx";
 import PrivacyPolicy from "./pages/PrivacyPolicy.tsx";
+import Assistance from "./pages/Assistance.tsx";
 import { PublicRootEntry } from "./components/PublicRootEntry";
 import { BootSplashGate } from "./components/BootSplashGate";
 import { PostOAuthSplashGate } from "./components/PostOAuthSplashGate";
@@ -95,6 +96,14 @@ function App() {
     }
     return <AppRouteRedirectFallback />;
   }
+  if (window.location.pathname === "/assistance" && !window.location.hash) {
+    if (native) {
+      window.location.hash = "#/assistance";
+    } else {
+      window.location.replace(`${window.location.origin}${import.meta.env.BASE_URL}#/assistance`);
+    }
+    return <AppRouteRedirectFallback />;
+  }
   /** Pont HTTPS email → splove:// : ne pas charger HashRouter ni consommer le token. */
   if (!native && isWebPasswordRecoveryBridgePage()) {
     return <ResetPasswordWebBridge />;
@@ -120,6 +129,7 @@ function App() {
           <Route path="/bienvenue" element={<Navigate to="/" replace />} />
           <Route path="/cgu" element={<LegalCGU />} />
           <Route path="/privacy" element={<PrivacyPolicy />} />
+          <Route path="/assistance" element={<Assistance />} />
           <Route
             path="/*"
             element={
