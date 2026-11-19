@@ -1,23 +1,73 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import {
+  accountDeletionStorageRemovedFromError,
+  emptyAccountDeletionUserStorage,
+} from "../_shared/accountDeletionStorageCleanup.ts";
+import {
+  ACCOUNT_DELETION_STORAGE_BUCKETS,
+  STORAGE_IN_REQUEST_ATTEMPTS,
+  applyStorageCleanupFailure,
+  inRequestStorageBackoffMs,
+} from "../_shared/accountDeletionStorageRetry.ts";
+import { kickAccountDeletionStoragePurge } from "../_shared/accountDeletionStoragePurgeKick.ts";
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+const DELETION_TABLE = "account_deletion_requests";
+
 type Body = {
   confirmPhrase?: string;
 };
 
-function isMissingOptionalCleanupTarget(error: { code?: string }) {
-  return error.code === "42P01" || error.code === "42703" || error.code === "PGRST204";
-}
+type CleanupStep = {
+  step: string;
+  ok: boolean;
+  deleted?: number;
+};
+
+type AdminClient = SupabaseClient;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function upsertDeletionRequest(
+  admin: AdminClient,
+  userId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const { error } = await admin.from(DELETION_TABLE).upsert(
+    {
+      user_id: userId,
+      updated_at: new Date().toISOString(),
+      ...patch,
+    },
+    { onConflict: "user_id" },
+  );
+  if (error) {
+    throw new Error(error.message || "deletion_request_write_failed");
+  }
+}
+
+async function kickStoragePurge(supabaseUrl: string, serviceRoleKey: string): Promise<void> {
+  await kickAccountDeletionStoragePurge({
+    supabaseUrl,
+    serviceRoleKey,
+    log: {
+      info: (event, extra) => console.info(`[delete-my-account] ${event}`, extra ?? {}),
+      error: (event, extra) => console.error(`[delete-my-account] ${event}`, extra ?? {}),
+    },
   });
 }
 
@@ -71,33 +121,98 @@ Deno.serve(async (req) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { error: messagesError } = await admin.from("messages").delete().eq("sender_id", userId);
-  if (messagesError && !isMissingOptionalCleanupTarget(messagesError)) {
-    console.error("[delete-my-account] messages delete failed", messagesError);
-    return jsonResponse({ error: "delete_messages_failed" }, 500);
-  }
+  const steps: CleanupStep[] = [];
 
-  // Deux deletes : évite les soucis de parsing `.or()` PostgREST avec certains UUID / proxies.
-  const { error: matchErrA } = await admin.from("matches").delete().eq("user_a", userId);
-  const { error: matchErrB } = await admin.from("matches").delete().eq("user_b", userId);
-  const matchesError = matchErrA ?? matchErrB;
-  if (matchesError) {
-    console.error("[delete-my-account] matches delete failed", matchesError);
-    return jsonResponse({ error: "delete_matches_failed" }, 500);
-  }
+  try {
+    try {
+      await upsertDeletionRequest(admin, userId, { status: "pending", last_error: null });
+    } catch (tombstoneError) {
+      console.error("[delete-my-account] tombstone failed", tombstoneError);
+      steps.push({ step: "deletion_request", ok: false });
+      return jsonResponse({ error: "delete_request_failed", steps }, 500);
+    }
+    steps.push({ step: "deletion_request", ok: true });
 
-  // Other related public rows cascade from profiles/auth FKs; delete the profile before the auth user.
-  const { error: profileError } = await admin.from("profiles").delete().eq("id", userId);
-  if (profileError) {
-    console.error("[delete-my-account] profile delete failed", profileError);
-    return jsonResponse({ error: "delete_profile_failed" }, 500);
-  }
+    const { data: commitData, error: commitError } = await admin.rpc("commit_account_deletion", {
+      p_user_id: userId,
+    });
+    if (commitError) {
+      console.error("[delete-my-account] commit_account_deletion failed", commitError.message);
+      await upsertDeletionRequest(admin, userId, {
+        status: "failed",
+        last_error: commitError.message.slice(0, 300),
+      }).catch(() => undefined);
+      steps.push({ step: "auth_user", ok: false });
+      return jsonResponse({ error: "delete_auth_user_failed", steps }, 500);
+    }
+    steps.push({ step: "auth_user", ok: true });
 
-  const { error: authError } = await admin.auth.admin.deleteUser(userId);
-  if (authError) {
-    console.error("[delete-my-account] auth user delete failed", authError);
-    return jsonResponse({ error: "delete_auth_user_failed" }, 500);
+    try {
+      const removedFiles = await emptyAccountDeletionUserStorage(
+        (bucketName) => {
+          const bucket = admin.storage.from(bucketName);
+          return {
+            list: (prefix, opts) => bucket.list(prefix, opts),
+            remove: (paths) => bucket.remove(paths),
+          };
+        },
+        ACCOUNT_DELETION_STORAGE_BUCKETS,
+        userId,
+        STORAGE_IN_REQUEST_ATTEMPTS,
+        sleepMs,
+        inRequestStorageBackoffMs,
+      );
+      await upsertDeletionRequest(admin, userId, {
+        status: "completed",
+        storage_removed: removedFiles,
+        storage_attempts: 0,
+        next_retry_at: null,
+        alerted_at: null,
+        last_error: null,
+      });
+      steps.push({ step: "storage_profile_photos", ok: true, deleted: removedFiles });
+      console.info("[delete-my-account] completed", {
+        userId: userId.slice(0, 8),
+        alreadyCompleted: Boolean(
+          commitData && typeof commitData === "object" && "already_completed" in commitData
+            ? (commitData as { already_completed?: boolean }).already_completed
+            : false,
+        ),
+        storageFilesRemoved: removedFiles,
+      });
+      return jsonResponse({ ok: true, authDeleted: true, steps });
+    } catch (storageError) {
+      const message = storageError instanceof Error ? storageError.message : "storage_failed";
+      const next = applyStorageCleanupFailure(
+        { storageAttempts: 0, storageRemoved: 0, alertedAt: null },
+        message,
+        Date.now(),
+        accountDeletionStorageRemovedFromError(storageError),
+      );
+      console.error("[delete-my-account] storage cleanup failed after auth delete", {
+        userKey: userId.slice(0, 8),
+        attempts: next.storageAttempts,
+        error: next.lastError,
+      });
+      await upsertDeletionRequest(admin, userId, {
+        status: next.status,
+        storage_removed: next.storageRemoved,
+        storage_attempts: next.storageAttempts,
+        next_retry_at: next.nextRetryAt,
+        alerted_at: next.alertedAt,
+        last_error: next.lastError,
+      }).catch(() => undefined);
+      steps.push({ step: "storage_profile_photos", ok: false });
+      await kickStoragePurge(supabaseUrl, serviceRoleKey);
+      return jsonResponse({
+        ok: true,
+        authDeleted: true,
+        storagePending: true,
+        steps,
+      });
+    }
+  } catch (e) {
+    console.error("[delete-my-account] unexpected", e);
+    return jsonResponse({ error: "delete_unexpected", steps }, 500);
   }
-
-  return jsonResponse({ ok: true });
 });
